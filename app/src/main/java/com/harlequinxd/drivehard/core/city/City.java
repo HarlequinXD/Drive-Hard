@@ -4,6 +4,8 @@ import com.harlequinxd.drivehard.core.game.Box;
 import com.harlequinxd.drivehard.core.game.World;
 import com.harlequinxd.drivehard.core.model.Flora;
 import com.harlequinxd.drivehard.core.render.Geo;
+import com.harlequinxd.drivehard.core.road.RoadMesh;
+import com.harlequinxd.drivehard.core.road.RoadNetwork;
 import com.harlequinxd.drivehard.core.tex.JpTextures;
 import com.harlequinxd.drivehard.core.tex.Noise;
 import com.harlequinxd.drivehard.core.tex.TextureLibrary;
@@ -47,6 +49,10 @@ public final class City extends World {
     /** Block row carrying the railway viaduct, and the central block column. */
     public final int jRail = nbz / 2, iCentre = nbx / 2;
     public final Railway railway;
+    /** Every road on the island as a spline graph (city grid included). */
+    public final RoadNetwork roads;
+    final RoadMesh roadMesh;
+    public final Countryside countryside;
     final int[] shopsCentral, shopsEnt, shopsMixed, shopsSuburb, shopsSeaside, shopsKonbini, shopsPachinko, shopsUnderTrack;
 
     public City(TextureLibrary lib, long seed) {
@@ -56,6 +62,9 @@ public final class City extends World {
         terrain = new Terrain((int) seed, cityX0, cityZ0, cityX1, cityZ1);
         traffic = new TrafficLights(nbx + 1, (int) seed);
         railway = new Railway(this);
+        roads = new RoadNetwork(this, terrain, seed);
+        terrain.roads = roads;
+        roadMesh = new RoadMesh(roads, lib, terrain);
         shopsCentral = shopSet("CAFE", "BAKERY", "CAKES", "FASHION", "SHOES", "ELECTRONICS", "BOOKS", "BANK", "TRAVEL",
                 "DRUG", "SUSHI", "TEMPURA", "KISSATEN", "MEGANE", "PHOTO", "STATIONERY", "TEA", "WAGASHI", "CLINIC");
         shopsEnt = shopSet("IZAKAYA", "YAKITORI", "BAR", "SNACK", "CLUB", "KARAOKE", "GAME CENTER", "MAHJONG", "RAMEN",
@@ -69,8 +78,9 @@ public final class City extends World {
         shopsKonbini = shopSet("DAILY MART", "HAPPY 24", "LUCKY STORE");
         shopsPachinko = shopSet("PACHINKO", "GAME CENTER");
         shopsUnderTrack = shopSet("IZAKAYA", "YAKITORI", "RAMEN", "SOBA", "BAR", "GYOZA", "KISSATEN", "BENTO", "SNACK");
+        countryside = new Countryside(this, lib, seed);
         chunks = new ChunkManager(this);
-        minX = cityX0 - 700; maxX = cityX1 + 700; minZ = cityZ0 - 700; maxZ = cityZ1 + 700;
+        minX = terrain.islandX0 - 9000; maxX = terrain.islandX1 + 3000; minZ = terrain.islandZ0 - 9000; maxZ = terrain.islandZ1 + 9000;
         int mj = nbz / 2;
         spawnX = cityX1 + 7f;
         spawnZ = (rz1[mj] + rz0[mj + 1]) * 0.5f;
@@ -133,6 +143,8 @@ public final class City extends World {
 
     @Override
     public float surface(float x, float z) {
+        float b = roads.bridgeHeight(x, z);
+        if (!Float.isNaN(b)) return b;
         return terrain.height(x, z) + (isRaised(x, z) ? CURB : 0f);
     }
 
@@ -209,6 +221,8 @@ public final class City extends World {
                 if (in(mx, mz, x0, z0, x1, z1)) block(ch, gb, i, j);
             }
         railway.generate(ch, gb, x0, z0, x1, z1);
+        roadMesh.generate(ch, gb, x0, z0, x1, z1);
+        countryside.generate(ch, gb, cx, cz);
         gb.end();
         ch.finish();
         return ch;
@@ -234,8 +248,8 @@ public final class City extends World {
                 float ax = x, az = z, bx = x + 8f, bz = z + 8f;
                 boolean overlaps = bx > cityX0 && ax < cityX1 && bz > cityZ0 && az < cityZ1;
                 if (!overlaps) {
-                    terrainCell(gb, ax, az, bx, bz);
-                    vegetation(ch, gb, ax, az);
+                    Countryside.Crop crop = terrainCell(gb, ax, az, bx, bz);
+                    vegetation(ch, gb, ax, az, crop);
                     continue;
                 }
                 // pieces of the cell outside the city rectangle
@@ -250,21 +264,32 @@ public final class City extends World {
         }
     }
 
-    private void terrainCell(GeoBuilder gb, float ax, float az, float bx, float bz) {
-        if (bx - ax < 0.01f || bz - az < 0.01f) return;
+    private Countryside.Crop terrainCell(GeoBuilder gb, float ax, float az, float bx, float bz) {
+        if (bx - ax < 0.01f || bz - az < 0.01f) return Countryside.Crop.NONE;
         float h0 = terrain.height(ax, az), h1 = terrain.height(bx, az), h2 = terrain.height(ax, bz), h3 = terrain.height(bx, bz);
         float max = Math.max(Math.max(h0, h1), Math.max(h2, h3)), min = Math.min(Math.min(h0, h1), Math.min(h2, h3));
-        if (max < -0.6f) return;
+        if (max < -0.6f) return Countryside.Crop.NONE;
         float avg = (h0 + h1 + h2 + h3) * 0.25f;
         float slope = (max - min) / Math.max(bx - ax, bz - az);
         float mx = (ax + bx) * 0.5f, mz = (az + bz) * 0.5f;
         int tex = slope > 0.6f ? lib.rock : (terrain.isSand(mx, mz, avg) ? lib.sand : (avg > 22f ? lib.hillGrass : lib.grass));
+        Countryside.Crop crop = Countryside.Crop.NONE;
+        float uv = 2f;
+        if (tex != lib.rock && tex != lib.sand && bx - ax > 7.9f && bz - az > 7.9f) {
+            if (roads.influence(mx, mz) > 0.35f) tex = lib.grass;           // road verges, cuttings and embankments
+            else {
+                crop = countryside.crop(ax, az, avg, slope);
+                if (crop != Countryside.Crop.NONE) { tex = countryside.texture(crop); uv = 8f; }
+            }
+        }
         // Natural terrain sorts in the object layer, by depth, together with buildings and sprites,
         // so hills hide whatever stands behind them instead of always being painted first.
-        gb.floorT(ax, az, bx, bz, 0f, tex, 2f, 2f, L_OBJECT, Geo.FLAG_SORT_FAR, 0.3f, true);
+        gb.floorT(ax, az, bx, bz, 0f, tex, uv, uv, L_OBJECT, Geo.FLAG_SORT_FAR, 0.3f, true);
+        if (Countryside.paddy(crop)) countryside.levees(gb, ax, az, bx, bz);
+        return crop;
     }
 
-    private void vegetation(Chunk ch, GeoBuilder gb, float ax, float az) {
+    private void vegetation(Chunk ch, GeoBuilder gb, float ax, float az, Countryside.Crop crop) {
         int ix = (int) Math.floor(ax / 8f), iz = (int) Math.floor(az / 8f);
         int sd = (int) seed;
         float r = Noise.rnd(ix, iz, sd + 500), r2 = Noise.rnd(ix, iz, sd + 506);
@@ -283,6 +308,13 @@ public final class City extends World {
             return;
         }
         if (h < 0.3f) return;
+        boolean rural = terrain.cityDistance(jx, jz) > 1100f;
+        if (rural && roads.influence(jx, jz) > 0.05f) return;      // keep roads and their banks clear
+        if (crop != Countryside.Crop.NONE) {
+            // fields: just the odd tree on a levee corner
+            if (r < 0.006f) plant(ch, r2 < 0.5f ? Flora.CAMPHOR : Flora.ZELKOVA, ix, iz, ax + 0.6f, terrain.height(ax + 0.6f, az + 0.6f), az + 0.6f);
+            return;
+        }
         if (terrain.isSand(jx, jz, h)) {
             boolean eastBeach = terrain.eastness(jx, jz) > 0.5f;
             if (eastBeach && h < 2.0f) {
@@ -303,12 +335,14 @@ public final class City extends World {
         }
         // hills: cedar and cypress forest up high, mixed woodland, bamboo groves and maples lower down
         float p = h < 7f ? 0.15f : (h < 25f ? 0.2f : 0.24f);
+        if (rural) p = h < 20f ? 0.14f : (h < 80f ? 0.26f : 0.34f);   // forests thicken up the hills
         if (r >= p) {
             if (r < p + 0.05f) plant(ch, r2 < 0.4f ? Flora.AZALEA : (r2 < 0.7f ? Flora.CAMELLIA : Flora.HYDRANGEA), ix, iz, jx, h, jz);
             return;
         }
         Flora f;
-        if (h > 25f) f = r2 < 0.7f ? Flora.CEDAR : (r2 < 0.85f ? Flora.BLACK_PINE : Flora.MAPLE);
+        if (rural && h > 110f) f = r2 < 0.75f ? Flora.CEDAR : (r2 < 0.9f ? Flora.BLACK_PINE : Flora.MAPLE);
+        else if (h > 25f) f = r2 < 0.7f ? Flora.CEDAR : (r2 < 0.85f ? Flora.BLACK_PINE : Flora.MAPLE);
         else if (r2 < 0.2f) f = Flora.CAMPHOR;
         else if (r2 < 0.38f) f = Flora.BAMBOO;
         else if (r2 < 0.55f) f = Flora.MAPLE;

@@ -27,6 +27,10 @@ public final class TextureLibrary {
     public final int[] shopCategory = new int[SHOP_COUNT];
     public final int[] lobbies;
     public final int[] roofs, signs, vending, stationSigns, koban, fireDoors;
+    /** Countryside: rice paddies (flooded, green, golden), cabbage, ploughed soil, tea, greenhouse vinyl, gravel, guardrail. */
+    public final int paddyWater, paddyGreen, paddyGold, cabbage, soil, tea, vinyl, gravel, guardrail;
+    /** Lane textures with their painted edge lines (see FarmTextures.lane). */
+    public final int laneCountry, laneHwInner, laneHwOuter, laneHwMedian, laneFwInner, laneFwOuter, laneRamp;
     public final int trainSideA, trainSideB, trainFrontA, trainFrontB, track, platform, blockWall;
     public final List<String> shopNames = new ArrayList<>();
     public static final String[] STATIONS = {"MINATO-CHUO", "SAKURAGAOKA", "HIGASHI-HAMA"};
@@ -97,6 +101,23 @@ public final class TextureLibrary {
         track = add(JpTextures.track());
         platform = add(JpTextures.platform());
         blockWall = add(JpTextures.blockWall(s++));
+        paddyWater = add(FarmTextures.paddy(0, seed));
+        paddyGreen = add(FarmTextures.paddy(1, seed));
+        paddyGold = add(FarmTextures.paddy(2, seed));
+        cabbage = add(FarmTextures.cabbage(seed));
+        soil = add(FarmTextures.soil(seed));
+        tea = add(FarmTextures.tea(seed));
+        vinyl = add(FarmTextures.vinyl(seed));
+        gravel = add(FarmTextures.gravel(seed));
+        guardrail = add(FarmTextures.guardrail(seed));
+        Texture asp = list.get(asphalt);
+        laneCountry = add(FarmTextures.lane(asp, 3.0f, FarmTextures.LINE_DASH5, FarmTextures.LINE_SOLID));
+        laneHwInner = add(FarmTextures.lane(asp, 3.25f, FarmTextures.LINE_NONE, FarmTextures.LINE_DASH5));
+        laneHwOuter = add(FarmTextures.lane(asp, 3.25f, FarmTextures.LINE_NONE, FarmTextures.LINE_SOLID));
+        laneHwMedian = add(FarmTextures.lane(asp, 0.6f, FarmTextures.LINE_DOUBLE_YELLOW, FarmTextures.LINE_NONE));
+        laneFwInner = add(FarmTextures.lane(asp, 3.5f, FarmTextures.LINE_YELLOW, FarmTextures.LINE_DASH8));
+        laneFwOuter = add(FarmTextures.lane(asp, 3.5f, FarmTextures.LINE_NONE, FarmTextures.LINE_THICK));
+        laneRamp = add(FarmTextures.lane(asp, 3.75f, FarmTextures.LINE_SOLID, FarmTextures.LINE_SOLID));
     }
 
     public int add(Texture t) {

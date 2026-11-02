@@ -104,7 +104,78 @@ public class SimTest {
         System.out.printf("traffic: %d cars, avg speed %.1f m/s, %d turns, %d red-light entries%n", tr.cars.size(), speedSum / samples, turns, redRuns);
         check("traffic flows", speedSum / samples > 3.0);
         check("cars turn at junctions", turns > 20);
-        check("no car enters an intersection on red", redRuns == 0);
+        check("no car enters an intersection on red", redRuns == 0 && tr.redEntries == 0);
+
+        // ---- island & road network
+        com.harlequinxd.drivehard.core.road.RoadNetwork net = c.roads;
+        System.out.printf("island %.0f km, roads: freeway %.0f km, highway %.0f km, country %.0f km, %d villages, %d farmsteads (net built in %.0f ms)%n",
+                (c.terrain.islandX1 - c.terrain.islandX0) / 1000f, net.lengthKm(com.harlequinxd.drivehard.core.road.RoadClass.FREEWAY),
+                net.lengthKm(com.harlequinxd.drivehard.core.road.RoadClass.HIGHWAY), net.lengthKm(com.harlequinxd.drivehard.core.road.RoadClass.COUNTRY),
+                net.villages.size(), c.countryside.farmCount, net.buildTime);
+        check("island is 128 km across", Math.abs(c.terrain.islandX1 - c.terrain.islandX0 - 128000f) < 1f);
+        check("land near the far west coast", c.terrain.natural(c.terrain.islandX0 + 8000f, (c.cityZ0 + c.cityZ1) / 2) > 1f);
+        check("freeways leave the city", net.lengthKm(com.harlequinxd.drivehard.core.road.RoadClass.FREEWAY) > 150f);
+        check("countryside has villages and farms", net.villages.size() > 100 && c.countryside.farmCount > 1000);
+        {
+            boolean[] reach = new boolean[net.nodes.size()];
+            java.util.ArrayDeque<Integer> bfs = new java.util.ArrayDeque<>();
+            bfs.add(net.cityNode[0][0]); reach[net.cityNode[0][0]] = true;
+            while (!bfs.isEmpty()) {
+                int id = bfs.poll();
+                for (int e : net.nodes.get(id).edges) {
+                    int o = net.edges.get(e).other(id);
+                    if (!reach[o]) { reach[o] = true; bfs.add(o); }
+                }
+            }
+            int lost = 0;
+            for (var v : net.villages) if (!reach[v.id]) lost++;
+            check("every village is reachable by road from the city", lost == 0);
+        }
+        // roads sit on their profile: terrain under a country road equals the road height
+        {
+            int bad = 0, n = 0;
+            for (var e : net.edges) {
+                if (e.cls != com.harlequinxd.drivehard.core.road.RoadClass.COUNTRY) continue;
+                for (int i = 0; i < e.count() - 1; i += 37) {
+                    if (e.bridge[i]) continue;
+                    float mx = (e.x[i] + e.x[i + 1]) * 0.5f, mz = (e.z[i] + e.z[i + 1]) * 0.5f;
+                    float yr = (e.y[i] + e.y[i + 1]) * 0.5f;
+                    if (Math.abs(c.terrain.height(mx, mz) - yr) > 0.5f) bad++;
+                    n++;
+                }
+            }
+            System.out.printf("country road samples off the ground: %d of %d%n", bad, n);
+            check("terrain is cut and filled under roads", bad < n / 50 + 1);
+        }
+
+        // ---- rural traffic: freeway interchange and village junctions keep flowing
+        for (String where : new String[]{"interchange", "village"}) {
+            float wx = 0, wz = 0;
+            if (where.equals("interchange")) {
+                for (var nd : net.nodes) if (nd.kind == com.harlequinxd.drivehard.core.road.RoadNode.Kind.SPLIT) { wx = nd.x; wz = nd.z; break; }
+            } else { wx = net.villages.get(30).x; wz = net.villages.get(30).z; }
+            // watch from a spot off the road (a pedestrian on the road would hold traffic up)
+            for (int k = 0; k < 200 && net.roadClearance(wx, wz, 30f) < 12f; k++) { wx += 7f; wz += 5f; }
+            com.harlequinxd.drivehard.core.sim.Traffic rt = new com.harlequinxd.drivehard.core.sim.Traffic(c, r -> r.nextInt(100));
+            rt.spawnMin = 5f; rt.spawnMax = 700f; rt.despawn = 3000f; rt.target = 30;
+            java.util.Map<Object, Float> still = new java.util.HashMap<>();
+            float worstStill = 0; double sp = 0; long ns2 = 0; int offRoad = 0;
+            for (int i = 0; i < 60 * 150; i++) {
+                rt.update(dt, i / 60f, wx, wz);
+                for (var car : rt.cars) {
+                    float st = car.speed < 0.2f ? still.getOrDefault(car, 0f) + dt : 0f;
+                    still.put(car, st);
+                    worstStill = Math.max(worstStill, st);
+                    sp += car.speed; ns2++;
+                    if (!carTurning(car) && Math.abs(car.y - c.surface(car.x, car.z)) > 1.0f) offRoad++;
+                }
+            }
+            System.out.printf("%s traffic: %d cars, avg %.1f m/s, %d junction movements, longest wait %.0f s, off-road samples %d%n",
+                    where, rt.cars.size(), sp / Math.max(1, ns2), rt.turnsTotal, worstStill, offRoad);
+            check(where + " traffic flows", sp / Math.max(1, ns2) > 5.0 && rt.turnsTotal > 10);
+            check(where + " traffic never gridlocks", worstStill < 40f);
+            check(where + " cars drive on the road surface", offRoad < ns2 / 200 + 1);
+        }
 
         // ---- pedestrians: only start crossing on the walk phase
         com.harlequinxd.drivehard.core.sim.Pedestrians pd = new com.harlequinxd.drivehard.core.sim.Pedestrians(c, r -> r.nextInt(100));
@@ -167,8 +238,9 @@ public class SimTest {
         float yaw0 = g.vehicle.yaw;
         for (int i = 0; i < 40; i++) g.update(dt, 0, 0, 0, 0, false, 1, 0.5f, 0, false);
         check("steering turns the car", Math.abs(g.vehicle.yaw - yaw0) > 0.15f);
-        for (int i = 0; i < 300; i++) g.update(dt, 0, 0, 0, 0, false, 0, 0, 1, false);
-        check("reverse brakes then backs up", g.vehicle.speed < -0.5f);
+        float minSpeed = 99f;
+        for (int i = 0; i < 300; i++) { g.update(dt, 0, 0, 0, 0, false, 0, 0, 1, false); minSpeed = Math.min(minSpeed, g.vehicle.speed); }
+        check("reverse brakes then backs up", minSpeed < -0.5f);
         for (int i = 0; i < 400 && Math.abs(g.vehicle.speed) > 0.01f; i++) g.update(dt, 0, 0, 0, 0, false, 0, 0, 0, false);
         check("car coasts to a stop", Math.abs(g.vehicle.speed) <= 0.01f);
         g.update(dt, 0, 0, 0, 0, false, 0, 0, 0, true);

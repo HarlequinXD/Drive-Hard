@@ -5,16 +5,27 @@ import com.harlequinxd.drivehard.core.city.TrafficLights;
 import com.harlequinxd.drivehard.core.game.Box;
 import com.harlequinxd.drivehard.core.game.Vehicle;
 import com.harlequinxd.drivehard.core.model.Cars;
+import com.harlequinxd.drivehard.core.road.RoadClass;
+import com.harlequinxd.drivehard.core.road.RoadEdge;
+import com.harlequinxd.drivehard.core.road.RoadNetwork;
+import com.harlequinxd.drivehard.core.road.RoadNode;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
 /**
- * Ambient traffic on the street grid. Cars drive on the right in a lane, keep their distance to
- * the car ahead, stop for red (and late yellow) signals at the stop line, brake for the player,
- * and turn left/right/straight at intersections along smooth curves. Cars are spawned around
- * the player out of view and removed when far away.
+ * Ambient traffic on the spline road network. Cars keep left in a lane of their road, follow the
+ * car ahead, slow for bends, and at every node pick a legal movement:
+ *  - city intersections: obey the signals (stop at the line on red and late yellow);
+ *  - rural junctions: the minor road gives way to the major one; between equal roads, give way
+ *    to traffic from the left (Japanese rule); never enter while another car is crossing;
+ *  - freeway splits: only smooth movements, take the exit from the kerb lane, merge from the
+ *    slip road when the kerb lane is clear;
+ *  - dead ends: turn around.
+ * Before turning they move to the right lane (kerb lane for left turns and exits, inner lane for
+ * right turns), then follow a cubic curve through the junction. Cars spawn on roads around the
+ * player out of view and are removed when far away.
  */
 public final class Traffic {
     public static final class Car {
@@ -22,24 +33,32 @@ public final class Traffic {
         public float x, z, y, yaw, speed;
         float cruise, len, wid;
         // lane state
-        boolean ns;          // travelling along Z (north/south)
-        int dir;             // +1 / -1 along the axis
-        int road;            // N-S road index i (ns) or E-W road index j
-        float lane;          // lateral offset from the road centre line (to the right of travel)
-        // turning along a quadratic curve
+        int edge, dir, lane;
+        float s, off, offTarget;
+        // movement planned at the next node
+        boolean planned;
+        int nextEdge, nextLane;
+        float vTurn;
+        float waited;
+        // turning through a node along a cubic Bezier
         boolean turning;
-        float t, ax, az, cx, cz, bx, bz, arc;
-        boolean nextNs; int nextDir, nextRoad; float nextLane;
-        int lastJunction = -1;
+        int node;
+        float t, arc;
+        final float[] bez = new float[8];
+        float y0, y3;
         public float brake;  // 0..1 for brake lights / debug
     }
 
     public final List<Car> cars = new ArrayList<>();
-    /** Player-driven and parked cars that traffic must queue behind. */
-    public List<Vehicle> obstacles;
     public int target = 26;
     public float spawnMin = 55f, spawnMax = 150f, despawn = 185f;
+    /** Player-driven and parked cars that traffic must queue behind. */
+    public List<Vehicle> obstacles;
+    /** Statistics: junction movements made, and entries into a city junction on red (should stay 0). */
+    public int turnsTotal, redEntries;
+
     private final City city;
+    private final RoadNetwork net;
     private final Random rnd = new Random(42);
     private final StyleSource styles;
 
@@ -48,47 +67,20 @@ public final class Traffic {
 
     public Traffic(City city, StyleSource styles) {
         this.city = city;
+        this.net = city.roads;
         this.styles = styles;
     }
 
-    // ------------------------------------------------------------------ geometry helpers
-
-    private float roadCentre(boolean ns, int road) {
-        return ns ? (city.rx0[road] + city.rx1[road]) * 0.5f : (city.rz0[road] + city.rz1[road]) * 0.5f;
-    }
-
-    private boolean avenue(boolean ns, int road) { return ns ? city.avenueX[road] : city.avenueZ[road]; }
-
-    private float laneFor(boolean ns, int road) {
-        if (avenue(ns, road)) return rnd.nextBoolean() ? 3.1f : 6.6f;
-        return 2.0f;
-    }
-
-    /** World position of a lane point: axis coordinate s on the road, lateral lane offset. */
-    private void lanePoint(boolean ns, int dir, int road, float lane, float s, float[] out) {
-        float c = roadCentre(ns, road);
-        // keep left (Japan): for +Z travel, left is +X; for +X travel, left is -Z
-        if (ns) { out[0] = c + dir * lane; out[1] = s; }
-        else { out[0] = s; out[1] = c - dir * lane; }
-    }
-
-    private int crossCount(boolean ns) { return ns ? city.nbz : city.nbx; }
-
-    private float crossLo(boolean ns, int k) { return ns ? city.rz0[k] : city.rx0[k]; }
-    private float crossHi(boolean ns, int k) { return ns ? city.rz1[k] : city.rx1[k]; }
+    private final float[] tmp = new float[5], tmp2 = new float[5], hit = new float[3];
 
     // ------------------------------------------------------------------ update
 
-    private final float[] tmp = new float[2];
-
     public void update(float dt, float time, float px, float pz) {
-        // despawn far cars
         for (int i = cars.size() - 1; i >= 0; i--) {
             Car c = cars.get(i);
             float dx = c.x - px, dz = c.z - pz;
             if (dx * dx + dz * dz > despawn * despawn) cars.remove(i);
         }
-        // spawn
         for (int tries = 0; tries < 4 && cars.size() < target; tries++) spawn(px, pz);
         for (Car c : cars) drive(c, dt, time, px, pz);
     }
@@ -96,166 +88,348 @@ public final class Traffic {
     private void spawn(float px, float pz) {
         int style = styles.pickReadyStyle(rnd);
         if (style < 0) return;
-        boolean ns = rnd.nextBoolean();
-        int road = rnd.nextInt((ns ? city.nbx : city.nbz) + 1);
-        int dir = rnd.nextBoolean() ? 1 : -1;
-        float lane = laneFor(ns, road);
-        float lo = ns ? city.cityZ0 : city.cityX0, hi = ns ? city.cityZ1 : city.cityX1;
-        float s = lo + 10f + rnd.nextFloat() * (hi - lo - 20f);
-        // not inside an intersection
-        for (int k = 0; k <= crossCount(ns); k++) if (s > crossLo(ns, k) - 18f && s < crossHi(ns, k) + 18f) return;
-        lanePoint(ns, dir, road, lane, s, tmp);
+        double ang = rnd.nextDouble() * Math.PI * 2;
+        float r = spawnMin + rnd.nextFloat() * (spawnMax - spawnMin);
+        float qx = px + (float) Math.cos(ang) * r, qz = pz + (float) Math.sin(ang) * r;
+        if (!net.nearest(qx, qz, 25f, hit)) return;
+        RoadEdge e = net.edges.get((int) hit[0]);
+        float s = hit[1];
+        if (e.len < 30f || s < e.clearA + 16f || s > e.len - e.clearB - 16f) return;
+        int dir = e.oneWay || rnd.nextBoolean() ? 1 : -1;
+        int lane = rnd.nextInt(e.cls.lanes);
+        float off = e.laneOffset(lane);
+        e.lanePoint(s, dir, off, tmp);
         float dx = tmp[0] - px, dz = tmp[1] - pz, d = (float) Math.sqrt(dx * dx + dz * dz);
         if (d < spawnMin || d > spawnMax) return;
+        float gap = e.cls.city ? 14f : 32f;
         for (Car o : cars) {
             float ox = o.x - tmp[0], oz = o.z - tmp[1];
-            if (ox * ox + oz * oz < 14f * 14f) return;
+            if (ox * ox + oz * oz < gap * gap) return;
+        }
+        if (obstacles != null) for (Vehicle v : obstacles) {
+            float ox = v.x - tmp[0], oz = v.z - tmp[1];
+            if (ox * ox + oz * oz < 12f * 12f) return;
         }
         Car c = new Car();
         c.style = style;
         Cars.Spec sp = Cars.spec(style);
         c.len = sp.L;
         c.wid = sp.W;
-        c.ns = ns; c.dir = dir; c.road = road; c.lane = lane;
-        c.x = tmp[0]; c.z = tmp[1];
-        c.cruise = 10f + rnd.nextFloat() * 4f;
+        c.edge = e.id; c.dir = dir; c.lane = lane; c.s = s; c.off = c.offTarget = off;
+        c.cruise = e.cls.speed * (0.82f + rnd.nextFloat() * 0.18f);
         c.speed = c.cruise * 0.7f;
-        c.yaw = ns ? (dir > 0 ? 0f : (float) Math.PI) : (dir > 0 ? (float) (Math.PI / 2) : (float) (-Math.PI / 2));
+        place(c, e);
         cars.add(c);
     }
 
-    private void drive(Car c, float dt, float time, float px, float pz) {
-        float want = c.cruise;
-        float fx = (float) Math.sin(c.yaw), fz = (float) Math.cos(c.yaw);
+    private void place(Car c, RoadEdge e) {
+        e.lanePoint(c.s, c.dir, c.off, tmp);
+        c.x = tmp[0];
+        c.z = tmp[1];
+        c.yaw = (float) Math.atan2(tmp[3], tmp[4]);
+        c.y = e.cls.city ? city.terrain.height(c.x, c.z) : tmp[2] + 0.04f;
+    }
 
-        // car ahead (anything in a narrow cone in front)
+    // ------------------------------------------------------------------ driving
+
+    private void drive(Car c, float dt, float time, float px, float pz) {
+        if (c.turning) {
+            followTurn(c, dt, time, px, pz);
+            return;
+        }
+        RoadEdge e = net.edges.get(c.edge);
+        int nodeId = c.dir > 0 ? e.b : e.a;
+        RoadNode node = net.nodes.get(nodeId);
+        float sExit = c.dir > 0 ? e.len - e.clear(nodeId) : e.clear(nodeId);
+        float remaining = (sExit - c.s) * c.dir;
+        float front = remaining - c.len * 0.5f;
+
+        if (!c.planned && remaining < 90f) plan(c, e, node);
+
+        float want = c.cruise;
+        // bends ahead on this road
+        e.point(Math.max(0f, Math.min(e.len, c.s)), tmp);
+        e.point(Math.max(0f, Math.min(e.len, c.s + c.dir * 30f)), tmp2);
+        float dot = tmp[3] * tmp2[3] + tmp[4] * tmp2[4];
+        float ang = (float) Math.acos(Math.max(-1f, Math.min(1f, dot)));
+        if (ang > 0.05f) want = Math.min(want, (float) Math.sqrt(3.2f * 30f / ang));
+        // slow for the movement through the next node
+        if (c.planned) want = Math.min(want, (float) Math.sqrt(c.vTurn * c.vTurn + 2f * 3f * Math.max(0f, remaining)));
+
+        // rules at the node
+        boolean hold = false;
+        if (node.kind == RoadNode.Kind.CITY) {
+            float hx = tmp[3] * c.dir, hz = tmp[4] * c.dir;
+            boolean ns = Math.abs(hz) > Math.abs(hx);
+            int st = city.traffic.state(node.signal, ns, time);
+            float stopDist = front - 5.0f;
+            boolean mustStop = st == TrafficLights.RED || (st == TrafficLights.YELLOW && stopDist > c.speed * 1.2f);
+            if (mustStop && stopDist > -0.5f) want = Math.min(want, Math.max(0f, stopDist) * 0.9f);
+            else if (st == TrafficLights.RED && front > 0.2f && c.speed < 4f) want = Math.min(want, Math.max(0f, front - 0.3f));
+            hold = st == TrafficLights.RED;
+        } else if (node.kind == RoadNode.Kind.JUNCTION && remaining < 40f) {
+            if (c.waited < 6f && mustYield(c, e, node)) {
+                want = Math.min(want, Math.max(0f, front - 0.6f) * 0.9f);
+                if (front < 2.5f && c.speed < 0.8f) c.waited += dt;
+                hold = true;
+            }
+        } else if (node.kind == RoadNode.Kind.SPLIT && e.cls == RoadClass.RAMP && remaining < 60f) {
+            if (c.waited < 4f && mergeBlocked(c, node)) {
+                want = Math.min(want, Math.max(0f, front - 0.5f) * 0.9f);
+                if (front < 3f && c.speed < 0.8f) c.waited += dt;
+                hold = true;
+            }
+        }
+
+        want = Math.min(want, followLimit(c, px, pz));
+        accelerate(c, want, dt);
+
+        // lane changes ahead of the turn
+        if (c.speed > 1f) {
+            float step = 1.4f * dt;
+            c.off += Math.max(-step, Math.min(step, c.offTarget - c.off));
+        }
+        float ds = c.speed * dt;
+        if (remaining - ds <= 0f) {
+            if (hold) {
+                c.s = sExit;
+                c.speed = 0f;
+            } else {
+                c.s = sExit;
+                beginNode(c, e, node, time);
+                return;
+            }
+        } else {
+            c.s += ds * c.dir;
+        }
+        place(c, e);
+    }
+
+    private void accelerate(Car c, float want, float dt) {
+        float acc = want > c.speed ? 3.0f : 7.5f;
+        c.brake = want < c.speed - 0.3f ? 1f : 0f;
+        c.speed += Math.max(-acc * dt, Math.min(acc * dt, want - c.speed));
+        if (c.speed < 0) c.speed = 0;
+    }
+
+    /** Speed allowed by the nearest thing in front (cars, parked/player cars, the player on foot). */
+    private float followLimit(Car c, float px, float pz) {
+        float fx = (float) Math.sin(c.yaw), fz = (float) Math.cos(c.yaw);
         float nearest = Float.MAX_VALUE;
         for (Car o : cars) {
             if (o == c) continue;
             float dx = o.x - c.x, dz = o.z - c.z;
-            float ahead = dx * fx + dz * fz, side = Math.abs(dx * fz - dz * fx);
-            if (ahead > 0 && ahead < 30f && side < 1.8f) nearest = Math.min(nearest, ahead - (c.len + o.len) * 0.5f);
+            float ahead = dx * fx + dz * fz;
+            if (ahead <= 0f || ahead > 35f) continue;
+            float side = Math.abs(dx * fz - dz * fx);
+            if (side >= 1.8f) continue;
+            // inside a junction only queue behind cars going our way (crossing is settled before entering)
+            if ((c.turning || o.turning) && fx * (float) Math.sin(o.yaw) + fz * (float) Math.cos(o.yaw) < 0.3f) continue;
+            nearest = Math.min(nearest, ahead - (c.len + o.len) * 0.5f);
         }
         if (obstacles != null) for (Vehicle o : obstacles) {
             float dx = o.x - c.x, dz = o.z - c.z;
             float ahead = dx * fx + dz * fz, side = Math.abs(dx * fz - dz * fx);
             if (ahead > 0 && ahead < 30f && side < 2.2f) nearest = Math.min(nearest, ahead - (c.len + o.len) * 0.5f);
         }
-        // the player in front
-        {
-            float dx = px - c.x, dz = pz - c.z;
-            float ahead = dx * fx + dz * fz, side = Math.abs(dx * fz - dz * fx);
-            if (ahead > 0 && ahead < 25f && side < 1.6f) nearest = Math.min(nearest, ahead - c.len * 0.5f - 0.5f);
-        }
-        if (nearest < Float.MAX_VALUE) want = Math.min(want, Math.max(0f, (nearest - 2.5f) / 1.1f));
-
-        if (!c.turning) {
-            // next junction ahead and its signal
-            float s = c.ns ? c.z : c.x;
-            int n = crossCount(c.ns);
-            int junction = -1;
-            float edge = 0;
-            for (int k = 0; k <= n; k++) {
-                int kk = c.dir > 0 ? k : n - k;
-                float e = c.dir > 0 ? crossLo(c.ns, kk) : crossHi(c.ns, kk);
-                if ((e - s) * c.dir > c.len * 0.5f - 0.5f) { junction = kk; edge = e; break; }
-            }
-            if (junction >= 0) {
-                float front = s + c.dir * c.len * 0.5f;
-                float distToEdge = (edge - front) * c.dir;
-                float stopDist = distToEdge - 5.0f;          // stop line ~4.5 m before the junction
-                int id = c.ns ? city.traffic.id(c.road, junction) : city.traffic.id(junction, c.road);
-                int st = city.traffic.state(id, c.ns, time);
-                boolean mustStop = st == TrafficLights.RED || (st == TrafficLights.YELLOW && stopDist > c.speed * 1.2f);
-                if (mustStop && stopDist > -0.5f) want = Math.min(want, Math.max(0f, stopDist) * 0.9f);
-                    // crept past the line in a queue: hold at the junction edge instead of entering on red
-                else if (st == TrafficLights.RED && distToEdge > 0.2f && c.speed < 4f) want = Math.min(want, Math.max(0f, distToEdge - 0.3f));
-                // decide what to do when reaching the junction
-                if (distToEdge < 0.6f && c.lastJunction != junction * 2 + (c.ns ? 1 : 0) && st != TrafficLights.RED) {
-                    c.lastJunction = junction * 2 + (c.ns ? 1 : 0);
-                    beginJunction(c, junction);
-                }
-            } else {
-                // end of the grid: turn around by re-spawning direction
-                c.dir = -c.dir;
-                c.yaw += (float) Math.PI;
-            }
-        }
-
-        // accelerate / brake
-        float acc = want > c.speed ? 3.2f : 7.5f;
-        c.brake = want < c.speed - 0.3f ? 1f : 0f;
-        c.speed += Math.max(-acc * dt, Math.min(acc * dt, want - c.speed));
-        if (c.speed < 0) c.speed = 0;
-        float step = c.speed * dt;
-
-        if (c.turning) {
-            c.t += step / Math.max(1f, c.arc);
-            if (c.t >= 1f) {
-                c.turning = false;
-                c.ns = c.nextNs; c.dir = c.nextDir; c.road = c.nextRoad; c.lane = c.nextLane;
-                c.x = c.bx; c.z = c.bz;
-                c.yaw = c.ns ? (c.dir > 0 ? 0f : (float) Math.PI) : (c.dir > 0 ? (float) (Math.PI / 2) : (float) (-Math.PI / 2));
-            } else {
-                float t = c.t, u = 1 - t;
-                float nx = u * u * c.ax + 2 * u * t * c.cx + t * t * c.bx;
-                float nz = u * u * c.az + 2 * u * t * c.cz + t * t * c.bz;
-                float tx = 2 * u * (c.cx - c.ax) + 2 * t * (c.bx - c.cx), tz = 2 * u * (c.cz - c.az) + 2 * t * (c.bz - c.cz);
-                c.yaw = (float) Math.atan2(tx, tz);
-                c.x = nx; c.z = nz;
-            }
-        } else {
-            if (c.ns) c.z += step * c.dir; else c.x += step * c.dir;
-        }
-        c.y = city.terrain.height(c.x, c.z);
+        float dx = px - c.x, dz = pz - c.z;
+        float ahead = dx * fx + dz * fz, side = Math.abs(dx * fz - dz * fx);
+        if (ahead > 0 && ahead < 25f && side < 1.6f) nearest = Math.min(nearest, ahead - c.len * 0.5f - 0.5f);
+        if (nearest == Float.MAX_VALUE) return Float.MAX_VALUE;
+        return Math.max(0f, (nearest - 2.5f) / 1.1f);
     }
 
-    /** Picks straight / left / right and sets up the curve through the junction. */
-    private void beginJunction(Car c, int k) {
-        // crossing road index and its geometry
-        boolean crossNs = !c.ns;
-        int maxCross = crossNs ? city.nbx : city.nbz;
-        int n = crossCount(c.ns);
-        boolean canStraight = c.dir > 0 ? k < n : k > 0;
-        // turning right: travel +Z (south) -> right is west (-X); travel +X (east) -> right is south (+Z)
-        int rightDir = c.ns ? -c.dir : c.dir;
-        int leftDir = -rightDir;
-        int crossRoad = k;
-        boolean canRight = canGo(crossNs, crossRoad, rightDir, c);
-        boolean canLeft = canGo(crossNs, crossRoad, leftDir, c);
-        int roll = rnd.nextInt(10);
-        int choice;   // 0 straight, 1 right, 2 left
-        if (roll < 6 && canStraight) choice = 0;
-        else if (roll < 8 && canRight) choice = 1;
-        else if (canLeft) choice = 2;
-        else if (canStraight) choice = 0;
-        else if (canRight) choice = 1;
-        else choice = 2;
-        if (choice == 0) return;
-        int newDir = choice == 1 ? rightDir : leftDir;
-        float newLane = laneFor(crossNs, crossRoad);
-        // entry point: current lane at the near junction edge; exit: new lane at the far edge of the crossing road
-        float entryS = c.dir > 0 ? crossLo(c.ns, k) : crossHi(c.ns, k);
-        lanePoint(c.ns, c.dir, c.road, c.lane, entryS, tmp);
-        c.ax = tmp[0]; c.az = tmp[1];
-        float exitS = newDir > 0 ? crossHi(crossNs, c.road) : crossLo(crossNs, c.road);
-        lanePoint(crossNs, newDir, crossRoad, newLane, exitS, tmp);
-        c.bx = tmp[0]; c.bz = tmp[1];
-        // control point: where the two lane lines cross
-        if (c.ns) { c.cx = c.ax; c.cz = c.bz; } else { c.cx = c.bx; c.cz = c.az; }
-        c.arc = (float) (Math.hypot(c.cx - c.ax, c.cz - c.az) + Math.hypot(c.bx - c.cx, c.bz - c.cz)) * 0.85f;
-        c.x = c.ax; c.z = c.az;
-        c.t = 0;
+    /** Give-way rules at an unsignalled junction. */
+    private boolean mustYield(Car c, RoadEdge e, RoadNode node) {
+        int mine = e.cls.priority;
+        int top = 0;
+        for (int id : node.edges) if (id != e.id) top = Math.max(top, net.edges.get(id).cls.priority);
+        boolean minor = mine < top;
+        e.point(c.dir > 0 ? e.len : 0f, tmp);
+        float hx = tmp[3] * c.dir, hz = tmp[4] * c.dir;
+        float lx = hz, lz = -hx;   // left of my travel
+        for (Car o : cars) {
+            if (o == c) continue;
+            if (o.turning) {
+                if (o.node == node.id) return true;     // someone is crossing the junction
+                continue;
+            }
+            RoadEdge oe = net.edges.get(o.edge);
+            if (oe.id == e.id) continue;
+            int on = o.dir > 0 ? oe.b : oe.a;
+            if (on != node.id) continue;
+            float oRem = ((o.dir > 0 ? oe.len - oe.clear(on) : oe.clear(on)) - o.s) * o.dir;
+            if (oRem > 30f) continue;
+            int op = oe.cls.priority;
+            if (minor) { if (op >= mine) return true; continue; }
+            if (op > mine) return true;
+            if (op == mine) {
+                // equal roads: give way to traffic approaching from the left
+                float rx = o.x - node.x, rz = o.z - node.z;
+                if (rx * lx + rz * lz > 2f && oRem < 20f) return true;
+            }
+        }
+        return false;
+    }
+
+    /** A slip road may merge when no freeway car is about to pass the merge point in the kerb lane. */
+    private boolean mergeBlocked(Car c, RoadNode node) {
+        for (Car o : cars) {
+            if (o == c || o.turning) continue;
+            RoadEdge oe = net.edges.get(o.edge);
+            if (oe.cls != RoadClass.FREEWAY) continue;
+            float d = (float) Math.hypot(o.x - node.x, o.z - node.z);
+            if (d > 70f) continue;
+            int on = o.dir > 0 ? oe.b : oe.a;
+            boolean approaching = on == node.id;
+            if (approaching && o.lane == 0) return true;
+            if (!approaching && d < 12f && o.lane == 0) return true;   // just past it
+        }
+        return false;
+    }
+
+    // ------------------------------------------------------------------ choosing movements
+
+    private final List<Integer> cand = new ArrayList<>();
+    private final List<Float> weight = new ArrayList<>();
+
+    /** Picks the edge and lane to take at the node ahead, and the lane to be in before it. */
+    private void plan(Car c, RoadEdge e, RoadNode node) {
+        e.point(c.dir > 0 ? e.len : 0f, tmp);
+        float hx = tmp[3] * c.dir, hz = tmp[4] * c.dir;
+        cand.clear();
+        weight.clear();
+        float total = 0f;
+        for (int id : node.edges) {
+            if (id == e.id) continue;
+            RoadEdge ne = net.edges.get(id);
+            if (!ne.canLeave(node.id)) continue;
+            int nd = ne.dirFrom(node.id);
+            ne.point(ne.sAt(node.id), tmp2);
+            float ox = tmp2[3] * nd, oz = tmp2[4] * nd;
+            float dot = hx * ox + hz * oz;
+            if (node.kind == RoadNode.Kind.SPLIT && dot < 0.3f) continue;       // no turning across a freeway
+            if (dot < -0.85f) continue;                                           // no U-turns
+            float w = dot > 0.7f ? 3f : 1f;
+            if (ne.cls == RoadClass.RAMP && e.cls == RoadClass.FREEWAY) w = 0.5f;  // most stay on the freeway
+            cand.add(id);
+            weight.add(w);
+            total += w;
+        }
+        c.planned = true;
+        c.waited = 0f;
+        if (cand.isEmpty()) {
+            // dead end: turn around in place
+            c.nextEdge = -1;
+            c.vTurn = 2.5f;
+            return;
+        }
+        float r = rnd.nextFloat() * total;
+        int pick = cand.get(cand.size() - 1);
+        for (int k = 0; k < cand.size(); k++) { r -= weight.get(k); if (r <= 0f) { pick = cand.get(k); break; } }
+        RoadEdge ne = net.edges.get(pick);
+        int nd = ne.dirFrom(node.id);
+        ne.point(ne.sAt(node.id), tmp2);
+        float ox = tmp2[3] * nd, oz = tmp2[4] * nd;
+        float left = ox * hz + oz * -hx;   // + = left turn (non-crossing in left-hand traffic)
+        int lanes = ne.oneWay ? 1 : ne.cls.lanes;
+        int myLanes = e.oneWay ? 1 : e.cls.lanes;
+        int nl, req;
+        if (left > 0.35f || (ne.cls == RoadClass.RAMP && e.cls == RoadClass.FREEWAY)) { nl = 0; req = 0; }
+        else if (left < -0.35f) { nl = lanes - 1; req = myLanes - 1; }
+        else { nl = Math.min(c.lane, lanes - 1); req = c.lane; }
+        if (e.cls == RoadClass.RAMP) nl = 0;   // merge into the kerb lane
+        c.nextEdge = pick;
+        c.nextLane = nl;
+        c.lane = Math.min(req, myLanes - 1);
+        c.offTarget = e.laneOffset(c.lane);
+        // speed through the turn from its sharpness
+        float dot = Math.max(-1f, Math.min(1f, hx * ox + hz * oz));
+        float theta = (float) Math.acos(dot);
+        if (theta < 0.25f) c.vTurn = Math.min(c.cruise, ne.cls.speed);
+        else {
+            float chord = Math.max(4f, e.clear(node.id) + ne.clear(node.id));
+            float radius = chord / (2f * (float) Math.sin(theta * 0.5f)) * 0.8f;
+            c.vTurn = Math.max(3.5f, Math.min(c.cruise, (float) Math.sqrt(3.0f * radius)));
+        }
+    }
+
+    private void beginNode(Car c, RoadEdge e, RoadNode node, float time) {
+        if (c.nextEdge < 0) {
+            // turn around at a dead end
+            c.dir = -c.dir;
+            c.planned = false;
+            c.off = c.offTarget = e.laneOffset(Math.min(c.lane, e.cls.lanes - 1));
+            place(c, e);
+            return;
+        }
+        if (node.kind == RoadNode.Kind.CITY) {
+            e.point(c.dir > 0 ? e.len : 0f, tmp);
+            boolean ns = Math.abs(tmp[4]) > Math.abs(tmp[3]);
+            if (city.traffic.state(node.signal, ns, time) == TrafficLights.RED
+                    && city.traffic.timeToChange(node.signal, ns, time) < TrafficLights.CYCLE * 0.5f - 2.5f) redEntries++;
+        }
+        RoadEdge ne = net.edges.get(c.nextEdge);
+        int nd = ne.dirFrom(node.id);
+        e.lanePoint(c.s, c.dir, c.off, tmp);
+        float sEnter = node.id == ne.a ? ne.clearA : ne.len - ne.clearB;
+        ne.lanePoint(sEnter, nd, ne.laneOffset(c.nextLane), tmp2);
+        float chord = (float) Math.hypot(tmp2[0] - tmp[0], tmp2[1] - tmp[1]);
+        float k = Math.max(0.5f, chord * 0.42f);
+        float[] b = c.bez;
+        b[0] = tmp[0]; b[1] = tmp[1];
+        b[2] = tmp[0] + tmp[3] * k; b[3] = tmp[1] + tmp[4] * k;
+        b[4] = tmp2[0] - tmp2[3] * k; b[5] = tmp2[1] - tmp2[4] * k;
+        b[6] = tmp2[0]; b[7] = tmp2[1];
+        c.y0 = e.cls.city ? city.terrain.height(tmp[0], tmp[1]) : tmp[2] + 0.04f;
+        c.y3 = ne.cls.city ? city.terrain.height(tmp2[0], tmp2[1]) : tmp2[2] + 0.04f;
+        float len = 0f, lx = b[0], lz = b[1];
+        for (int i = 1; i <= 8; i++) {
+            float t = i / 8f;
+            float x = bez(b[0], b[2], b[4], b[6], t), z = bez(b[1], b[3], b[5], b[7], t);
+            len += (float) Math.hypot(x - lx, z - lz);
+            lx = x; lz = z;
+        }
+        c.arc = Math.max(0.5f, len);
+        c.t = 0f;
         c.turning = true;
-        c.nextNs = crossNs; c.nextDir = newDir; c.nextRoad = crossRoad; c.nextLane = newLane;
-        c.lastJunction = -1;
+        c.node = node.id;
+        turnsTotal++;
     }
 
-    /** True if the crossing road continues in that direction from the current road. */
-    private boolean canGo(boolean crossNs, int crossRoad, int dir, Car c) {
-        int idx = c.road;                                    // our road is a junction index on the crossing road
-        int max = crossNs ? city.nbz : city.nbx;
-        return dir > 0 ? idx < max : idx > 0;
+    private static float bez(float a, float b, float c, float d, float t) {
+        float u = 1 - t;
+        return u * u * u * a + 3 * u * u * t * b + 3 * u * t * t * c + t * t * t * d;
+    }
+
+    private void followTurn(Car c, float dt, float time, float px, float pz) {
+        float want = Math.min(c.vTurn, followLimit(c, px, pz));
+        accelerate(c, want, dt);
+        c.t += c.speed * dt / c.arc;
+        if (c.t >= 1f) {
+            RoadEdge ne = net.edges.get(c.nextEdge);
+            int nd = ne.dirFrom(c.node);
+            c.turning = false;
+            c.planned = false;
+            c.edge = ne.id;
+            c.dir = nd;
+            c.lane = c.nextLane;
+            c.off = c.offTarget = ne.laneOffset(c.lane);
+            c.s = c.node == ne.a ? ne.clearA : ne.len - ne.clearB;
+            c.cruise = ne.cls.speed * (0.82f + rnd.nextFloat() * 0.18f);
+            place(c, ne);
+            return;
+        }
+        float[] b = c.bez;
+        float t = c.t, u = 1 - t;
+        c.x = bez(b[0], b[2], b[4], b[6], t);
+        c.z = bez(b[1], b[3], b[5], b[7], t);
+        float tx = 3 * u * u * (b[2] - b[0]) + 6 * u * t * (b[4] - b[2]) + 3 * t * t * (b[6] - b[4]);
+        float tz = 3 * u * u * (b[3] - b[1]) + 6 * u * t * (b[5] - b[3]) + 3 * t * t * (b[7] - b[5]);
+        if (tx * tx + tz * tz > 1e-6f) c.yaw = (float) Math.atan2(tx, tz);
+        float ground = city.terrain.height(c.x, c.z);
+        float lin = c.y0 + (c.y3 - c.y0) * t;
+        c.y = Math.abs(lin - ground) < 1.5f ? ground : lin;
     }
 
     /** Collision boxes for the cars near a point (axis-aligned bounds of each car). */
@@ -268,4 +442,7 @@ public final class Traffic {
             out.add(new Box(c.x - hx, c.y, c.z - hz, c.x + hx, c.y + 1.5f, c.z + hz));
         }
     }
+
+    /** True if the car is crossing a junction (for tests). */
+    public static boolean turning(Car c) { return c.turning; }
 }

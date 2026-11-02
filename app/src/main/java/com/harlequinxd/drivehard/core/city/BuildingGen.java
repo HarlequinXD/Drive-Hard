@@ -17,7 +17,8 @@ import static com.harlequinxd.drivehard.core.render.SoftRenderer.L_OBJECT;
  */
 final class BuildingGen {
     static final int N = 0, S = 1, W = 2, E = 3;
-    enum Type { TOWER, DEPT_STORE, ZAKKYO, MANSION, SHOPHOUSE, KONBINI, PACHINKO, HOUSE, APAATO, FIRE_STATION, KOBAN, WAREHOUSE }
+    enum Type { TOWER, DEPT_STORE, ZAKKYO, MANSION, SHOPHOUSE, KONBINI, PACHINKO, HOUSE, APAATO, FIRE_STATION, KOBAN, WAREHOUSE,
+        FARMHOUSE, SHED, GREENHOUSE }
 
     private final City city;
     private final TextureLibrary lib;
@@ -59,6 +60,9 @@ final class BuildingGen {
             case APAATO: block(x0, z0, x1, z1, base, street, new boolean[4], shopSet, Kind.CORRIDOR, Kind.HOUSE, 2, 2.9f, false, 0); break;
             case FIRE_STATION: fireStation(x0, z0, x1, z1, base, street); break;
             case KOBAN: koban(x0, z0, x1, z1, base, street); break;
+            case FARMHOUSE: farmhouse(x0, z0, x1, z1, base, street); break;
+            case SHED: shed(x0, z0, x1, z1, base); break;
+            case GREENHOUSE: greenhouse(x0, z0, x1, z1, base); break;
             default: block(x0, z0, x1, z1, base, street, new boolean[4], shopSet, Kind.WAREHOUSE, Kind.WAREHOUSE, 1 + r.nextInt(2), 5f, false, 0); break;
         }
         gb.end();
@@ -269,6 +273,56 @@ final class BuildingGen {
             gable(x0, z0, x1, z1, top, wall, roofTex);
             ch.boxes.add(new Box(x0, footMin, z0, x1, top + 1.2f, z1));
         }
+    }
+
+    /** Old farmhouse: one or two storeys of timber or plaster under a big tiled roof. */
+    private void farmhouse(float x0, float z0, float x1, float z1, float base, boolean[] street) {
+        boolean wood = r.nextBoolean();
+        int wall = pick(wood ? Kind.HOUSE_WOOD : Kind.HOUSE);
+        float floorH = 2.9f;
+        int floors = r.nextInt(3) == 0 ? 1 : 2;
+        float top = base + floors * floorH;
+        for (int s = 0; s < 4; s++) {
+            float[] e = edge(s, x0, z0, x1, z1);
+            gb.wallGrid(e[0], e[1], e[2], e[3], base, top, wall, 0.5f, 1f / floorH, 8f, floorH * 2f, L_OBJECT, 0f, true);
+        }
+        for (int s = 0; s < 4; s++) {
+            if (!street[s]) continue;
+            float[] e = edge(s, x0, z0, x1, z1);
+            float dx = e[2] - e[0], dz = e[3] - e[1];
+            float nx = -dz, nz = dx, nl = (float) Math.sqrt(nx * nx + nz * nz);
+            nx = nx / nl * 0.02f; nz = nz / nl * 0.02f;
+            gb.wall(e[0] + dx * 0.4f + nx, e[1] + dz * 0.4f + nz, e[0] + dx * 0.6f + nx, e[1] + dz * 0.6f + nz, base, base + 2.2f,
+                    lib.facades(Kind.CORRIDOR)[r.nextInt(lib.facades(Kind.CORRIDOR).length)], 0.2f, 0.62f, 0.17f, 0.69f, L_OBJECT, -0.05f, 1f);
+            break;
+        }
+        int roofTex = lib.roofs[r.nextInt(2)];
+        gable(x0, z0, x1, z1, top, wall, roofTex);
+        ch.boxes.add(new Box(x0, footMin, z0, x1, top + 1.2f, z1));
+    }
+
+    /** Timber barn / tool shed with a corrugated metal roof. */
+    private void shed(float x0, float z0, float x1, float z1, float base) {
+        int wall = pick(Kind.HOUSE_WOOD);
+        float top = base + 3.3f;
+        for (int s = 0; s < 4; s++) {
+            float[] e = edge(s, x0, z0, x1, z1);
+            gb.wallGrid(e[0], e[1], e[2], e[3], base, top, wall, 0.5f, 1f / 2.9f, 8f, 6f, L_OBJECT, 0f, true);
+        }
+        gable(x0, z0, x1, z1, top, wall, lib.metal);
+        ch.boxes.add(new Box(x0, footMin, z0, x1, top + 1f, z1));
+    }
+
+    /** Vinyl greenhouse: low milky walls under a pitched plastic roof. */
+    private void greenhouse(float x0, float z0, float x1, float z1, float base) {
+        float top = base + 1.9f;
+        for (int s = 0; s < 4; s++) {
+            float[] e = edge(s, x0, z0, x1, z1);
+            float len = (float) Math.hypot(e[2] - e[0], e[3] - e[1]);
+            gb.wall(e[0], e[1], e[2], e[3], base, top, lib.vinyl, 0f, len / 2f, 0f, 1f, L_OBJECT, 0f, 0.9f);
+        }
+        gable(x0, z0, x1, z1, top, lib.vinyl, lib.vinyl);
+        ch.boxes.add(new Box(x0, footMin, z0, x1, top + 1f, z1));
     }
 
     /** Pitched roof of kawara tiles with gable ends; ridge along the longer side. */

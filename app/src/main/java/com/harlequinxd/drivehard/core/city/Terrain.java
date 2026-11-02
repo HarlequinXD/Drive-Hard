@@ -1,16 +1,27 @@
 package com.harlequinxd.drivehard.core.city;
 
+import com.harlequinxd.drivehard.core.road.RoadNetwork;
 import com.harlequinxd.drivehard.core.tex.Noise;
 
 /**
  * Island heightfield (pure function of position, so any chunk can be generated on its own).
- * The city sits on a gently rolling plateau; hills rise around it to the west, north and south;
- * beaches ring the coast and the east side drops quickly to the Ocean Drive beach.
+ *
+ * The island is 128 x 128 km. The city sits on its east coast on a gently rolling plateau
+ * ringed by hills; beyond them the land opens into coastal plains and farmland, rolling
+ * hill country and a few mountain ranges, with beaches all around the coast. Roads are cut
+ * into the terrain: {@link #height} blends the natural ground toward each road's smoothed
+ * profile so roads sit on embankments and in cuttings.
  */
 public final class Terrain {
     public static final float SAND_LEVEL = 2.2f;
+    public static final float ISLAND_SIZE = 128000f;
     private final int seed;
     private final float cx0, cz0, cx1, cz1;   // city rectangle
+    private final float czc;
+    /** Island extents (before coastline wobble). */
+    public final float islandX0, islandX1, islandZ0, islandZ1;
+    /** Set once the road network is built; null while it is being generated. */
+    public RoadNetwork roads;
 
     public Terrain(int seed, float cityX0, float cityZ0, float cityX1, float cityZ1) {
         this.seed = seed;
@@ -18,6 +29,11 @@ public final class Terrain {
         this.cz0 = cityZ0;
         this.cx1 = cityX1;
         this.cz1 = cityZ1;
+        this.czc = (cityZ0 + cityZ1) * 0.5f;
+        islandX1 = cityX1;
+        islandX0 = cityX1 - ISLAND_SIZE;
+        islandZ0 = czc - ISLAND_SIZE * 0.5f;
+        islandZ1 = czc + ISLAND_SIZE * 0.5f;
     }
 
     /** Smooth value noise (non-tiling), roughly 0..1. */
@@ -43,38 +59,84 @@ public final class Terrain {
         return (float) Math.sqrt(dx * dx + dz * dz);
     }
 
+    /** Final ground height: natural terrain shaped by the roads. */
     public float height(float x, float z) {
-        // gentle plateau under the city (max slope a few percent)
-        float base = 3.5f + 4.5f * vn(x / 330f, z / 330f, seed);
+        float n = natural(x, z);
+        RoadNetwork r = roads;
+        return r == null ? n : r.shapeTerrain(x, z, n);
+    }
+
+    /** Ground height without road cuttings and embankments. */
+    public float natural(float x, float z) {
         float d = cityDistance(x, z);
         float east = eastness(x, z);
-        // hills around the city
-        float hill = vn(x / 230f, z / 230f, seed + 11) * 0.65f + vn(x / 90f, z / 90f, seed + 12) * 0.35f;
-        hill = hill * hill * 1.4f;
-        float over = coastOver(x, z, d, east);
-        float hills = hill * 58f * smooth(30f, 200f, d) * (1f - east) * (1f - smooth(-80f, 10f, over));
+        float over = coastOver(x, z);
+        float local = 0f, regional = 0f;
+        float wReg = smooth(250f, 1100f, d);
+        if (wReg < 1f) {
+            // gentle plateau under the city (max slope a few percent) and the hills around it
+            float base = 3.5f + 4.5f * vn(x / 330f, z / 330f, seed);
+            float hill = vn(x / 230f, z / 230f, seed + 11) * 0.65f + vn(x / 90f, z / 90f, seed + 12) * 0.35f;
+            hill = hill * hill * 1.4f;
+            local = base + hill * 58f * smooth(30f, 200f, d) * (1f - east);
+        }
+        if (wReg > 0f) {
+            regional = regional(x, z);
+            // the interior sinks toward sea level near the coast
+            if (over > -2500f) regional = 3f + (regional - 3f) * smooth(-200f, 2500f, -over);
+        }
+        float h = local + (regional - local) * wReg;
         // beach profile: gentle sand slope, then a drop-off under the water
         float drop = over > 0f ? over * 0.06f + Math.max(0f, over - 55f) * 0.35f : 0f;
-        return Math.max(-14f, base + hills - drop);
+        return Math.max(-14f, h - drop);
+    }
+
+    /** Plains, hill country and mountain ranges of the island interior. */
+    private float regional(float x, float z) {
+        float plains = 5f + 16f * vn(x / 6000f, z / 6000f, seed + 30) + 6f * vn(x / 1400f, z / 1400f, seed + 33);
+        // rolling hill country
+        float hm = smooth(0.42f, 0.7f, vn(x / 9000f, z / 9000f, seed + 31));
+        float hv = vn(x / 700f, z / 700f, seed + 34) * 0.6f + vn(x / 260f, z / 260f, seed + 35) * 0.4f;
+        float hills = hm * hv * hv * 95f;
+        // mountain ranges with ridges
+        float mm = smooth(0.6f, 0.85f, vn(x / 16000f, z / 16000f, seed + 32));
+        float mountains = 0f;
+        if (mm > 0f) {
+            float r1 = 1f - Math.abs(2f * vn(x / 2600f, z / 2600f, seed + 36) - 1f);
+            float r2 = 1f - Math.abs(2f * vn(x / 900f, z / 900f, seed + 37) - 1f);
+            mountains = mm * (120f + 260f * r1 * r1 + 70f * r2 * r2);
+        }
+        return plains + hills + mountains;
     }
 
     public float eastness(float x, float z) {
         return smooth(cx1 - 120f, cx1 + 20f, x) * (1f - smooth(0f, 260f, Math.max(cz0 - z, z - cz1)));
     }
 
+    /** Wobbly coastline offset (metres) along an edge coordinate. */
+    private float wobble(float t, int s, float amp) {
+        return (vn(t / 5200f, 0.5f, seed + s) - 0.5f) * amp + (vn(t / 1300f, 7.5f, seed + s + 1) - 0.5f) * amp * 0.3f;
+    }
+
     /** Metres past the point where the coast starts falling toward the sea (negative inland). */
-    private float coastOver(float x, float z, float d, float east) {
-        double ang = Math.atan2(z - (cz0 + cz1) * 0.5f, x - (cx0 + cx1) * 0.5f);
-        float wobble = vn((float) (ang * 3.0 + 10.0), 0.5f, seed + 21) * 140f + vn((float) (ang * 9.0 + 4.0), 0.5f, seed + 22) * 50f;
-        float coast = (300f + wobble) * (1f - east);
-        return d - coast;
+    public float coastOver(float x, float z) {
+        // east coast: straight past the city, bays and headlands further north and south
+        float awayZ = Math.max(0f, Math.abs(z - czc) - 900f);
+        float eastEdge = islandX1 + wobble(z, 40, 2600f) * smooth(0f, 3000f, awayZ) + 0f;
+        float westEdge = islandX0 + wobble(z, 42, 6000f);
+        float northEdge = islandZ0 + wobble(x, 44, 6000f);
+        float southEdge = islandZ1 + wobble(x, 46, 6000f);
+        float o = x - eastEdge;
+        o = Math.max(o, westEdge - x);
+        o = Math.max(o, northEdge - z);
+        o = Math.max(o, z - southEdge);
+        return o;
     }
 
     /** True for beach sand: the coastal strip, or anything just above sea level. */
     public boolean isSand(float x, float z, float h) {
         if (h < SAND_LEVEL) return true;
-        float d = cityDistance(x, z);
-        return coastOver(x, z, d, eastness(x, z)) > 28f && h < 6f;
+        return coastOver(x, z) > -40f && h < 6f;
     }
 
     /** Surface normal from central differences. */
