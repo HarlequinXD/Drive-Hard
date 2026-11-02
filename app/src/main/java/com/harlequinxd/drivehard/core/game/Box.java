@@ -3,6 +3,8 @@ package com.harlequinxd.drivehard.core.game;
 /** Axis-aligned solid box used for collision. */
 public final class Box {
     public final float minX, minY, minZ, maxX, maxY, maxZ;
+    /** Object this collider belongs to (a car), so it can ignore itself; null for scenery. */
+    public Object owner;
 
     public Box(float minX, float minY, float minZ, float maxX, float maxY, float maxZ) {
         this.minX = minX; this.minY = minY; this.minZ = minZ;

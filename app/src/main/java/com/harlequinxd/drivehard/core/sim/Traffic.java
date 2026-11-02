@@ -3,6 +3,7 @@ package com.harlequinxd.drivehard.core.sim;
 import com.harlequinxd.drivehard.core.city.City;
 import com.harlequinxd.drivehard.core.city.TrafficLights;
 import com.harlequinxd.drivehard.core.game.Box;
+import com.harlequinxd.drivehard.core.game.Vehicle;
 import com.harlequinxd.drivehard.core.model.Cars;
 
 import java.util.ArrayList;
@@ -34,6 +35,8 @@ public final class Traffic {
     }
 
     public final List<Car> cars = new ArrayList<>();
+    /** Player-driven and parked cars that traffic must queue behind. */
+    public List<Vehicle> obstacles;
     public int target = 26;
     public float spawnMin = 55f, spawnMax = 150f, despawn = 185f;
     private final City city;
@@ -132,6 +135,11 @@ public final class Traffic {
             float dx = o.x - c.x, dz = o.z - c.z;
             float ahead = dx * fx + dz * fz, side = Math.abs(dx * fz - dz * fx);
             if (ahead > 0 && ahead < 30f && side < 1.8f) nearest = Math.min(nearest, ahead - (c.len + o.len) * 0.5f);
+        }
+        if (obstacles != null) for (Vehicle o : obstacles) {
+            float dx = o.x - c.x, dz = o.z - c.z;
+            float ahead = dx * fx + dz * fz, side = Math.abs(dx * fz - dz * fx);
+            if (ahead > 0 && ahead < 30f && side < 2.2f) nearest = Math.min(nearest, ahead - (c.len + o.len) * 0.5f);
         }
         // the player in front
         {

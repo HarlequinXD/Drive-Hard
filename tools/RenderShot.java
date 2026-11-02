@@ -51,6 +51,7 @@ public class RenderShot {
         tour(g, "shot_hills.png", c.cityX0 - 150f, (c.cityZ0 + c.cityZ1) * 0.5f, -1.57f, 12, 7f);
         tour(g, "shot_hill_view.png", c.cityX0 - 110f, c.cityZ0 - 60f, (float) Math.toRadians(-135), 25, 12f);
         tour(g, "shot_aerial.png", ix, iz, 0.8f, 40, 45f);
+        driveShots(g);
         System.out.printf("chunks loaded %d, generated %d, unloaded %d%n", c.chunks.loadedCount(),
                 c.chunks.generatedTotal, c.chunks.unloadedTotal);
 
@@ -70,6 +71,41 @@ public class RenderShot {
         System.out.printf("heap used %.0f MB%n", (rt.totalMemory() - rt.freeMemory()) / 1048576.0);
         g.dispose();
         System.exit(0);
+    }
+
+    /** Steal a car from traffic, hop in, drive down the street, hop out. */
+    static void driveShots(Game g) throws Exception {
+        City c = g.city;
+        float x = (c.rx0[3] + c.rx1[3]) * 0.5f, z = (c.rz1[2] + c.rz0[3]) * 0.5f;
+        g.player.x = x + 8f; g.player.z = z;
+        c.chunks.loadAllNow(g.player.x, g.player.z);
+        g.player.y = c.surface(g.player.x, g.player.z);
+        for (int k = 0; k < 600; k++) { g.update(1 / 60f, 0, 0, 0, 0, false); if (k % 60 == 0) g.cache.bakeAllNow(); }
+        com.harlequinxd.drivehard.core.sim.Traffic.Car best = null;
+        float bd = 1e9f;
+        for (com.harlequinxd.drivehard.core.sim.Traffic.Car car : g.traffic.cars) {
+            float d = (car.x - g.player.x) * (car.x - g.player.x) + (car.z - g.player.z) * (car.z - g.player.z);
+            if (g.carReady(car.style) && d < bd) { bd = d; best = car; }
+        }
+        if (best == null) return;
+        float rx = -(float) Math.cos(best.yaw), rz = (float) Math.sin(best.yaw);
+        g.player.x = best.x + rx * 2.4f; g.player.z = best.z + rz * 2.4f;
+        g.player.y = c.surface(g.player.x, g.player.z);
+        g.cam.yaw = best.yaw + 2.2f; g.cam.pitch = (float) Math.toRadians(14);
+        g.update(1 / 60f, 0, 0, 0, 0, false);
+        g.update(1 / 60f, 0, 0, 0, 0, false, 0, 0, 0, true);
+        for (int k = 0; k < 8; k++) g.update(1 / 60f, 0, 0, 0, 0, false);
+        shot(g, "shot_getin.png");
+        for (int k = 0; k < 40; k++) g.update(1 / 60f, 0, 0, 0, 0, false);
+        for (int k = 0; k < 150; k++) g.update(1 / 60f, 0, 0, 0, 0, false, 0, 1, 0, false);
+        shot(g, "shot_driving.png");
+        for (int k = 0; k < 60; k++) g.update(1 / 60f, 0, 0, 0, 0, false, 1, 0.6f, 0, false);
+        shot(g, "shot_turning.png");
+        for (int k = 0; k < 200; k++) g.update(1 / 60f, 0, 0, 0, 0, false, 0, 0, 1, false);
+        g.update(1 / 60f, 0, 0, 0, 0, false, 0, 0, 0, true);
+        for (int k = 0; k < 9; k++) g.update(1 / 60f, 0, 0, 0, 0, false);
+        shot(g, "shot_getout.png");
+        System.out.println("vehicle mode " + g.mode + ", parked " + g.parked.size());
     }
 
     static void tour(Game g, String name, float x, float z, float yaw, float pitchDeg, float dist) throws Exception {

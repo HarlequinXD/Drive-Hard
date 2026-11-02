@@ -128,8 +128,62 @@ public class SimTest {
         check("pedestrians cross streets", crossings > 5);
         check("pedestrians stay on the ground", badCrossings == 0);
 
+        vehicleTest();
+
         System.out.println(fails == 0 ? "ALL OK" : fails + " FAILED");
         if (fails > 0) System.exit(1);
+    }
+
+    /** Get into a traffic car, drive it, get out, and take it again. */
+    static void vehicleTest() {
+        com.harlequinxd.drivehard.core.Game g = new com.harlequinxd.drivehard.core.Game(1234, null);
+        for (int i = 0; i < 8; i++) g.requestCar();
+        g.cache.bakeAllNow();
+        float dt = 1 / 60f;
+        for (int i = 0; i < 600; i++) g.update(dt, 0, 0, 0, 0, false);
+        g.cache.bakeAllNow();
+        for (int i = 0; i < 300 && g.traffic.cars.isEmpty(); i++) { g.update(dt, 0, 0, 0, 0, false); g.cache.bakeAllNow(); }
+        com.harlequinxd.drivehard.core.sim.Traffic.Car car = null;
+        for (com.harlequinxd.drivehard.core.sim.Traffic.Car c : g.traffic.cars)
+            if (g.carReady(c.style)) { car = c; break; }
+        check("traffic available to steal", car != null);
+        if (car == null) return;
+        // stand beside it (the button only shows within reach)
+        float rx = -(float) Math.cos(car.yaw), rz = (float) Math.sin(car.yaw);
+        g.player.x = car.x + rx * 2.2f; g.player.z = car.z + rz * 2.2f;
+        g.player.y = g.city.surface(g.player.x, g.player.z);
+        g.traffic.target = 0;
+        float far = 0;
+        check("get-in button shows next to a car", g.canEnter());
+        g.update(dt, 0, 0, 0, 0, false, 0, 0, 0, true);
+        for (int i = 0; i < 40; i++) g.update(dt, 0, 0, 0, 0, false, 0, 0, 0, false);
+        check("player is driving", g.mode == com.harlequinxd.drivehard.core.Game.Mode.DRIVING && g.vehicle != null);
+        check("stolen car left traffic", !g.traffic.cars.contains(car));
+        float sx = g.vehicle.x, sz = g.vehicle.z, maxSpeed = 0;
+        for (int i = 0; i < 180; i++) { g.update(dt, 0, 0, 0, 0, false, 0, 1, 0, false); maxSpeed = Math.max(maxSpeed, g.vehicle.speed); }
+        far = (float) Math.hypot(g.vehicle.x - sx, g.vehicle.z - sz);
+        System.out.printf("drove %.1f m, top speed %.1f m/s%n", far, maxSpeed);
+        check("gas moves the car", far > 5f);
+        float yaw0 = g.vehicle.yaw;
+        for (int i = 0; i < 40; i++) g.update(dt, 0, 0, 0, 0, false, 1, 0.5f, 0, false);
+        check("steering turns the car", Math.abs(g.vehicle.yaw - yaw0) > 0.15f);
+        for (int i = 0; i < 300; i++) g.update(dt, 0, 0, 0, 0, false, 0, 0, 1, false);
+        check("reverse brakes then backs up", g.vehicle.speed < -0.5f);
+        for (int i = 0; i < 400 && Math.abs(g.vehicle.speed) > 0.01f; i++) g.update(dt, 0, 0, 0, 0, false, 0, 0, 0, false);
+        check("car coasts to a stop", Math.abs(g.vehicle.speed) <= 0.01f);
+        g.update(dt, 0, 0, 0, 0, false, 0, 0, 0, true);
+        for (int i = 0; i < 60; i++) g.update(dt, 0, 0, 0, 0, false);
+        check("popped out on foot", g.mode == com.harlequinxd.drivehard.core.Game.Mode.ON_FOOT && g.vehicle == null);
+        check("car stays parked", g.parked.size() == 1);
+        com.harlequinxd.drivehard.core.game.Vehicle v = g.parked.get(0);
+        float gap = v.distanceTo(g.player.x, g.player.z);
+        System.out.printf("stepped out %.2f m from the body%n", gap);
+        check("standing beside the car", gap > 0.2f && gap < 1.5f && g.player.onGround);
+        check("can get back in", g.canEnter());
+        g.update(dt, 0, 0, 0, 0, false, 0, 0, 0, true);
+        for (int i = 0; i < 40; i++) g.update(dt, 0, 0, 0, 0, false);
+        check("back in the parked car", g.vehicle == v && g.parked.isEmpty());
+        g.dispose();
     }
 
     static boolean carTurning(com.harlequinxd.drivehard.core.sim.Traffic.Car car) {

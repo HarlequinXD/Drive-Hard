@@ -7,6 +7,7 @@ import com.harlequinxd.drivehard.core.city.TrafficLights;
 import com.harlequinxd.drivehard.core.game.Box;
 import com.harlequinxd.drivehard.core.game.OrbitCamera;
 import com.harlequinxd.drivehard.core.game.Player;
+import com.harlequinxd.drivehard.core.game.Vehicle;
 import com.harlequinxd.drivehard.core.model.Animations;
 import com.harlequinxd.drivehard.core.model.CharacterModel;
 import com.harlequinxd.drivehard.core.model.CharacterSpec;
@@ -36,6 +37,22 @@ public final class Game {
     public final City city;
     public final Player player;
     public final OrbitCamera cam = new OrbitCamera();
+
+    // ------------------------------------------------------------------ vehicles
+    /** On foot, hopping into a car, driving, or popping back out. */
+    public enum Mode { ON_FOOT, ENTERING, DRIVING, EXITING }
+    public Mode mode = Mode.ON_FOOT;
+    /** The car being driven (or entered). */
+    public Vehicle vehicle;
+    /** Cars the player has left behind; they stay where they stop and can be taken again. */
+    public final List<Vehicle> parked = new ArrayList<>();
+    public static final int MAX_PARKED = 6;
+    /** How close (metres from the body) the player must be to get in. */
+    public static final float ENTER_RANGE = 2.2f;
+    private float popT, popX0, popY0, popZ0;
+    private float camIdle;
+    private final float[] door = new float[2];
+    private final List<Vehicle> trafficObstacles = new ArrayList<>();
     public final SpriteSheet sheet, lamps, signals, umbrellas, poles;
     private final int playerTex, lampTex, signalTex, umbrellaTex, poleTex;
     public final Texture[] textures = new Texture[4096];
@@ -87,7 +104,14 @@ public final class Game {
         city = new City(lib, seed);
         traffic = new Traffic(city, r -> pickReady(carEntries, r));
         pedestrians = new Pedestrians(city, r -> pickReady(pedEntries, r));
-        city.dynamic = traffic::boxesNear;
+        traffic.obstacles = trafficObstacles;
+        city.dynamic = (x, z, out) -> {
+            traffic.boxesNear(x, z, out);
+            for (Vehicle v : parked) {
+                float dx = v.x - x, dz = v.z - z;
+                if (dx * dx + dz * dz < 64f) out.add(v.box());
+            }
+        };
         player = new Player(city.spawnX, city.spawnZ);
         city.chunks.ensureAround(player.x, player.z);
         player.y = city.surface(player.x, player.z);
@@ -146,10 +170,24 @@ public final class Game {
     // ------------------------------------------------------------------ update
 
     public void update(float dt, float stickX, float stickY, float dYaw, float dPitch, boolean jump) {
+        update(dt, stickX, stickY, dYaw, dPitch, jump, 0f, 0f, 0f, false);
+    }
+
+    /**
+     * One simulation step.
+     * @param steer      driving: -1 left .. +1 right (D-pad)
+     * @param gas        driving: accelerator 0..1
+     * @param reverse    driving: brake / reverse 0..1
+     * @param carButton  pressed this frame: get in the nearest car, or get out
+     */
+    public void update(float dt, float stickX, float stickY, float dYaw, float dPitch, boolean jump,
+                       float steer, float gas, float reverse, boolean carButton) {
         time += dt;
         cache.update();
         // keep active styles alive and slowly rotate in new ones so all 100 appear over time
         for (Traffic.Car c : traffic.cars) if (carEntries[c.style] != null) cache.touch(carEntries[c.style]);
+        if (vehicle != null && carEntries[vehicle.style] != null) cache.touch(carEntries[vehicle.style]);
+        for (Vehicle v : parked) if (carEntries[v.style] != null) cache.touch(carEntries[v.style]);
         for (Pedestrians.Ped p : pedestrians.peds) if (pedEntries[p.style] != null) cache.touch(pedEntries[p.style]);
         rotateTimer -= dt;
         if (rotateTimer <= 0f) {
@@ -168,11 +206,173 @@ public final class Game {
         traffic.update(dt, time, player.x, player.z);
         city.railway.update(dt);
         pedestrians.update(dt, time, player.x, player.z);
+        for (Vehicle v : parked) v.update(dt, 0f, 0f, 0f, city, v);
+        trafficObstacles.clear();
+        trafficObstacles.addAll(parked);
+        if (vehicle != null) trafficObstacles.add(vehicle);
         cam.orbit(dYaw, dPitch);
-        cam.toWorld(stickX, stickY, move);
-        player.update(dt, move[0], move[1], jump, city);
-        cam.update(player.x, player.y, player.z, dt);
+        if (dYaw != 0f || dPitch != 0f) camIdle = 0f; else camIdle += dt;
+
+        if (carButton) {
+            if (mode == Mode.ON_FOOT) tryEnter();
+            else if (mode == Mode.DRIVING) exitVehicle();
+        }
+        switch (mode) {
+            case ON_FOOT:
+                cam.toWorld(stickX, stickY, move);
+                player.update(dt, move[0], move[1], jump, city);
+                break;
+            case ENTERING: {
+                // the car rolls to a stop while she hops in through the driver's door
+                vehicle.update(dt, 0f, 0f, 1f, city, null);
+                popT += dt / 0.3f;
+                vehicle.doorPoint(1, 0.1f, door);
+                float t = Math.min(1f, popT);
+                player.x = popX0 + (door[0] - popX0) * t;
+                player.z = popZ0 + (door[1] - popZ0) * t;
+                player.y = popY0 + (vehicle.y - popY0) * t + (float) Math.sin(Math.PI * t) * 0.7f;
+                player.facing = (float) Math.atan2(vehicle.x - player.x, vehicle.z - player.z);
+                player.anim = Animations.Anim.JUMP;
+                player.animFrame = 1;
+                if (popT >= 1f) mode = Mode.DRIVING;
+                break;
+            }
+            case DRIVING:
+                vehicle.update(dt, steer, gas, reverse, city, null);
+                player.x = vehicle.x; player.y = vehicle.y; player.z = vehicle.z;
+                break;
+            case EXITING:
+                player.update(dt, 0f, 0f, false, city);
+                popT += dt;
+                if (popT > 0.15f && player.onGround) mode = Mode.ON_FOOT;
+                break;
+        }
+        driveCamera(dt);
+        float fx = mode == Mode.DRIVING || mode == Mode.ENTERING ? vehicle.x : player.x;
+        float fz = mode == Mode.DRIVING || mode == Mode.ENTERING ? vehicle.z : player.z;
+        float fy = mode == Mode.DRIVING || mode == Mode.ENTERING ? vehicle.y : player.y;
+        cam.update(fx, fy, fz, dt);
         cameraCollision();
+    }
+
+    /** Chase camera while driving: pulls back, raises the target, and swings behind the car when not dragged. */
+    private void driveCamera(float dt) {
+        boolean driving = mode == Mode.DRIVING || mode == Mode.ENTERING;
+        float wantDist = driving ? 7f + Math.min(2.5f, Math.abs(vehicle.speed) * 0.09f) : 6f;
+        cam.distance += (wantDist - cam.distance) * Math.min(1f, dt * 3f);
+        cam.targetHeight += ((driving ? 1.5f : 1.1f) - cam.targetHeight) * Math.min(1f, dt * 3f);
+        if (driving && camIdle > 0.8f && Math.abs(vehicle.speed) > 1f) {
+            float behind = vehicle.yaw + (float) Math.PI;
+            float diff = behind - cam.yaw;
+            while (diff > Math.PI) diff -= (float) (2 * Math.PI);
+            while (diff < -Math.PI) diff += (float) (2 * Math.PI);
+            cam.yaw += diff * Math.min(1f, dt * 3.2f);
+            float wantPitch = (float) Math.toRadians(16);
+            cam.pitch += (wantPitch - cam.pitch) * Math.min(1f, dt * 1.5f);
+        }
+    }
+
+    // ------------------------------------------------------------------ getting in and out
+
+    private Traffic.Car nearCar;
+    private Vehicle nearParked;
+
+    /** True when on foot next to a car that can be taken (drives the fading "get in" button). */
+    public boolean canEnter() {
+        if (mode != Mode.ON_FOOT) return false;
+        findNearestCar();
+        return nearCar != null || nearParked != null;
+    }
+
+    /** True if this car style's sprites are baked and drawable. */
+    public boolean carReady(int style) { SpriteCache.Entry e = carEntries[style]; return e != null && e.ready(); }
+
+    public boolean driving() { return mode == Mode.DRIVING || mode == Mode.ENTERING; }
+
+    private void findNearestCar() {
+        nearCar = null;
+        nearParked = null;
+        float best = ENTER_RANGE;
+        for (Traffic.Car c : traffic.cars) {
+            SpriteCache.Entry e = carEntries[c.style];
+            if (e == null || !e.ready()) continue;
+            float d = bodyDistance(c.x, c.z, c.yaw, Cars.spec(c.style).L, Cars.spec(c.style).W);
+            if (d < best) { best = d; nearCar = c; }
+        }
+        for (Vehicle v : parked) {
+            float d = v.distanceTo(player.x, player.z);
+            if (d < best) { best = d; nearParked = v; nearCar = null; }
+        }
+    }
+
+    private float bodyDistance(float cx, float cz, float yaw, float len, float wid) {
+        float fx = (float) Math.sin(yaw), fz = (float) Math.cos(yaw);
+        float dx = player.x - cx, dz = player.z - cz;
+        float along = dx * fx + dz * fz, side = -dx * fz + dz * fx;
+        float ea = Math.max(0f, Math.abs(along) - len * 0.5f), es = Math.max(0f, Math.abs(side) - wid * 0.5f);
+        return (float) Math.sqrt(ea * ea + es * es);
+    }
+
+    private void tryEnter() {
+        findNearestCar();
+        if (nearParked != null) {
+            vehicle = nearParked;
+            parked.remove(nearParked);
+        } else if (nearCar != null) {
+            Traffic.Car c = nearCar;
+            traffic.cars.remove(c);
+            // the driver hits the brakes when she yanks the door open
+            vehicle = new Vehicle(c.style, c.x, c.z, c.yaw, Math.min(c.speed, 2f));
+            vehicle.y = c.y;
+        } else return;
+        mode = Mode.ENTERING;
+        popT = 0f;
+        popX0 = player.x; popY0 = player.y; popZ0 = player.z;
+        player.vx = player.vz = player.vy = 0f;
+    }
+
+    private void exitVehicle() {
+        Vehicle v = vehicle;
+        // driver's door is on the right (right-hand drive); fall back to the left, then front/back
+        float[][] tries = new float[4][2];
+        v.doorPoint(1, 0.55f, tries[0]);
+        v.doorPoint(-1, 0.55f, tries[1]);
+        tries[2][0] = v.x + v.fx() * (v.len * 0.5f + 0.7f); tries[2][1] = v.z + v.fz() * (v.len * 0.5f + 0.7f);
+        tries[3][0] = v.x - v.fx() * (v.len * 0.5f + 0.7f); tries[3][1] = v.z - v.fz() * (v.len * 0.5f + 0.7f);
+        float[] spot = null;
+        for (float[] t : tries) if (spotFree(t[0], t[1], v)) { spot = t; break; }
+        if (spot == null) return;   // boxed in: stay in the car
+        parked.add(v);
+        while (parked.size() > MAX_PARKED) {
+            // forget the farthest parked car
+            Vehicle far = parked.get(0);
+            float fd = -1;
+            for (Vehicle p : parked) {
+                float d = (p.x - v.x) * (p.x - v.x) + (p.z - v.z) * (p.z - v.z);
+                if (d > fd && p != v) { fd = d; far = p; }
+            }
+            parked.remove(far);
+        }
+        vehicle = null;
+        player.x = spot[0]; player.z = spot[1];
+        player.y = city.surface(spot[0], spot[1]) + 0.3f;
+        player.vx = player.vz = 0f;
+        player.vy = 4.5f;                      // pop out with a little hop
+        player.onGround = false;
+        player.facing = (float) Math.atan2(spot[0] - v.x, spot[1] - v.z);
+        mode = Mode.EXITING;
+        popT = 0f;
+    }
+
+    private boolean spotFree(float x, float z, Vehicle self) {
+        if (city.blocked(x, z)) return false;
+        float y = city.surface(x, z);
+        for (Box b : city.near(x, z)) {
+            if (b.owner == self) continue;
+            if (b.maxY < y + 0.4f || b.minY > y + Player.HEIGHT) continue;
+            if (x > b.minX - Player.RADIUS && x < b.maxX + Player.RADIUS && z > b.minZ - Player.RADIUS && z < b.maxZ + Player.RADIUS) return false;
+        }
+        return true;
     }
 
     private float camPull = 1f;
@@ -236,7 +436,25 @@ public final class Game {
         }
         drawTraffic(r);
         drawPedestrians(r);
+        for (Vehicle v : parked) drawVehicle(r, v);
+        if (vehicle != null) drawVehicle(r, vehicle);
+        if (mode != Mode.DRIVING) drawPlayer(r);
+        r.flush();
+    }
 
+    private void drawVehicle(SoftRenderer r, Vehicle v) {
+        SpriteCache.Entry e = carEntries[v.style];
+        if (e == null) e = car(v.style);
+        if (!e.ready()) return;
+        if (!r.boxVisible(v.x - 6, v.y, v.z - 6, v.x + 6, v.y + 4f, v.z + 6)) return;
+        r.groundQuadRotated(lib.shadow, v.x, v.y + 0.03f, v.z, v.len * 0.62f, v.wid * 0.7f, v.yaw,
+                SoftRenderer.MODE_SHADOW, SoftRenderer.L_SHADOW);
+        float viewYaw = (float) Math.atan2(r.ex - v.x, r.ez - v.z);
+        sprite(r, e.tex, e.sheet, e.sheet.directionFor(v.yaw, viewYaw), 0, v.x, v.y, v.z, -1.0f);
+        carsDrawn++;
+    }
+
+    private void drawPlayer(SoftRenderer r) {
         Player p = player;
         float gy = city.groundHeight(p.x, p.z, Player.RADIUS, p.y + 0.01f, 0.01f);
         float air = Math.min(1f, (p.y - gy) / 3f);
@@ -245,8 +463,9 @@ public final class Game {
         if (onTerrain) r.groundQuad(lib.shadow, p.x, gy + 0.04f, p.z, 0.38f * (1f - air * 0.4f), SoftRenderer.MODE_SHADOW, SoftRenderer.L_OBJECT, -1.5f);
         else r.groundQuad(lib.shadow, p.x, gy + 0.02f, p.z, 0.38f * (1f - air * 0.4f), SoftRenderer.MODE_SHADOW, SoftRenderer.L_SHADOW);
         SpriteSheet s = sheet;
-        sprite(r, playerTex, s, s.directionFor(p.facing, cam.yaw), Animations.firstFrame(p.anim) + p.animFrame, p.x, p.y, p.z, -0.8f);
-        r.flush();
+        // while hopping in, draw her just in front of the car so she reads as climbing in
+        sprite(r, playerTex, s, s.directionFor(p.facing, cam.yaw), Animations.firstFrame(p.anim) + p.animFrame, p.x, p.y, p.z,
+                mode == Mode.ENTERING ? -1.6f : -0.8f);
     }
 
     private void drawSprites(Chunk c, SoftRenderer r, Terrain terrain) {

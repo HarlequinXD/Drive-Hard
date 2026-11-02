@@ -45,6 +45,9 @@ public final class GameView extends SurfaceView implements SurfaceHolder.Callbac
     private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path arrow = new Path();
     private float fps, frameMs;
+    /** Fade of the get-in/get-out button, 0..1. */
+    private float carAlpha;
+    private boolean carVisible;
 
     public GameView(Context context) {
         super(context);
@@ -132,9 +135,15 @@ public final class GameView extends SurfaceView implements SurfaceHolder.Callbac
             float dt = Math.min(0.05f, (now - last) / 1e9f);
             last = now;
 
+            boolean driving = g.driving();
+            carVisible = driving || g.canEnter();
+            carAlpha += ((carVisible ? 1f : 0f) - carAlpha) * Math.min(1f, dt * 7f);
+            controls.setDriving(driving);
+            controls.setCarButtonEnabled(carVisible && carAlpha > 0.35f);
             controls.read(input);
             float k = 0.0055f / Math.max(1f, controls.density / 2.5f);
-            g.update(dt, input.stickX, input.stickY, -input.camDX * k, input.camDY * k, input.jump);
+            g.update(dt, input.stickX, input.stickY, -input.camDX * k, input.camDY * k, input.jump,
+                    input.steer, input.gas, input.reverse, input.car);
             long r0 = System.nanoTime();
             g.render();
             msAcc += (System.nanoTime() - r0) / 1e6f;
@@ -193,6 +202,116 @@ public final class GameView extends SurfaceView implements SurfaceHolder.Callbac
 
     private void drawHud(Canvas c, Game g) {
         float d = controls.density;
+        if (input.driving) drawDriveHud(c, g, d);
+        else drawFootHud(c, d);
+        drawCarButton(c, g, d);
+        // stats
+        text.setTextSize(12 * d);
+        text.setTextAlign(Paint.Align.LEFT);
+        c.drawText(String.format(Locale.US, "DRIVE HARD  %.0f fps  %.1f ms  %dx%d  %d tris  %s",
+                fps, frameMs, g.renderer.W, g.renderer.H, g.renderer.statPrims, g.mode.name()),
+                10 * d, 18 * d, text);
+    }
+
+    private void button(Canvas c, float x, float y, float r, boolean held, int alpha) {
+        hud.setStyle(Paint.Style.FILL);
+        hud.setColor(((held ? 0x80 : 0x40) * alpha / 255) << 24 | 0xFFFFFF);
+        c.drawCircle(x, y, r, hud);
+        hud.setStyle(Paint.Style.STROKE);
+        hud.setStrokeWidth(3 * controls.density);
+        hud.setColor((0xD0 * alpha / 255) << 24 | 0xFFFFFF);
+        c.drawCircle(x, y, r, hud);
+        hud.setStyle(Paint.Style.FILL);
+    }
+
+    private void drawDriveHud(Canvas c, Game g, float d) {
+        // D-pad: four arrow pads around a centre
+        float px = controls.padX(), py = controls.padY(), pr = controls.padRadius();
+        hud.setStyle(Paint.Style.FILL);
+        hud.setColor(0x26FFFFFF);
+        c.drawCircle(px, py, pr * 1.05f, hud);
+        float a = pr * 0.34f, off = pr * 0.62f;
+        drawPad(c, px + off, py, 0, a, input.padRight);
+        drawPad(c, px, py - off, 1, a, input.padUp);
+        drawPad(c, px - off, py, 2, a, input.padLeft);
+        drawPad(c, px, py + off, 3, a, input.padDown);
+
+        // gas and reverse
+        button(c, controls.gasX(), controls.gasY(), controls.gasRadius(), input.gasHeld, 255);
+        button(c, controls.revX(), controls.revY(), controls.revRadius(), input.revHeld, 255);
+        text.setTextAlign(Paint.Align.CENTER);
+        text.setTextSize(15 * d);
+        c.drawText("GAS", controls.gasX(), controls.gasY() + 5 * d, text);
+        text.setTextSize(13 * d);
+        c.drawText("REV", controls.revX(), controls.revY() + 5 * d, text);
+
+        // speedometer
+        if (g.vehicle != null) {
+            text.setTextSize(26 * d);
+            text.setTextAlign(Paint.Align.RIGHT);
+            float kmh = Math.abs(g.vehicle.speed) * 3.6f;
+            c.drawText(String.format(Locale.US, "%3.0f", kmh), c.getWidth() - 70 * d, 52 * d, text);
+            text.setTextSize(12 * d);
+            text.setTextAlign(Paint.Align.LEFT);
+            c.drawText("km/h", c.getWidth() - 66 * d, 52 * d, text);
+        }
+        text.setTextAlign(Paint.Align.LEFT);
+    }
+
+    /** One triangular D-pad arrow; dir 0 right, 1 up, 2 left, 3 down. */
+    private void drawPad(Canvas c, float x, float y, int dir, float a, boolean held) {
+        hud.setStyle(Paint.Style.FILL);
+        hud.setColor(held ? 0xE6FFFFFF : 0x80FFFFFF);
+        arrow.reset();
+        float[] tip = {a, 0}, b1 = {-a * 0.7f, -a * 0.85f}, b2 = {-a * 0.7f, a * 0.85f};
+        float[][] pts = {tip, b1, b2};
+        for (int i = 0; i < 3; i++) {
+            float ux = pts[i][0], uy = pts[i][1], rx, ry;
+            switch (dir) {
+                case 1: rx = uy; ry = -ux; break;
+                case 2: rx = -ux; ry = -uy; break;
+                case 3: rx = -uy; ry = ux; break;
+                default: rx = ux; ry = uy; break;
+            }
+            if (i == 0) arrow.moveTo(x + rx, y + ry); else arrow.lineTo(x + rx, y + ry);
+        }
+        arrow.close();
+        c.drawPath(arrow, hud);
+    }
+
+    /** Get in / get out button: fades in next to a car, always shown while driving. */
+    private void drawCarButton(Canvas c, Game g, float d) {
+        int alpha = Math.round(255 * Math.max(0f, Math.min(1f, carAlpha)));
+        if (alpha < 4) return;
+        float x = controls.carX(), y = controls.carY(), r = controls.carRadius();
+        button(c, x, y, r, input.carHeld, alpha);
+        // little car icon
+        hud.setColor((0xF0 * alpha / 255) << 24 | 0xFFFFFF);
+        float w = r * 0.62f, h = r * 0.2f;
+        arrow.reset();
+        arrow.moveTo(x - w, y + h);
+        arrow.lineTo(x - w, y - h * 0.2f);
+        arrow.lineTo(x - w * 0.55f, y - h * 0.4f);
+        arrow.lineTo(x - w * 0.3f, y - h * 1.6f);
+        arrow.lineTo(x + w * 0.35f, y - h * 1.6f);
+        arrow.lineTo(x + w * 0.62f, y - h * 0.4f);
+        arrow.lineTo(x + w, y - h * 0.1f);
+        arrow.lineTo(x + w, y + h);
+        arrow.close();
+        c.drawPath(arrow, hud);
+        hud.setColor((0xA0 * alpha / 255) << 24);
+        c.drawCircle(x - w * 0.5f, y + h, h * 0.75f, hud);
+        c.drawCircle(x + w * 0.5f, y + h, h * 0.75f, hud);
+        text.setTextAlign(Paint.Align.CENTER);
+        text.setTextSize(10 * d);
+        int old = text.getColor();
+        text.setColor((alpha << 24) | 0xFFFFFF);
+        c.drawText(g.driving() ? "GET OUT" : "GET IN", x, y + r * 0.72f, text);
+        text.setColor(old);
+        text.setTextAlign(Paint.Align.LEFT);
+    }
+
+    private void drawFootHud(Canvas c, float d) {
         // joystick
         float jr = controls.joyRadius();
         hud.setStyle(Paint.Style.FILL);
@@ -228,11 +347,5 @@ public final class GameView extends SurfaceView implements SurfaceHolder.Callbac
         text.setTextAlign(Paint.Align.CENTER);
         c.drawText("JUMP", bx, by + br * 0.62f, text);
         text.setTextAlign(Paint.Align.LEFT);
-
-        // stats
-        text.setTextSize(12 * d);
-        c.drawText(String.format(Locale.US, "DRIVE HARD  %.0f fps  %.1f ms  %dx%d  %d tris  %s",
-                fps, frameMs, g.renderer.W, g.renderer.H, g.renderer.statPrims, g.player.anim.name()),
-                10 * d, 18 * d, text);
     }
 }

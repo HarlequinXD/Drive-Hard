@@ -58,6 +58,12 @@ software renderer, no engine.
 - **Traffic signals:** every intersection has a working controller (N-S green → yellow →
   all-red → E-W green → yellow → all-red, offset for a green wave); horizontal Japanese
   signal heads show the live state.
+- **Cars you can drive:** walk up to any car in traffic (or one you left parked) and a GET IN
+  button fades in; tap it and she hops in through the driver's door (right-hand drive). While
+  driving the controls switch to a D-pad (left/right steer, up gas, down brake/reverse) with GAS
+  and REV buttons and a speedometer; the chase camera swings in behind the car. GET OUT pops her
+  out beside the car with a little hop, and the car stays where it stopped. Cars collide with
+  buildings, poles, trees and other traffic, and traffic queues behind you.
 - **Player:** camera-relative touch controls, walk/run/jump, curb step-up, slope following,
   collision with buildings and props, stops at the water's edge; camera collision.
 
