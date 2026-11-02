@@ -2,7 +2,7 @@ package com.harlequinxd.drivehard.core.math;
 
 /**
  * Minimal row-major 4x4 affine matrix used by the pure-Java parts of the engine
- * (sprite baking, procedural modelling). Android GL code uses android.opengl.Matrix.
+ * (sprite baking, procedural modelling).
  */
 public final class Mat4 {
     public final float[] m = new float[16];

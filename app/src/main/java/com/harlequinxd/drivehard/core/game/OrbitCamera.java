@@ -10,6 +10,7 @@ public final class OrbitCamera {
     public float distance = 5.5f;
     public float targetHeight = 1.1f;
     public float minPitch = (float) Math.toRadians(-5), maxPitch = (float) Math.toRadians(70);
+    public float maxDistance = 60f;
 
     public float eyeX, eyeY, eyeZ, tx, ty, tz;
     private boolean init;

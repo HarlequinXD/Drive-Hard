@@ -24,12 +24,14 @@ jobs:
         with:
           gradle-version: '8.14.3'
 
-      - name: Desktop checks (sprite bake + controller sim)
+      - name: Desktop checks (controller sim, sprite bake, textures, renderer screenshots)
         run: |
-          mkdir -p build/sim
-          javac -d build/sim $(find app/src/main/java/com/harlequinxd/drivehard/core -name '*.java') tools/SimTest.java tools/BakePreview.java
+          mkdir -p build/sim build/preview
+          javac -d build/sim $(find app/src/main/java/com/harlequinxd/drivehard/core -name '*.java') tools/*.java
           java -cp build/sim SimTest
           java -cp build/sim BakePreview build/preview
+          java -cp build/sim TexPreview build/preview
+          java -Xmx2g -cp build/sim RenderShot build/preview
 
       - name: Build debug APK
         run: gradle assembleDebug --stacktrace
@@ -44,7 +46,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: sprite-previews
+          name: previews
           path: build/preview/*.png
 
       - name: Publish rolling "latest" release

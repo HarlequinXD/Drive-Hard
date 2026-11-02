@@ -10,7 +10,7 @@ import com.harlequinxd.drivehard.core.model.Animations.Anim;
  */
 public final class Player {
     public static final float RADIUS = 0.28f, HEIGHT = 1.7f, STEP = 0.36f;
-    public static final float WALK_SPEED = 1.9f, RUN_SPEED = 5.6f, RUN_THRESHOLD = 0.72f;
+    public static final float WALK_SPEED = 2.35f, RUN_SPEED = 6.9f, RUN_THRESHOLD = 0.72f;
     public static final float GRAVITY = 22f, JUMP_VELOCITY = 6.8f;
 
     public float x, y, z, vx, vy, vz;
@@ -67,15 +67,14 @@ public final class Player {
         collideHorizontal(world, true);
         z += vz * dt;
         collideHorizontal(world, false);
-        float lim = world.halfSize - RADIUS;
-        x = Math.max(-lim, Math.min(lim, x));
-        z = Math.max(-lim, Math.min(lim, z));
+        x = Math.max(world.minX + RADIUS, Math.min(world.maxX - RADIUS, x));
+        z = Math.max(world.minZ + RADIUS, Math.min(world.maxZ - RADIUS, z));
 
         float floor = world.groundHeight(x, z, RADIUS, y, wasGround ? STEP : 0.02f);
         y += vy * dt;
         // ceiling
         if (vy > 0f) {
-            for (Box b : world.boxes) {
+            for (Box b : world.near(x, z)) {
                 if (y + HEIGHT > b.minY && y < b.minY && World.circleOverlaps(b, x, z, RADIUS * 0.9f)) {
                     y = b.minY - HEIGHT;
                     vy = 0f;
@@ -100,7 +99,7 @@ public final class Player {
     }
 
     private void collideHorizontal(World world, boolean axisX) {
-        for (Box b : world.boxes) {
+        for (Box b : world.near(x, z)) {
             // ignore boxes we are standing on or that we can step onto
             if (b.maxY <= y + (onGround ? STEP : 0.02f)) continue;
             if (b.minY >= y + HEIGHT) continue;
@@ -143,7 +142,7 @@ public final class Player {
         }
         boolean run = speed > (WALK_SPEED + RUN_SPEED) * 0.5f;
         // one cycle = two strides
-        float cycleLen = run ? 2.7f : 1.45f;
+        float cycleLen = run ? 2.75f : 1.4f;   // matched to the baked stride length
         phase += speed * dt / cycleLen;
         phase -= (float) Math.floor(phase);
         anim = run ? Anim.RUN : Anim.WALK;
