@@ -15,10 +15,25 @@ software renderer, no engine.
 - **Culling:** per-chunk and per-batch (each building is its own batch) frustum culling,
   per-polygon backface/distance culling, per-sprite frustum culling, and terrain occlusion
   culling (buildings and sprites hidden behind hills are skipped via heightfield ray tests).
-- **Streaming island.** The world is a procedural island generated in 64 m chunks on a
-  background thread around the player and unloaded when far away (~45 chunks in memory).
-  Terrain heightfield: gently rolling city plateau, hills up to ~40 m around it, beaches all
-  around the coast, the Ocean Drive beach on the east, open sea.
+- **Streaming island, 128 x 128 km.** The world is generated in 64 m chunks on a background
+  thread around the player and unloaded when far away (~45 chunks in memory). The city sits
+  on the east coast on a gently rolling plateau ringed by hills; inland the terrain opens into
+  coastal plains, farmland, rolling hill country and mountain ranges up to ~500 m, with
+  beaches all around the coast.
+- **Spline road network.** Every road is an edge of one connected graph holding a Catmull-Rom
+  spline and a smoothed, grade-limited height profile: the city street grid, three freeways
+  out of the city (west across the island, north and south up the coast) with diamond
+  interchanges and one-way slip roads, coastal highways, and ~3,800 km of highways and winding
+  country roads linking ~180 villages. Country roads that cross get a junction; roads that cross
+  a freeway go over it on a bridge with piers. Terrain is cut and filled to each road's profile
+  (embankments and cuttings). Roads are drawn as lane-wide strips following the spline, with
+  the lane markings painted into lane textures, freeway median barriers and guardrails, stop
+  lines on minor roads, and utility poles with wires along country roads.
+- **Countryside.** Rice paddies (flooded, green or golden by district) with grass levees,
+  cabbage fields, ploughed soil and fallow parcels on the lowland, tea rows on gentle slopes,
+  cedar forest on the mountains. ~2,700 farmsteads along the roads (old farmhouse, timber barn,
+  vinyl greenhouse, gravel yard and driveway, shelter trees and bamboo) and village clusters of
+  houses, small apartments and a convenience store at every village junction.
 - **City (modern Japan):** street grid following the terrain, vehicles keep left, signals on
   the far-left corner, crosswalks, curbs, sidewalks. Districts: a central business district
   of office towers and department stores around the main station, an entertainment quarter of
@@ -47,9 +62,11 @@ software renderer, no engine.
   sakura on side streets, pines on the coast, cedar forest and bamboo on the hills.
 - **Cars:** 25 Japanese-style models (kei cars, kei trucks and vans, compacts, sedans, a rotary
   wedge, minivans, wagons, SUVs, taxis, patrol car, delivery vans, trucks, fire engine, city
-  bus, ambulance, roadster) x 4 paint schemes = **100 styles**, 16 angles each. Traffic AI:
-  left-hand lanes, car following, braking for the player, turns on smooth curves, stops at red
-  / late-yellow signals.
+  bus, ambulance, roadster) x 4 paint schemes = **100 styles**, 16 angles each. Traffic AI
+  follows the road graph: left-hand lanes, car following, slowing for bends, moving to the kerb
+  lane for left turns and exits and the inner lane for right turns, cubic curves through
+  junctions; signals in the city, give-way rules at rural junctions (minor road yields to
+  major, equal roads yield to the left), freeway exits and merges, turning around at dead ends.
 - **Pedestrians:** **100 styles** of men and women — office workers in suits, casual wear,
   dresses, skirts, face masks, caps and sun hats. They walk the sidewalks and cross at
   crosswalks only on the walk phase.
@@ -74,7 +91,10 @@ app/src/main/java/com/harlequinxd/drivehard/
     Game.java  world + player + camera + renderer
     render/    SoftRenderer (ordering table rasteriser), Geo, Texture
     city/      City (layout + chunk generator), Terrain, ChunkManager (streaming), Chunk,
-               BuildingGen, Railway (viaduct, stations, trains), GeoBuilder, TrafficLights
+               BuildingGen, Railway (viaduct, stations, trains), Countryside (fields, farms,
+               villages), GeoBuilder, TrafficLights
+    road/      RoadNetwork (spline road graph, terrain shaping, spatial index), RoadEdge,
+               RoadNode, RoadClass, RoadMesh (lane strips, barriers, bridges, poles)
     tex/       TextureLibrary, JpTextures (shops, facades, signs), Kanji, PixelFont, Noise, Img
     model/     CharacterSpec, CharacterModel, Animations, Pose, PropModels, Flora, Cars, Loft
     sim/       Traffic (car AI), Pedestrians
