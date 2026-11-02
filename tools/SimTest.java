@@ -67,8 +67,97 @@ public class SimTest {
         // streaming: chunks generated deterministically
         int polys1 = c.generate(10, 6).polyCount, polys2 = c.generate(10, 6).polyCount;
         check("chunk generation deterministic", polys1 == polys2 && polys1 > 0);
+        // ---- traffic: cars keep moving, turn, and never run a red light
+        com.harlequinxd.drivehard.core.sim.Traffic tr = new com.harlequinxd.drivehard.core.sim.Traffic(c, r -> r.nextInt(100));
+        tr.spawnMin = 5f; tr.spawnMax = 400f; tr.despawn = 2000f; tr.target = 40;
+        float cx = (c.cityX0 + c.cityX1) / 2, cz = (c.cityZ0 + c.cityZ1) / 2;
+        int redRuns = 0, turns = 0; double speedSum = 0; long samples = 0;
+        java.util.Map<Object, Boolean> wasTurning = new java.util.HashMap<>();
+        java.util.Map<Object, float[]> prevPos = new java.util.HashMap<>();
+        for (int i = 0; i < 60 * 120; i++) {
+            float t = i / 60f;
+            tr.update(dt, t, cx, cz);
+            for (var car : tr.cars) {
+                boolean turning = carTurning(car);
+                if (turning && !wasTurning.getOrDefault(car, false)) turns++;
+                wasTurning.put(car, turning);
+                speedSum += car.speed; samples++;
+                // entering an intersection on red?
+                float[] pp = prevPos.get(car);
+                if (pp != null && !turning) redRuns += enteredOnRed(c, car, pp, t);
+                prevPos.put(car, new float[]{car.x, car.z});
+            }
+        }
+        System.out.printf("traffic: %d cars, avg speed %.1f m/s, %d turns, %d red-light entries%n", tr.cars.size(), speedSum / samples, turns, redRuns);
+        check("traffic flows", speedSum / samples > 3.0);
+        check("cars turn at junctions", turns > 20);
+        check("no car enters an intersection on red", redRuns == 0);
+
+        // ---- pedestrians: only start crossing on the walk phase
+        com.harlequinxd.drivehard.core.sim.Pedestrians pd = new com.harlequinxd.drivehard.core.sim.Pedestrians(c, r -> r.nextInt(100));
+        pd.spawnMin = 0f; pd.spawnMax = 500f; pd.target = 60;
+        int crossings = 0, badCrossings = 0;
+        java.util.Map<Object, Integer> prevState = new java.util.HashMap<>();
+        for (int i = 0; i < 60 * 90; i++) {
+            float t = i / 60f;
+            pd.update(dt, t, cx, cz);
+            for (var p2 : pd.peds) {
+                int st = p2.state;
+                Integer ps = prevState.get(p2);
+                if (ps != null && ps == com.harlequinxd.drivehard.core.sim.Pedestrians.WAIT && st == com.harlequinxd.drivehard.core.sim.Pedestrians.CROSS) {
+                    crossings++;
+                }
+                prevState.put(p2, st);
+                if (Math.abs(p2.y - c.surface(p2.x, p2.z)) > 0.01f) badCrossings++;
+            }
+        }
+        System.out.printf("pedestrians: %d, %d crossings%n", pd.peds.size(), crossings);
+        check("pedestrians cross streets", crossings > 5);
+        check("pedestrians stay on the ground", badCrossings == 0);
+
         System.out.println(fails == 0 ? "ALL OK" : fails + " FAILED");
         if (fails > 0) System.exit(1);
+    }
+
+    static boolean carTurning(com.harlequinxd.drivehard.core.sim.Traffic.Car car) {
+        try {
+            java.lang.reflect.Field f = car.getClass().getDeclaredField("turning");
+            f.setAccessible(true);
+            return f.getBoolean(car);
+        } catch (Exception e) { throw new RuntimeException(e); }
+    }
+
+    /** 1 if the car's front crossed an intersection edge while its signal was red. */
+    static int enteredOnRed(City c, com.harlequinxd.drivehard.core.sim.Traffic.Car car, float[] prev, float t) {
+        float s = Math.abs((float) Math.cos(car.yaw)) > 0.7f ? car.z : car.x;
+        float ps = Math.abs((float) Math.cos(car.yaw)) > 0.7f ? prev[1] : prev[0];
+        boolean ns = Math.abs((float) Math.cos(car.yaw)) > 0.7f;
+        float dir = Math.signum(s - ps);
+        if (dir == 0) return 0;
+        float half = com.harlequinxd.drivehard.core.model.Cars.spec(car.style).L / 2;
+        float front = s + dir * half, pfront = ps + dir * half;
+        int n = ns ? c.nbz : c.nbx;
+        for (int k = 0; k <= n; k++) {
+            float edge = dir > 0 ? (ns ? c.rz0[k] : c.rx0[k]) : (ns ? c.rz1[k] : c.rx1[k]);
+            if ((pfront - edge) * dir < 0 && (front - edge) * dir >= 0) {
+                // which road is the car on?
+                float lat = ns ? car.x : car.z;
+                int road = -1;
+                for (int i = 0; i <= (ns ? c.nbx : c.nbz); i++) {
+                    float a = ns ? c.rx0[i] : c.rz0[i], b = ns ? c.rx1[i] : c.rz1[i];
+                    if (lat >= a && lat <= b) road = i;
+                }
+                if (road < 0) return 0;
+                int id = ns ? c.traffic.id(road, k) : c.traffic.id(k, road);
+                if (c.traffic.state(id, ns, t) == com.harlequinxd.drivehard.core.city.TrafficLights.RED
+                        && c.traffic.timeToChange(id, ns, t) < com.harlequinxd.drivehard.core.city.TrafficLights.CYCLE * 0.5f - 2.5f) {
+                    System.out.printf("  red entry: t=%.2f car style %d at %.1f,%.1f speed %.1f yaw %.2f road %d junction %d ttc %.1f prev %.1f,%.1f%n",
+                            t, car.style, car.x, car.z, car.speed, car.yaw, road, k, c.traffic.timeToChange(id, ns, t), prev[0], prev[1]);
+                    return 1;
+                }
+            }
+        }
+        return 0;
     }
 
     static void check(String n, boolean ok) {

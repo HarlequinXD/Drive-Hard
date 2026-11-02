@@ -19,6 +19,13 @@ public class RenderShot {
                 (System.nanoTime() - t0) / 1e6, g.lib.list.size(), g.city.chunks.loadedCount());
         g.setResolution(520, 240);
         City c = g.city;
+        // desktop: bake a good set of car/pedestrian styles and all plants up front
+        for (int i = 0; i < 24; i++) { g.requestCar(); g.requestPed(); }
+        long tb = System.nanoTime();
+        g.cache.bakeAllNow();
+        System.out.printf("baked %d sprite sheets in %.0f ms%n", g.cache.bakedTotal, (System.nanoTime() - tb) / 1e6);
+        g.traffic.spawnMin = 12f;
+        g.pedestrians.spawnMin = 6f;
 
         // spawn on the promenade, walk a little
         for (int i = 0; i < 30; i++) g.update(1 / 60f, 0, 0.5f, 0, 0, false);
@@ -26,6 +33,8 @@ public class RenderShot {
 
         float ix = (c.rx0[4] + c.rx1[4]) * 0.5f, iz = (c.rz0[5] + c.rz1[5]) * 0.5f;
         tour(g, "shot_signals.png", c.rx1[4] + 3f, c.rz1[5] + 9f, 0.5f, 14, 9f);
+        tour(g, "shot_traffic.png", c.rx1[3] + 2f, c.rz1[4] + 2f, (float) Math.toRadians(-140), 24, 14f);
+        tour(g, "shot_park.png", (c.rx1[5] + c.rx0[6]) * 0.5f, c.rz1[6] + 1.5f, 3.14f, 16, 8f);
         tour(g, "shot_downtown.png", (c.rx0[3] + c.rx1[3]) * 0.5f, (c.rz1[4] + c.rz0[5]) * 0.5f, 0.6f, 22, 6.5f);
         tour(g, "shot_beach.png", c.cityX1 + 40f, (c.rz1[3] + c.rz0[4]) * 0.5f, -1.2f, 18, 8f);
         tour(g, "shot_hills.png", c.cityX0 - 150f, (c.cityZ0 + c.cityZ1) * 0.5f, -1.57f, 12, 7f);
@@ -43,8 +52,11 @@ public class RenderShot {
         for (int i = 0; i < frames; i++) { g.update(1 / 60f, 0.3f, 0.6f, 0.01f, 0, false); g.render(); }
         double ms = (System.nanoTime() - t1) / 1e6 / frames;
         SoftRenderer r = g.renderer;
-        System.out.printf("avg frame %.2f ms, polys %d, tris %d, batches %d (culled %d, occluded %d), sprites %d%n",
-                ms, r.statPolys, r.statPrims, g.batchesDrawn, g.batchesCulled, g.batchesOccluded, g.spritesDrawn);
+        System.out.printf("avg frame %.2f ms, polys %d, tris %d, batches %d (culled %d, occluded %d), sprites %d, cars %d, peds %d%n",
+                ms, r.statPolys, r.statPrims, g.batchesDrawn, g.batchesCulled, g.batchesOccluded, g.spritesDrawn, g.carsDrawn, g.pedsDrawn);
+        System.gc(); System.gc();
+        Runtime rt = Runtime.getRuntime();
+        System.out.printf("heap used %.0f MB%n", (rt.totalMemory() - rt.freeMemory()) / 1048576.0);
         g.dispose();
         System.exit(0);
     }
@@ -55,16 +67,18 @@ public class RenderShot {
         g.player.y = g.city.surface(x, z);
         g.player.vy = 0;
         g.cam.yaw = yaw; g.cam.pitch = (float) Math.toRadians(pitchDeg); g.cam.distance = dist;
-        for (int k = 0; k < 90; k++) g.update(1 / 60f, 0, 0, 0, 0, false);
+        for (int k = 0; k < 240; k++) {
+            g.update(1 / 60f, 0, 0, 0, 0, false);
+            if (k % 60 == 0) g.cache.bakeAllNow();
+        }
         shot(g, name);
     }
 
     static void shot(Game g, String name) throws Exception {
         g.render();
         SoftRenderer r = g.renderer;
-        System.out.printf("%-20s polys %5d tris %5d batches %3d culled %4d occl %3d sprites %3d  player %.0f,%.1f,%.0f%n", name,
-                r.statPolys, r.statPrims, g.batchesDrawn, g.batchesCulled, g.batchesOccluded, g.spritesDrawn,
-                g.player.x, g.player.y, g.player.z);
+        System.out.printf("%-20s polys %5d tris %5d batches %3d culled %4d occl %3d sprites %3d cars %2d peds %2d%n", name,
+                r.statPolys, r.statPrims, g.batchesDrawn, g.batchesCulled, g.batchesOccluded, g.spritesDrawn, g.carsDrawn, g.pedsDrawn);
         int s = 3;
         BufferedImage img = new BufferedImage(r.W * s, r.H * s, BufferedImage.TYPE_INT_RGB);
         for (int y = 0; y < r.H * s; y++)

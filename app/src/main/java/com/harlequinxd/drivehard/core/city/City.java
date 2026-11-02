@@ -2,8 +2,8 @@ package com.harlequinxd.drivehard.core.city;
 
 import com.harlequinxd.drivehard.core.game.Box;
 import com.harlequinxd.drivehard.core.game.World;
+import com.harlequinxd.drivehard.core.model.Flora;
 import com.harlequinxd.drivehard.core.render.Geo;
-import com.harlequinxd.drivehard.core.sprite.PropSprites;
 import com.harlequinxd.drivehard.core.tex.Facades.Kind;
 import com.harlequinxd.drivehard.core.tex.Noise;
 import com.harlequinxd.drivehard.core.tex.TextureLibrary;
@@ -82,6 +82,10 @@ public final class City extends World {
 
     private final List<Box> nearList = new ArrayList<>();
 
+    /** Moving colliders (cars) supplied by the simulation. */
+    public interface Dynamic { void boxesNear(float x, float z, List<Box> out); }
+    public Dynamic dynamic;
+
     @Override
     public List<Box> near(float x, float z) {
         nearList.clear();
@@ -93,6 +97,7 @@ public final class City extends World {
                 for (Box b : c.boxes)
                     if (x > b.minX - 1.5f && x < b.maxX + 1.5f && z > b.minZ - 1.5f && z < b.maxZ + 1.5f) nearList.add(b);
             }
+        if (dynamic != null) dynamic.boxesNear(x, z, nearList);
         return nearList;
     }
 
@@ -228,39 +233,74 @@ public final class City extends World {
 
     private void vegetation(Chunk ch, GeoBuilder gb, float ax, float az) {
         int ix = (int) Math.floor(ax / 8f), iz = (int) Math.floor(az / 8f);
-        float r = Noise.rnd(ix, iz, (int) seed + 500);
-        float jx = ax + 1.5f + Noise.rnd(ix, iz, (int) seed + 501) * 5f;
-        float jz = az + 1.5f + Noise.rnd(ix, iz, (int) seed + 502) * 5f;
+        int sd = (int) seed;
+        float r = Noise.rnd(ix, iz, sd + 500), r2 = Noise.rnd(ix, iz, sd + 506);
+        float jx = ax + 1.5f + Noise.rnd(ix, iz, sd + 501) * 5f;
+        float jz = az + 1.5f + Noise.rnd(ix, iz, sd + 502) * 5f;
         float h = terrain.height(jx, jz);
         float slope = Math.abs(terrain.height(jx + 2, jz) - terrain.height(jx - 2, jz)) / 4f
                 + Math.abs(terrain.height(jx, jz + 2) - terrain.height(jx, jz - 2)) / 4f;
-        int variant = (int) (Noise.rnd(ix, iz, (int) seed + 503) * PropSprites.PALM_VARIANTS);
-        float yaw = Noise.rnd(ix, iz, (int) seed + 504) * 6.2832f;
         boolean promenade = jx > cityX1 + 2f && jx < cityX1 + 26f && jz > cityZ0 && jz < cityZ1;
         if (promenade) {
             boolean onPath = jx > cityX1 + 9f && jx < cityX1 + 16f;
-            if (!onPath && r < 0.45f && h > 0.5f) {
-                ch.sprite(Chunk.SPRITE_PALM, variant, jx, h, jz, yaw);
-                ch.boxes.add(new Box(jx - 0.25f, h - 1, jz - 0.25f, jx + 0.25f, h + 9f, jz + 0.25f));
-            }
+            if (onPath || h < 0.5f) return;
+            if (r < 0.42f) plant(ch, Flora.COCONUT, ix, iz, jx, h, jz);
+            else if (r < 0.52f) plant(ch, Flora.SEA_GRAPE, ix, iz, jx, h, jz);
+            else if (r < 0.58f) plant(ch, Flora.SABAL_PALM, ix, iz, jx, h, jz);
             return;
         }
-        if (h < 0.3f || slope > 0.5f) return;
+        if (h < 0.3f) return;
         if (terrain.isSand(jx, jz, h)) {
-            if (r < 0.08f && h > 0.5f) {
-                ch.sprite(Chunk.SPRITE_UMBRELLA, (int) (Noise.rnd(ix, iz, (int) seed + 505) * PropSprites.UMBRELLA_VARIANTS),
-                        jx, h, jz, yaw);
-                ch.boxes.add(new Box(jx - 0.12f, h - 1, jz - 0.12f, jx + 0.12f, h + 2.3f, jz + 0.12f));
-            } else if (r > 0.993f) {
-                lifeguard(ch, gb, jx, h, jz);
+            boolean eastBeach = terrain.eastness(jx, jz) > 0.5f;
+            if (eastBeach && h < 2.0f) {
+                if (r < 0.08f && h > 0.5f) {
+                    ch.sprite(Chunk.SPRITE_UMBRELLA, (int) (r2 * 4), jx, h, jz, Noise.rnd(ix, iz, sd + 504) * 6.2832f);
+                    ch.boxes.add(new Box(jx - 0.12f, h - 1, jz - 0.12f, jx + 0.12f, h + 2.3f, jz + 0.12f));
+                } else if (r > 0.993f) lifeguard(ch, gb, jx, h, jz);
+                return;
             }
+            // dunes and wild coast
+            if (h < 1.0f && !eastBeach) { if (r < 0.25f) plant(ch, Flora.MANGROVE, ix, iz, jx, h, jz); }
+            else if (r < 0.22f) plant(ch, Flora.SEA_OATS, ix, iz, jx, h, jz);
+            else if (r < 0.32f) plant(ch, Flora.SEA_GRAPE, ix, iz, jx, h, jz);
+            else if (r < 0.36f) plant(ch, Flora.COCONUT, ix, iz, jx, h, jz);
             return;
         }
-        float p = h < 7f ? 0.14f : (h < 25f ? 0.05f : 0.02f);
-        if (r < p) {
-            ch.sprite(Chunk.SPRITE_PALM, variant, jx, h, jz, yaw);
-            ch.boxes.add(new Box(jx - 0.25f, h - 1, jz - 0.25f, jx + 0.25f, h + 9f, jz + 0.25f));
+        if (slope > 0.5f) {
+            if (r < 0.12f) plant(ch, Flora.AGAVE, ix, iz, jx, h, jz);
+            return;
         }
+        // hills and countryside: mixed hammock
+        float p = h < 7f ? 0.16f : (h < 25f ? 0.11f : 0.06f);
+        if (r >= p) {
+            if (r < p + 0.05f) plant(ch, r2 < 0.5f ? Flora.CROTON : Flora.SEA_GRAPE, ix, iz, jx, h, jz);
+            return;
+        }
+        Flora f;
+        if (r2 < 0.22f) f = Flora.LIVE_OAK;
+        else if (r2 < 0.38f) f = Flora.GUMBO_LIMBO;
+        else if (r2 < 0.58f) f = Flora.SABAL_PALM;
+        else if (r2 < 0.74f) f = Flora.COCONUT;
+        else if (r2 < 0.82f) f = Flora.POINCIANA;
+        else if (r2 < 0.86f) f = Flora.BANYAN;
+        else f = Flora.WASHINGTONIA;
+        plant(ch, f, ix, iz, jx, h, jz);
+    }
+
+    /** Places a plant sprite (variant and facing from a position hash); trees get a trunk collider. */
+    void plant(Chunk ch, Flora f, int hx, int hz, float x, float y, float z) {
+        int sd = (int) seed;
+        int v = (int) (Noise.rnd(hx, hz, sd + 503 + f.ordinal()) * f.variants);
+        float yaw = Noise.rnd(hx, hz, sd + 504) * 6.2832f;
+        ch.sprite(f.ordinal(), Math.min(v, f.variants - 1), x, y, z, yaw);
+        if (f.tree) {
+            float tr = f.trunkRadius;
+            ch.boxes.add(new Box(x - tr, y - 1f, z - tr, x + tr, y + 8f, z + tr));
+        }
+    }
+
+    void plantAt(Chunk ch, Flora f, float x, float y, float z) {
+        plant(ch, f, (int) (x * 3.1f), (int) (z * 2.7f), x, y, z);
     }
 
     private void lifeguard(Chunk ch, GeoBuilder gb, float x, float h, float z) {
@@ -359,16 +399,10 @@ public final class City extends World {
         gb.floorAreaT(ax, az, bx, bz, CURB, lib.grass, 2f, 2f, L_RAISED, 8f, 0, 0f);
         curbs(gb, ax, az, bx, bz);
         int k = 0;
-        if (alongZ) for (float z = az + 3f; z < bz - 1f; z += 11f) palmAt(ch, (ax + bx) * 0.5f, z, k++);
-        else for (float x = ax + 3f; x < bx - 1f; x += 11f) palmAt(ch, x, (az + bz) * 0.5f, k++);
-    }
-
-    private void palmAt(Chunk ch, float x, float z, int k) {
-        float y = terrain.height(x, z) + CURB;
-        int v = (int) (Noise.rnd((int) (x * 3), (int) (z * 3), (int) seed + 33) * PropSprites.PALM_VARIANTS);
-        float yaw = Noise.rnd((int) (x * 3), (int) (z * 3), (int) seed + 34) * 6.2832f;
-        ch.sprite(Chunk.SPRITE_PALM, v, x, y, z, yaw);
-        ch.boxes.add(new Box(x - 0.25f, y - 1f, z - 0.25f, x + 0.25f, y + 9f, z + 0.25f));
+        if (alongZ) for (float z = az + 3f; z < bz - 1f; z += 11f, k++)
+            plantAt(ch, k % 3 == 2 ? Flora.COCONUT : Flora.ROYAL_PALM, (ax + bx) * 0.5f, terrain.height((ax + bx) * 0.5f, z) + CURB, z);
+        else for (float x = ax + 3f; x < bx - 1f; x += 11f, k++)
+            plantAt(ch, k % 3 == 2 ? Flora.COCONUT : Flora.ROYAL_PALM, x, terrain.height(x, (az + bz) * 0.5f) + CURB, (az + bz) * 0.5f);
     }
 
     /** Curb faces (bottom on the road, top at sidewalk height) around a raised rectangle. */
@@ -442,8 +476,15 @@ public final class City extends World {
         gb.floorAreaT(bx1 - s, bz0 + s, bx1, bz1 - s, CURB, sw, 2f, 2f, L_RAISED, 8f, 0, 0f);
 
         Kind dist = district(i, j, rnd);
-        boolean palmStreet = dist == Kind.DECO || dist == Kind.HOTEL || rnd.nextInt(3) == 0;
-        streetFurniture(ch, bx0, bz0, bx1, bz1, palmStreet);
+        Flora street;
+        switch (dist) {
+            case DECO: case HOTEL: street = rnd.nextBoolean() ? Flora.COCONUT : Flora.WASHINGTONIA; break;
+            case RESIDENTIAL: street = rnd.nextInt(3) == 0 ? Flora.POINCIANA : (rnd.nextBoolean() ? Flora.SABAL_PALM : Flora.LIVE_OAK); break;
+            case OFFICE: street = rnd.nextBoolean() ? Flora.ROYAL_PALM : Flora.FOXTAIL_PALM; break;
+            case COMMERCIAL: street = rnd.nextInt(3) == 0 ? null : (rnd.nextBoolean() ? Flora.SABAL_PALM : Flora.COCONUT); break;
+            default: street = null; break;
+        }
+        streetFurniture(ch, bx0, bz0, bx1, bz1, street);
 
         float ix0 = bx0 + s, ix1 = bx1 - s, iz0 = bz0 + s, iz1 = bz1 - s;
         float depth = iz1 - iz0;
@@ -462,9 +503,11 @@ public final class City extends World {
         Ctx(Chunk ch, GeoBuilder gb, Random rnd) { this.ch = ch; this.gb = gb; this.rnd = rnd; }
     }
 
-    private void streetFurniture(Chunk ch, float bx0, float bz0, float bx1, float bz1, boolean palms) {
+    private void streetFurniture(Chunk ch, float bx0, float bz0, float bx1, float bz1, Flora tree) {
         float in = 1.0f;
-        float step = palms ? 12f : 26f;
+        boolean palms = tree != null;
+        boolean wide = tree == Flora.LIVE_OAK || tree == Flora.POINCIANA;
+        float step = palms ? (wide ? 16f : 12f) : 26f;
         for (int side = 0; side < 4; side++) {
             boolean horiz = side < 2;
             float a = horiz ? bx0 + 7f : bz0 + 7f, b = horiz ? bx1 - 7f : bz1 - 7f;
@@ -475,8 +518,10 @@ public final class City extends World {
                 else if (side == 1) { x = t; z = bz1 - in; yaw = 0f; }
                 else if (side == 2) { x = bx0 + in; z = t; yaw = (float) (-Math.PI / 2); }
                 else { x = bx1 - in; z = t; yaw = (float) (Math.PI / 2); }
-                if (palms) palmAt(ch, x, z, k);
-                else if ((k & 1) == 0) lampAt(ch, x, z, yaw);
+                if (palms) {
+                    plantAt(ch, tree, x, terrain.height(x, z) + CURB, z);
+                    if ((k % 3) == 1) lampAt(ch, x + (horiz ? step * 0.5f : 0), z + (horiz ? 0 : step * 0.5f), yaw);
+                } else if ((k & 1) == 0) lampAt(ch, x, z, yaw);
             }
         }
     }
@@ -523,8 +568,19 @@ public final class City extends World {
         if (fx0 > x0 + 0.01f) gb.floorAreaT(x0, fz0, fx0, fz1, CURB, lotTex, 2f, 2f, L_RAISED, 8f, 0, 0f);
         if (fx1 < x1 - 0.01f) gb.floorAreaT(fx1, fz0, x1, fz1, CURB, lotTex, 2f, 2f, L_RAISED, 8f, 0, 0f);
         if (front >= 2f && lotTex == lib.grass) {
-            if (fN) hedge(c, fx0, z0 + 0.4f, fx1, z0 + 1.2f);
-            if (fS) hedge(c, fx0, z1 - 1.2f, fx1, z1 - 0.4f);
+            boolean hedges = rnd.nextBoolean();
+            Flora[] shrubs = {Flora.HIBISCUS, Flora.BOUGAINVILLEA, Flora.CROTON, Flora.BIRD_OF_PARADISE};
+            for (int side = 0; side < 2; side++) {
+                if (side == 0 ? !fN : !fS) continue;
+                float zz0 = side == 0 ? z0 + 0.4f : z1 - 1.2f, zz1 = zz0 + 0.8f;
+                if (hedges) hedge(c, fx0, zz0, fx1, zz1);
+                else for (float x = fx0 + 1f; x < fx1 - 0.5f; x += 2.5f + rnd.nextFloat() * 2f)
+                    plantAt(c.ch, shrubs[rnd.nextInt(shrubs.length)], x, terrain.height(x, zz0) + CURB, (zz0 + zz1) * 0.5f);
+            }
+            if (kind == Kind.HOTEL || rnd.nextInt(3) == 0) {
+                float tz = fN ? z0 + (fz0 - z0) * 0.6f : z1 - (z1 - fz1) * 0.6f;
+                plantAt(c.ch, kind == Kind.HOTEL ? Flora.DATE_PALM : Flora.FOXTAIL_PALM, fx0 + 1.2f, terrain.height(fx0 + 1.2f, tz) + CURB, tz);
+            }
         }
         new BuildingGen(this, lib, gb, rnd, c.ch).build(kind, fx0, fz0, fx1, fz1,
                 fN && front < 0.5f, fS && front < 0.5f, fW, fE, fN, fS);
@@ -537,12 +593,21 @@ public final class City extends World {
 
     private void garden(Ctx c, float x0, float z0, float x1, float z1, boolean plaza) {
         c.gb.floorAreaT(x0, z0, x1, z1, CURB, plaza ? lib.pavers : lib.grass, 2f, 2f, L_RAISED, 8f, 0, 0f);
+        Flora[] trees = {Flora.LIVE_OAK, Flora.GUMBO_LIMBO, Flora.POINCIANA, Flora.SABAL_PALM, Flora.COCONUT, Flora.ROYAL_PALM};
+        Flora[] shrubs = {Flora.HIBISCUS, Flora.BOUGAINVILLEA, Flora.CROTON, Flora.BIRD_OF_PARADISE, Flora.SEA_GRAPE};
+        boolean bigTree = !plaza && (x1 - x0) > 18f && (z1 - z0) > 16f && c.rnd.nextInt(3) == 0;
+        if (bigTree) {   // a park banyan
+            float bx = (x0 + x1) * 0.5f, bz = (z0 + z1) * 0.5f;
+            plantAt(c.ch, Flora.BANYAN, bx, terrain.height(bx, bz) + CURB, bz);
+        }
         int k = 0;
         for (float z = z0 + 3f; z < z1 - 2f; z += 7f + c.rnd.nextInt(4))
-            for (float x = x0 + 3f; x < x1 - 2f; x += 7f + c.rnd.nextInt(4)) {
-                if (plaza) planter(c, x, z, k++);
-                else if (c.rnd.nextInt(3) > 0) palmAt(c.ch, x + c.rnd.nextFloat() * 2f, z + c.rnd.nextFloat() * 2f, k++);
-                else hedge(c, x - 1f, z - 0.6f, x + 1.5f, z + 0.6f);
+            for (float x = x0 + 3f; x < x1 - 2f; x += 7f + c.rnd.nextInt(4), k++) {
+                if (bigTree && Math.abs(x - (x0 + x1) * 0.5f) < 8f && Math.abs(z - (z0 + z1) * 0.5f) < 8f) continue;
+                float y = terrain.height(x, z) + CURB;
+                if (plaza) planter(c, x, z, k);
+                else if (c.rnd.nextInt(3) > 0) plantAt(c.ch, trees[c.rnd.nextInt(trees.length)], x + c.rnd.nextFloat() * 2f, y, z + c.rnd.nextFloat() * 2f);
+                else plantAt(c.ch, shrubs[c.rnd.nextInt(shrubs.length)], x, y, z);
             }
     }
 
@@ -556,7 +621,7 @@ public final class City extends World {
         float y = terrain.height(x, z) + CURB;
         c.gb.box(x - 1f, y - 0.2f, z - 1f, x + 1f, y + 0.6f, z + 1f, lib.planter, lib.hedge, 0.5f, 0.5f, L_OBJECT, 0f, 0);
         c.ch.boxes.add(new Box(x - 1f, y - 1f, z - 1f, x + 1f, y + 0.6f, z + 1f));
-        int v = (int) (Noise.rnd((int) x, (int) z, (int) seed + 35) * PropSprites.PALM_VARIANTS);
-        c.ch.sprite(Chunk.SPRITE_PALM, v, x, y + 0.6f, z, Noise.rnd((int) x, (int) z, 36) * 6.28f);
+        plantAt(c.ch, (k & 1) == 0 ? Flora.DATE_PALM : Flora.FOXTAIL_PALM, x, y + 0.6f, z);
+        if ((k % 3) == 0) plantAt(c.ch, Flora.BIRD_OF_PARADISE, x + 1.6f, y, z + 0.4f);
     }
 }

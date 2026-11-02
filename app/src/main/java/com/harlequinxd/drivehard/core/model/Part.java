@@ -15,6 +15,8 @@ public final class Part {
     public final boolean isFoot;
     /** Unlit (light bulbs, signal lamps). */
     public boolean emissive;
+    /** Leafy: ragged stippled coverage and per-pixel colour jitter when baked. */
+    public boolean foliage;
 
     public Part(int bone, float[] pos, float[] nrm, int[] tris, int[] colors, float shine, boolean isFoot) {
         this.bone = bone;

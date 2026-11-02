@@ -32,7 +32,10 @@ jobs:
           java -cp build/sim BakePreview build/preview
           java -cp build/sim TexPreview build/preview
           java -cp build/sim PropPreview build/preview
-          java -Xmx2g -cp build/sim RenderShot build/preview
+          java -cp build/sim FloraPreview build/preview
+          java -cp build/sim CarPreview build/preview
+          java -cp build/sim PedPreview build/preview
+          java -Xmx3g -cp build/sim RenderShot build/preview
 
       - name: Build debug APK
         run: gradle assembleDebug --stacktrace

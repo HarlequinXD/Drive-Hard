@@ -12,6 +12,35 @@ public final class PropSprites {
 
     public static final int PALM_VARIANTS = 3;
 
+    /** All variants of a plant species, 8 directions. */
+    public static SpriteSheet flora(com.harlequinxd.drivehard.core.model.Flora f) {
+        List<List<Part>> v = new ArrayList<>();
+        for (int i = 0; i < f.variants; i++) v.add(f.model(i));
+        return baker(f.frameW, f.frameH, f.anchorX, f.anchorY, f.ppm).bakeStatic(v);
+    }
+
+    /** One of the 100 car styles at 16 view angles. */
+    public static SpriteSheet car(int style) {
+        int[] f = com.harlequinxd.drivehard.core.model.Cars.frame(style);
+        SpriteBaker b = baker(f[0], f[1], f[2], f[3], com.harlequinxd.drivehard.core.model.Cars.PPM);
+        b.directions = 16;
+        b.outline = true;
+        List<List<Part>> v = new ArrayList<>();
+        v.add(com.harlequinxd.drivehard.core.model.Cars.build(style));
+        return b.bakeStatic(v);
+    }
+
+    /** Pedestrian frames: idle (4) then walk (8). */
+    public static final com.harlequinxd.drivehard.core.model.Animations.Anim[] PED_ANIMS = {
+            com.harlequinxd.drivehard.core.model.Animations.Anim.IDLE, com.harlequinxd.drivehard.core.model.Animations.Anim.WALK};
+
+    public static SpriteSheet pedestrian(int style) {
+        com.harlequinxd.drivehard.core.model.CharacterSpec spec = com.harlequinxd.drivehard.core.model.CharacterSpec.randomPedestrian(style);
+        SpriteBaker b = new SpriteBaker();
+        b.supersample = 2;
+        return b.bake(new com.harlequinxd.drivehard.core.model.CharacterModel(spec), PED_ANIMS);
+    }
+
     public static SpriteSheet palms() {
         List<List<Part>> v = new ArrayList<>();
         for (int i = 0; i < PALM_VARIANTS; i++) v.add(PropModels.palm(1000 + i * 77));

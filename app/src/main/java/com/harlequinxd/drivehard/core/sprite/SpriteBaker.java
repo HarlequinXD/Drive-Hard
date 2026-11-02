@@ -30,6 +30,8 @@ public final class SpriteBaker {
         LX = x / l; LY = y / l; LZ = z / l;
     }
 
+    private int leafSeed, partCounter;
+
     // supersampled buffers
     private int sw, sh;
     private float[] zbuf;
@@ -38,10 +40,16 @@ public final class SpriteBaker {
 
     /** Character: every animation frame in every direction. */
     public SpriteSheet bake(CharacterModel model) {
-        int frames = Animations.totalFrames();
+        return bake(model, Animations.Anim.values());
+    }
+
+    /** Character with only the given animations, frames packed in the given order. */
+    public SpriteSheet bake(CharacterModel model, Animations.Anim[] anims) {
+        int frames = 0;
+        for (Animations.Anim a : anims) frames += a.frames;
         int[][] out = new int[frames * directions][];
         int col = 0;
-        for (Animations.Anim anim : Animations.Anim.values()) {
+        for (Animations.Anim anim : anims) {
             for (int f = 0; f < anim.frames; f++, col++) {
                 Pose pose = Animations.pose(anim, f);
                 Mat4[] bones = model.solve(pose);
@@ -141,6 +149,7 @@ public final class SpriteBaker {
                 nz[v] = wn[1] * spt + wn[2] * cp;
             }
             int[] tris = part.tris;
+            leafSeed = part.foliage ? (++partCounter * 0x9E3779B1) : 0;
             for (int t = 0; t < part.triangleCount(); t++) {
                 int a = tris[t * 3], b = tris[t * 3 + 1], c = tris[t * 3 + 2];
                 rasterTri(sx, sy, sz, nx, ny, nz, a, b, c, part.colors[t], part.emissive ? -1f : part.shine);
@@ -210,6 +219,14 @@ public final class SpriteBaker {
                 float z = w0 * sz[a] + w1 * sz[b] + w2 * sz[c];
                 int idx = py * sw + px;
                 if (z <= zbuf[idx]) continue;
+                int jitter = 0;
+                if (leafSeed != 0) {
+                    int hh = (px * 73856093) ^ (py * 19349663) ^ leafSeed;
+                    hh = (hh ^ (hh >>> 13)) * 1274126177;
+                    hh ^= hh >>> 16;
+                    if ((hh & 255) < 92) continue;                // ragged leafy coverage
+                    jitter = ((hh >>> 8) & 63) - 28;            // per-leaf brightness
+                }
                 zbuf[idx] = z;
                 float nnx = w0 * nx[a] + w1 * nx[b] + w2 * nx[c];
                 float nny = w0 * ny[a] + w1 * ny[b] + w2 * ny[c];
@@ -217,7 +234,14 @@ public final class SpriteBaker {
                 float len = (float) Math.sqrt(nnx * nnx + nny * nny + nnz * nnz);
                 if (len < 1e-6f) { nnx = 0; nny = 0; nnz = 1; } else { nnx /= len; nny /= len; nnz /= len; }
                 if (nnz < 0f) { nnx = -nnx; nny = -nny; nnz = -nnz; }   // two-sided
-                cbuf[idx] = shine < 0f ? (color & 0xFFFFFF) : shade(br, bg, bb, nnx, nny, nnz, shine);
+                int cc = shine < 0f ? (color & 0xFFFFFF) : shade(br, bg, bb, nnx, nny, nnz, shine);
+                if (jitter != 0) {
+                    int r2 = Math.max(0, Math.min(255, ((cc >> 16) & 255) * (256 + jitter * 4) >> 8));
+                    int g2 = Math.max(0, Math.min(255, ((cc >> 8) & 255) * (256 + jitter * 4) >> 8));
+                    int b2 = Math.max(0, Math.min(255, (cc & 255) * (256 + jitter * 4) >> 8));
+                    cc = (r2 << 16) | (g2 << 8) | b2;
+                }
+                cbuf[idx] = cc;
                 mbuf[idx] = true;
             }
         }

@@ -98,7 +98,7 @@ public final class CharacterModel {
                 .ring(0.41f, 0.045f, 0.04f);
         torso.color((x, y, z) -> {
             float ax = Math.abs(x);
-            if (top == Top.TANK) {
+            if (top == Top.TANK || top == Top.DRESS) {
                 if (y > 0.29f) return (ax > 0.045f && ax < 0.09f) ? s.topColor : skin;
                 if (y > 0.235f && z > 0.03f && ax < 0.075f) return skin;
                 return s.topColor;
@@ -139,7 +139,11 @@ public final class CharacterModel {
         parts.add(Lathe.ellipsoid(0.021f, 0.007f, 0.01f, 3, 6).color(s.lipColor)
                 .transform(Mat4.mul(K, Mat4.translation(0, 0.073f, 0.079f))).build(HEAD));
 
-        buildHair(K);
+        // a hat hides short hair; longer styles still show beneath it
+        boolean hidden = s.hat != CharacterSpec.Hat.NONE
+                && (s.hair == CharacterSpec.Hair.SHORT || s.hair == CharacterSpec.Hair.BALD);
+        if (!hidden) buildHair(K);
+        accessories(K);
 
         // Arms
         final boolean sleeve = top != Top.TANK;
@@ -171,6 +175,7 @@ public final class CharacterModel {
 
         // Legs
         final boolean pants = s.bottom == CharacterSpec.Bottom.PANTS;
+        final boolean bareLegs = s.bottom == CharacterSpec.Bottom.SKIRT;
         for (int side = 0; side < 2; side++) {
             int th = side == 0 ? THIGH_L : THIGH_R, sn = side == 0 ? SHIN_L : SHIN_R, ft = side == 0 ? FOOT_L : FOOT_R;
             float lm = bw * (f ? 1f : 1.05f);
@@ -181,7 +186,7 @@ public final class CharacterModel {
                     .ring(-0.30f, 0.058f * lm, 0.06f * lm)
                     .ring(-0.41f, 0.047f, 0.05f)
                     .ring(-0.44f, 0.038f, 0.038f)
-                    .color((x, y, z) -> (pants || y > -0.13f) ? s.bottomColor : skin)
+                    .color((x, y, z) -> bareLegs ? skin : ((pants || y > -0.13f) ? s.bottomColor : skin))
                     .transform(K).build(th));
             parts.add(new Lathe().sides(8)
                     .ring(0.02f, 0.044f, 0.044f)
@@ -216,8 +221,13 @@ public final class CharacterModel {
             double n = Math.sin(x * 140.0 + z * 60.0) * 0.5 + Math.sin(y * 90.0 + x * 40.0) * 0.5;
             return n > 0.35 ? lighten(hc, 0.14f) : (n < -0.45 ? darken(hc, 0.85f) : hc);
         };
+        if (s.hair == CharacterSpec.Hair.AFRO) {
+            parts.add(Lathe.ellipsoid(0.115f, 0.1f, 0.12f, 6, 12).color(hairFn).foliage()
+                    .transform(Mat4.mul(K, Mat4.translation(0, 0.2f, -0.015f))).build(HEAD));
+            return;
+        }
         final boolean longHair = s.hair == CharacterSpec.Hair.LONG;
-        final boolean shortHair = s.hair == CharacterSpec.Hair.SHORT;
+        final boolean shortHair = s.hair == CharacterSpec.Hair.SHORT || s.hair == CharacterSpec.Hair.BUN;
         Lathe cap = new Lathe().sides(12)
                 .ring(0.274f, 0.01f, 0.01f, 0, -0.012f)
                 .ring(0.258f, 0.052f, 0.062f, 0, -0.012f)
@@ -245,6 +255,10 @@ public final class CharacterModel {
         });
         parts.add(cap.color(hairFn).shine(0.35f).transform(K).build(HEAD));
 
+        if (s.hair == CharacterSpec.Hair.BUN) {
+            parts.add(Lathe.ellipsoid(0.045f, 0.04f, 0.045f, 5, 8).color(hairFn)
+                    .transform(Mat4.mul(K, Mat4.translation(0, 0.25f, -0.07f))).build(HEAD));
+        }
         if (s.hair == CharacterSpec.Hair.PONYTAIL) {
             parts.add(Lathe.ellipsoid(0.025f, 0.02f, 0.025f, 4, 6).color(darken(hc, 0.6f))
                     .transform(Mat4.mul(K, Mat4.translation(0, 0.172f, -0.085f))).build(HEAD));
@@ -256,6 +270,40 @@ public final class CharacterModel {
                     .ring(-0.22f, 0.016f, 0.016f)
                     .ring(-0.25f, 0.004f, 0.004f)
                     .color(hairFn).shine(0.35f).transform(K).build(PONY));
+        }
+    }
+
+    private void accessories(Mat4 K) {
+        final CharacterSpec s = spec;
+        if (s.hat == CharacterSpec.Hat.CAP) {
+            parts.add(Lathe.ellipsoid(0.088f, 0.06f, 0.1f, 5, 10).color(s.hatColor)
+                    .transform(Mat4.mul(K, Mat4.translation(0, 0.225f, -0.005f))).build(HEAD));
+            parts.add(Lathe.ellipsoid(0.07f, 0.01f, 0.07f, 3, 8).color(darken(s.hatColor, 0.8f))
+                    .transform(Mat4.mul(K, Mat4.translation(0, 0.205f, 0.09f))).build(HEAD));
+        } else if (s.hat == CharacterSpec.Hat.SUNHAT) {
+            parts.add(Lathe.ellipsoid(0.085f, 0.06f, 0.095f, 5, 10).color(s.hatColor)
+                    .transform(Mat4.mul(K, Mat4.translation(0, 0.235f, -0.005f))).build(HEAD));
+            parts.add(Lathe.ellipsoid(0.2f, 0.012f, 0.2f, 3, 12).color(darken(s.hatColor, 0.92f))
+                    .transform(Mat4.mul(K, Mat4.translation(0, 0.205f, 0f))).build(HEAD));
+        }
+        if (s.sunglasses) {
+            parts.add(Lathe.ellipsoid(0.07f, 0.016f, 0.02f, 3, 8).color(0x141418)
+                    .transform(Mat4.mul(K, Mat4.translation(0, 0.138f, 0.078f))).build(HEAD));
+        }
+        if (s.beard) {
+            parts.add(Lathe.ellipsoid(0.062f, 0.045f, 0.05f, 4, 8).color(darken(s.hairColor, 0.8f)).foliage()
+                    .transform(Mat4.mul(K, Mat4.translation(0, 0.07f, 0.05f))).build(HEAD));
+        }
+        // skirts and dresses hang from the pelvis
+        if (s.bottom == CharacterSpec.Bottom.SKIRT) {
+            float hip = s.female ? 1.06f : 0.92f, bw = 1f + s.build * 0.35f;
+            boolean dress = s.top == CharacterSpec.Top.DRESS;
+            float len = dress ? 0.52f : 0.38f;
+            parts.add(new Lathe().sides(10)
+                    .ring(0.06f, 0.15f * hip * bw, 0.1f * bw)
+                    .ring(-0.05f, 0.18f * hip * bw, 0.13f * bw)
+                    .ring(-len, 0.25f * bw, 0.21f * bw).openEnds()
+                    .color(s.bottomColor).transform(K).build(PELVIS));
         }
     }
 

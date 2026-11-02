@@ -284,6 +284,21 @@ public final class SoftRenderer {
         submit(p, wuv, wl, 4, texId, layer, mode, 0f, false);
     }
 
+    /** Rotated flat quad on the ground (e.g. a car's shadow): half length along yaw, half width across. */
+    public void groundQuadRotated(int texId, float x, float y, float z, float halfLen, float halfWid, float yaw, int mode, int layer) {
+        Texture t = textures[texId];
+        float fx = (float) Math.sin(yaw), fz = (float) Math.cos(yaw);
+        float rx = fz, rz = -fx;
+        float[] p = wp;
+        p[0] = x - fx * halfLen - rx * halfWid; p[1] = y; p[2] = z - fz * halfLen - rz * halfWid;
+        p[3] = x - fx * halfLen + rx * halfWid; p[4] = y; p[5] = z - fz * halfLen + rz * halfWid;
+        p[6] = x + fx * halfLen + rx * halfWid; p[7] = y; p[8] = z + fz * halfLen + rz * halfWid;
+        p[9] = x + fx * halfLen - rx * halfWid; p[10] = y; p[11] = z + fz * halfLen - rz * halfWid;
+        wuv[0] = 0; wuv[1] = t.h; wuv[2] = t.w; wuv[3] = t.h; wuv[4] = t.w; wuv[5] = 0; wuv[6] = 0; wuv[7] = 0;
+        wl[0] = wl[1] = wl[2] = wl[3] = 1f;
+        submit(p, wuv, wl, 4, texId, layer, mode, 0f, false);
+    }
+
     // view-space scratch, one slot per subdivision level
     private static final int MAX_LEVEL = 4;
     private final float[][] lvl = new float[MAX_LEVEL + 1][9 * VA];

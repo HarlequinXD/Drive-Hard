@@ -33,7 +33,7 @@ public final class Lathe {
     private KeepFn keepFn = null;
     private Mat4 transform = new Mat4();
     private float shine = 0f;
-    private boolean foot = false, emissive = false;
+    private boolean foot = false, emissive = false, foliage = false;
     private boolean capStart = true, capEnd = true;
 
     public Lathe sides(int n) { sides = n; return this; }
@@ -46,6 +46,7 @@ public final class Lathe {
     public Lathe shine(float s) { shine = s; return this; }
     public Lathe foot() { foot = true; return this; }
     public Lathe emissive() { emissive = true; return this; }
+    public Lathe foliage() { foliage = true; return this; }
     public Lathe openEnds() { capStart = false; capEnd = false; return this; }
 
     public Part build(int bone) {
@@ -140,6 +141,7 @@ public final class Lathe {
         }
         Part part = new Part(bone, tp, tn, ti, tc, shine, foot);
         part.emissive = emissive;
+        part.foliage = foliage;
         return part;
     }
 

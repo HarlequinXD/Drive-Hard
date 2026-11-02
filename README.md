@@ -25,6 +25,23 @@ generated Miami-like city with a PS1 low-poly look. Written in plain Java + Open
 - **8-direction sprites** baked from procedural 3D models: the player (idle/walk/run/jump),
   palm trees (3 variants), street lamps, traffic signals (green/yellow/red frames) and beach
   umbrellas (4 colours).
+- **Miami flora (18 species, 8-direction sprites baked from 3D models):** coconut, royal, sabal,
+  Washingtonia, Canary date and foxtail palms; banyan, live oak with Spanish moss, royal poinciana,
+  gumbo limbo; sea grape, red mangrove, bougainvillea, hibiscus, croton, bird of paradise,
+  sea oats and agave — placed by zone (royal palms on medians, oaks/poincianas on residential
+  streets, banyans in parks, shrubs in front gardens, dunes with sea oats and sea grape,
+  mangroves on the wild coast, mixed hammock on the hills).
+- **Cars:** 25 procedural models (hatchbacks, sedans, 80s boxy, luxury, coupes, sports, wedge,
+  muscle, wagon, SUVs, pickups, minivan, cargo van, box truck, convertible, jeep, limo, taxi,
+  police, 50s finned cruiser, bug, old pickup) x 4 paint schemes = **100 styles**, 16 angles each.
+  Traffic AI: right-hand lanes, car following, braking for the player, left/right/straight
+  turns on smooth curves, stops at red / late-yellow signals.
+- **Pedestrians:** **100 styles** of men and women (all skin tones, heights, builds, elders;
+  tank tops, tees, long sleeves, dresses, shorts, trousers, skirts; ponytails, buns, afros,
+  long/short hair; caps, sun hats, sunglasses, beards). They walk the sidewalks and cross at
+  crosswalks only on the walk phase.
+- **Sprite cache:** car, pedestrian and plant sprites are baked on a background thread on
+  demand; an LRU cache keeps memory bounded while rotating through all styles over time.
 - **Traffic signals:** every intersection has a working controller (N-S green → yellow →
   all-red → E-W green → yellow → all-red, offset for a green wave); mast-arm signals show the
   live state. `TrafficLights.state(...)` / `timeToChange(...)` are ready for cars.
@@ -40,12 +57,13 @@ app/src/main/java/com/harlequinxd/drivehard/
     city/      City (layout + chunk generator), Terrain, ChunkManager (streaming), Chunk,
                BuildingGen, GeoBuilder, TrafficLights
     tex/       TextureLibrary, Facades, Storefronts, ShopNames, PixelFont, Noise, Img
-    model/     CharacterSpec, CharacterModel, Animations, Pose, PropModels
-    sprite/    SpriteBaker, SpriteSheet, PropSprites
+    model/     CharacterSpec, CharacterModel, Animations, Pose, PropModels, Flora, Cars, Loft
+    sim/       Traffic (car AI), Pedestrians
+    sprite/    SpriteBaker, SpriteSheet, PropSprites, SpriteCache (background baking, LRU)
     game/      Player, OrbitCamera, World (grid-indexed collision), Box
   GameView     SurfaceView loop: game thread, framebuffer -> Bitmap -> screen, touch HUD
   input/       TouchControls
-tools/         RenderShot (desktop screenshots + timing), TexPreview, PropPreview, BakePreview, SimTest
+tools/         RenderShot (screenshots + timing), Tex/Prop/Flora/Car/Ped previews, BakePreview, SimTest
 ```
 
 ## Building

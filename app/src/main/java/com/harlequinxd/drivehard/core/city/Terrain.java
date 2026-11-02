@@ -58,7 +58,7 @@ public final class Terrain {
         return Math.max(-14f, base + hills - drop);
     }
 
-    private float eastness(float x, float z) {
+    public float eastness(float x, float z) {
         return smooth(cx1 - 120f, cx1 + 20f, x) * (1f - smooth(0f, 260f, Math.max(cz0 - z, z - cz1)));
     }
 
