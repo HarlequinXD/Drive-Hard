@@ -4,7 +4,7 @@ import com.harlequinxd.drivehard.core.game.Box;
 import com.harlequinxd.drivehard.core.game.World;
 import com.harlequinxd.drivehard.core.model.Flora;
 import com.harlequinxd.drivehard.core.render.Geo;
-import com.harlequinxd.drivehard.core.tex.Facades.Kind;
+import com.harlequinxd.drivehard.core.tex.JpTextures;
 import com.harlequinxd.drivehard.core.tex.Noise;
 import com.harlequinxd.drivehard.core.tex.TextureLibrary;
 
@@ -19,13 +19,14 @@ import static com.harlequinxd.drivehard.core.render.SoftRenderer.L_RAISED;
 import static com.harlequinxd.drivehard.core.render.SoftRenderer.L_WATER;
 
 /**
- * Procedural Miami-style island city, generated chunk by chunk.
+ * Procedural modern-Japanese island city, generated chunk by chunk.
  *
  * The street grid and the terrain are cheap pure functions of the seed; {@link #generate}
  * builds the geometry, collision boxes and sprite props of any 64 m chunk on demand, so the
  * {@link ChunkManager} can stream the island in and out of memory.
  *
- * +X is east (toward the Ocean Drive beach), +Z is south.
+ * +X is east (toward the beach), +Z is south. The elevated railway runs east-west through
+ * the middle block row; vehicles keep left.
  */
 public final class City extends World {
     public static final float CURB = 0.15f, SIDEWALK = 4f;
@@ -43,6 +44,10 @@ public final class City extends World {
     public final boolean[] avenueX = new boolean[nbx + 1], avenueZ = new boolean[nbz + 1];
     public float cityX0, cityX1, cityZ0, cityZ1;
     public float spawnX, spawnZ;
+    /** Block row carrying the railway viaduct, and the central block column. */
+    public final int jRail = nbz / 2, iCentre = nbx / 2;
+    public final Railway railway;
+    final int[] shopsCentral, shopsEnt, shopsMixed, shopsSuburb, shopsSeaside, shopsKonbini, shopsPachinko, shopsUnderTrack;
 
     public City(TextureLibrary lib, long seed) {
         this.lib = lib;
@@ -50,11 +55,36 @@ public final class City extends World {
         layout(new Random(seed));
         terrain = new Terrain((int) seed, cityX0, cityZ0, cityX1, cityZ1);
         traffic = new TrafficLights(nbx + 1, (int) seed);
+        railway = new Railway(this);
+        shopsCentral = shopSet("CAFE", "BAKERY", "CAKES", "FASHION", "SHOES", "ELECTRONICS", "BOOKS", "BANK", "TRAVEL",
+                "DRUG", "SUSHI", "TEMPURA", "KISSATEN", "MEGANE", "PHOTO", "STATIONERY", "TEA", "WAGASHI", "CLINIC");
+        shopsEnt = shopSet("IZAKAYA", "YAKITORI", "BAR", "SNACK", "CLUB", "KARAOKE", "GAME CENTER", "MAHJONG", "RAMEN",
+                "GYOZA", "OKONOMIYAKI", "GYUDON", "CURRY", "CAPSULE HOTEL", "HAPPY 24", "SAKE", "SUSHI", "UDON");
+        shopsMixed = shopSet("RAMEN", "UDON", "SOBA", "CURRY", "GYUDON", "BENTO", "CAFE", "KISSATEN", "BAKERY", "DRUG",
+                "100 YEN", "BARBER", "HAIR SALON", "COIN LAUNDRY", "FUDOSAN", "CLINIC", "DENTAL", "PHARMACY", "JUKU",
+                "CYCLE", "FLOWERS", "BOOKS", "IZAKAYA", "CLOSED", "OKONOMIYAKI", "STATIONERY");
+        shopsSuburb = shopSet("YAOYA", "SAKANA", "NIKU", "TOFU", "SAKE", "OKOME", "FLOWERS", "BARBER", "COIN LAUNDRY",
+                "CLINIC", "DENTAL", "JUKU", "CYCLE", "SUPERMARKET", "WAGASHI", "CLOSED", "KIMONO", "SOBA", "TEA");
+        shopsSeaside = shopSet("SUSHI", "SAKANA", "CAFE", "BAR", "IZAKAYA", "SAKE", "TEMPURA", "CLOSED", "CYCLE");
+        shopsKonbini = shopSet("DAILY MART", "HAPPY 24", "LUCKY STORE");
+        shopsPachinko = shopSet("PACHINKO", "GAME CENTER");
+        shopsUnderTrack = shopSet("IZAKAYA", "YAKITORI", "RAMEN", "SOBA", "BAR", "GYOZA", "KISSATEN", "BENTO", "SNACK");
         chunks = new ChunkManager(this);
         minX = cityX0 - 700; maxX = cityX1 + 700; minZ = cityZ0 - 700; maxZ = cityZ1 + 700;
         int mj = nbz / 2;
         spawnX = cityX1 + 7f;
         spawnZ = (rz1[mj] + rz0[mj + 1]) * 0.5f;
+    }
+
+    private int[] shopSet(String... labels) {
+        List<Integer> out = new ArrayList<>();
+        for (int k = 0; k < lib.shops.length; k++) {
+            String l = JpTextures.CATEGORIES[lib.shopCategory[k]].label;
+            for (String w : labels) if (w.equals(l)) { out.add(lib.shops[k]); break; }
+        }
+        int[] a = new int[out.size()];
+        for (int k = 0; k < a.length; k++) a[k] = out.get(k);
+        return a;
     }
 
     private void layout(Random rnd) {
@@ -72,7 +102,7 @@ public final class City extends World {
             rz0[j] = z;
             z += avenueZ[j] ? 22f : 13f;
             rz1[j] = z;
-            if (j < nbz) z += 56 + 4 * rnd.nextInt(7);
+            if (j < nbz) z += j == nbz / 2 ? 64 : 56 + 4 * rnd.nextInt(7);
         }
         cityX0 = rx0[0]; cityX1 = rx1[nbx];
         cityZ0 = rz0[0]; cityZ1 = rz1[nbz];
@@ -178,6 +208,7 @@ public final class City extends World {
                 float mx = (rx1[i] + rx0[i + 1]) * 0.5f, mz = (rz1[j] + rz0[j + 1]) * 0.5f;
                 if (in(mx, mz, x0, z0, x1, z1)) block(ch, gb, i, j);
             }
+        railway.generate(ch, gb, x0, z0, x1, z1);
         gb.end();
         ch.finish();
         return ch;
@@ -244,9 +275,9 @@ public final class City extends World {
         if (promenade) {
             boolean onPath = jx > cityX1 + 9f && jx < cityX1 + 16f;
             if (onPath || h < 0.5f) return;
-            if (r < 0.42f) plant(ch, Flora.COCONUT, ix, iz, jx, h, jz);
-            else if (r < 0.52f) plant(ch, Flora.SEA_GRAPE, ix, iz, jx, h, jz);
-            else if (r < 0.58f) plant(ch, Flora.SABAL_PALM, ix, iz, jx, h, jz);
+            if (r < 0.34f) plant(ch, Flora.BLACK_PINE, ix, iz, jx, h, jz);
+            else if (r < 0.42f) plant(ch, Flora.SAKURA, ix, iz, jx, h, jz);
+            else if (r < 0.5f) plant(ch, Flora.AZALEA, ix, iz, jx, h, jz);
             return;
         }
         if (h < 0.3f) return;
@@ -259,31 +290,30 @@ public final class City extends World {
                 } else if (r > 0.993f) lifeguard(ch, gb, jx, h, jz);
                 return;
             }
-            // dunes and wild coast
-            if (h < 1.0f && !eastBeach) { if (r < 0.25f) plant(ch, Flora.MANGROVE, ix, iz, jx, h, jz); }
-            else if (r < 0.22f) plant(ch, Flora.SEA_OATS, ix, iz, jx, h, jz);
-            else if (r < 0.32f) plant(ch, Flora.SEA_GRAPE, ix, iz, jx, h, jz);
-            else if (r < 0.36f) plant(ch, Flora.COCONUT, ix, iz, jx, h, jz);
+            // pine-lined coast
+            if (r < 0.2f) plant(ch, Flora.BLACK_PINE, ix, iz, jx, h, jz);
+            else if (r < 0.26f) plant(ch, Flora.BOXWOOD, ix, iz, jx, h, jz);
             return;
         }
         if (slope > 0.5f) {
-            if (r < 0.12f) plant(ch, Flora.AGAVE, ix, iz, jx, h, jz);
+            if (r < 0.14f) plant(ch, r2 < 0.5f ? Flora.BAMBOO : Flora.CEDAR, ix, iz, jx, h, jz);
             return;
         }
-        // hills and countryside: mixed hammock
-        float p = h < 7f ? 0.16f : (h < 25f ? 0.11f : 0.06f);
+        // hills: cedar and cypress forest up high, mixed woodland, bamboo groves and maples lower down
+        float p = h < 7f ? 0.15f : (h < 25f ? 0.2f : 0.24f);
         if (r >= p) {
-            if (r < p + 0.05f) plant(ch, r2 < 0.5f ? Flora.CROTON : Flora.SEA_GRAPE, ix, iz, jx, h, jz);
+            if (r < p + 0.05f) plant(ch, r2 < 0.4f ? Flora.AZALEA : (r2 < 0.7f ? Flora.CAMELLIA : Flora.HYDRANGEA), ix, iz, jx, h, jz);
             return;
         }
         Flora f;
-        if (r2 < 0.22f) f = Flora.LIVE_OAK;
-        else if (r2 < 0.38f) f = Flora.GUMBO_LIMBO;
-        else if (r2 < 0.58f) f = Flora.SABAL_PALM;
-        else if (r2 < 0.74f) f = Flora.COCONUT;
-        else if (r2 < 0.82f) f = Flora.POINCIANA;
-        else if (r2 < 0.86f) f = Flora.BANYAN;
-        else f = Flora.WASHINGTONIA;
+        if (h > 25f) f = r2 < 0.7f ? Flora.CEDAR : (r2 < 0.85f ? Flora.BLACK_PINE : Flora.MAPLE);
+        else if (r2 < 0.2f) f = Flora.CAMPHOR;
+        else if (r2 < 0.38f) f = Flora.BAMBOO;
+        else if (r2 < 0.55f) f = Flora.MAPLE;
+        else if (r2 < 0.7f) f = Flora.CEDAR;
+        else if (r2 < 0.82f) f = Flora.SAKURA;
+        else if (r2 < 0.92f) f = Flora.ZELKOVA;
+        else f = Flora.BLACK_PINE;
         plant(ch, f, ix, iz, jx, h, jz);
     }
 
@@ -304,7 +334,7 @@ public final class City extends World {
     }
 
     private void lifeguard(Chunk ch, GeoBuilder gb, float x, float h, float z) {
-        int[] blank = lib.facades(Kind.BLANK);
+        int[] blank = lib.facades(JpTextures.Kind.BLANK);
         int t = blank[(int) (Noise.rnd((int) x, (int) z, 7) * blank.length)];
         for (int k = 0; k < 4; k++) {
             float lx = x + ((k & 1) == 0 ? -1.1f : 1.1f), lz = z + ((k & 2) == 0 ? -1.1f : 1.1f);
@@ -376,7 +406,10 @@ public final class City extends World {
                 line(gb, alongZ, x, x + 0.6f, cs0, cs0 + 3f, lib.paintWhite);
             }
             float sl = end == 0 ? s0 + 4.3f : s1 - 4.7f;
-            if (end == 0) line(gb, alongZ, w0 + 0.5f, c - (avenue ? 1.5f : 0.2f), sl, sl + 0.4f, lib.paintWhite);
+            // keep-left: traffic approaching the s0 end (travelling -s) uses the low side on N-S roads
+            // and the high side on E-W roads; the s1 end is the mirror image
+            boolean low = (end == 0) == alongZ;
+            if (low) line(gb, alongZ, w0 + 0.5f, c - (avenue ? 1.5f : 0.2f), sl, sl + 0.4f, lib.paintWhite);
             else line(gb, alongZ, c + (avenue ? 1.5f : 0.2f), w1 - 0.5f, sl, sl + 0.4f, lib.paintWhite);
         }
     }
@@ -400,9 +433,9 @@ public final class City extends World {
         curbs(gb, ax, az, bx, bz);
         int k = 0;
         if (alongZ) for (float z = az + 3f; z < bz - 1f; z += 11f, k++)
-            plantAt(ch, k % 3 == 2 ? Flora.COCONUT : Flora.ROYAL_PALM, (ax + bx) * 0.5f, terrain.height((ax + bx) * 0.5f, z) + CURB, z);
+            plantAt(ch, k % 3 == 2 ? Flora.ZELKOVA : Flora.GINKGO, (ax + bx) * 0.5f, terrain.height((ax + bx) * 0.5f, z) + CURB, z);
         else for (float x = ax + 3f; x < bx - 1f; x += 11f, k++)
-            plantAt(ch, k % 3 == 2 ? Flora.COCONUT : Flora.ROYAL_PALM, x, terrain.height(x, (az + bz) * 0.5f) + CURB, (az + bz) * 0.5f);
+            plantAt(ch, k % 3 == 2 ? Flora.ZELKOVA : Flora.GINKGO, x, terrain.height(x, (az + bz) * 0.5f) + CURB, (az + bz) * 0.5f);
     }
 
     /** Curb faces (bottom on the road, top at sidewalk height) around a raised rectangle. */
@@ -439,9 +472,9 @@ public final class City extends World {
             if (ns && ((d[1] > 0 && j == 0) || (d[1] < 0 && j == nbz))) continue;
             if (!ns && ((d[0] > 0 && i == 0) || (d[0] < 0 && i == nbx))) continue;
             float along = ns ? hz : hx, across = ns ? hx : hz;
-            float rxv = -d[1], rzv = d[0];                       // right of travel
-            float px = cx - d[0] * (along + 1.3f) + rxv * (across + 1.3f);
-            float pz = cz - d[1] * (along + 1.3f) + rzv * (across + 1.3f);
+            float lxv = d[1], lzv = -d[0];                       // left of travel (traffic keeps left)
+            float px = cx + d[0] * (along + 1.3f) + lxv * (across + 1.3f);   // far-left corner, Japanese style
+            float pz = cz + d[1] * (along + 1.3f) + lzv * (across + 1.3f);
             float yaw = (float) Math.atan2(-d[0], -d[1]);         // signal faces oncoming traffic
             float y = terrain.height(px, pz) + CURB;
             ch.sprite(Chunk.SPRITE_SIGNAL, id * 2 + (ns ? 1 : 0), px, y, pz, yaw);
@@ -449,18 +482,29 @@ public final class City extends World {
         }
     }
 
-    // ------------------------------------------------------------------ blocks & lots
+    // ------------------------------------------------------------------ zones, blocks & lots
 
-    private Kind district(int i, int j, Random rnd) {
-        float bx = (rx1[i] + rx0[i + 1]) * 0.5f, bz = (rz1[j] + rz0[j + 1]) * 0.5f;
-        float dx = (bx - (cityX0 + (cityX1 - cityX0) * 0.36f)) / (cityX1 - cityX0);
-        float dz = (bz - (cityZ0 + (cityZ1 - cityZ0) * 0.42f)) / (cityZ1 - cityZ0);
-        float d = (float) Math.sqrt(dx * dx + dz * dz);
-        if (i >= nbx - 2) return rnd.nextInt(3) == 0 ? Kind.HOTEL : Kind.DECO;
-        if (i <= 1 && j >= nbz - 3) return Kind.INDUSTRIAL;
-        if (d < 0.17f) return Kind.OFFICE;
-        if (d < 0.3f) return rnd.nextBoolean() ? Kind.COMMERCIAL : (rnd.nextInt(3) == 0 ? Kind.OFFICE : Kind.RESIDENTIAL);
-        return rnd.nextInt(3) == 0 ? Kind.COMMERCIAL : (rnd.nextInt(3) == 0 ? Kind.DECO : Kind.RESIDENTIAL);
+    public enum Zone { CENTRAL, ENTERTAINMENT, MIXED, SUBURB, SEASIDE, RAIL }
+
+    public Zone zone(int i, int j) {
+        if (j == jRail) return Zone.RAIL;
+        int di = Math.abs(i - iCentre), dj = Math.abs(j - jRail);
+        if (i >= nbx - 1) return Zone.SEASIDE;
+        if (di <= 1 && dj <= 1) return Zone.CENTRAL;
+        if (di <= 2 && dj <= 2) return Zone.ENTERTAINMENT;
+        if (i == 0 || j == 0 || j >= nbz - 2 || di + dj >= 6) return Zone.SUBURB;
+        return Zone.MIXED;
+    }
+
+    private boolean isFireBlock(int i, int j) {
+        return (i == 2 && j == 2) || (i == nbx - 3 && j == nbz - 3);
+    }
+
+    private static final class Ctx {
+        final Chunk ch;
+        final GeoBuilder gb;
+        final Random rnd;
+        Ctx(Chunk ch, GeoBuilder gb, Random rnd) { this.ch = ch; this.gb = gb; this.rnd = rnd; }
     }
 
     private void block(Chunk ch, GeoBuilder gb, int i, int j) {
@@ -475,55 +519,123 @@ public final class City extends World {
         gb.floorAreaT(bx0, bz0 + s, bx0 + s, bz1 - s, CURB, sw, 2f, 2f, L_RAISED, 8f, 0, 0f);
         gb.floorAreaT(bx1 - s, bz0 + s, bx1, bz1 - s, CURB, sw, 2f, 2f, L_RAISED, 8f, 0, 0f);
 
-        Kind dist = district(i, j, rnd);
-        Flora street;
-        switch (dist) {
-            case DECO: case HOTEL: street = rnd.nextBoolean() ? Flora.COCONUT : Flora.WASHINGTONIA; break;
-            case RESIDENTIAL: street = rnd.nextInt(3) == 0 ? Flora.POINCIANA : (rnd.nextBoolean() ? Flora.SABAL_PALM : Flora.LIVE_OAK); break;
-            case OFFICE: street = rnd.nextBoolean() ? Flora.ROYAL_PALM : Flora.FOXTAIL_PALM; break;
-            case COMMERCIAL: street = rnd.nextInt(3) == 0 ? null : (rnd.nextBoolean() ? Flora.SABAL_PALM : Flora.COCONUT); break;
-            default: street = null; break;
-        }
-        streetFurniture(ch, bx0, bz0, bx1, bz1, street);
-
-        float ix0 = bx0 + s, ix1 = bx1 - s, iz0 = bz0 + s, iz1 = bz1 - s;
-        float depth = iz1 - iz0;
-        boolean twoRows = depth >= 36f;
-        float zMid = twoRows ? iz0 + Math.round(depth * (0.42f + rnd.nextFloat() * 0.16f)) : iz1;
+        Zone zone = zone(i, j);
         Ctx c = new Ctx(ch, gb, rnd);
-        lotRow(c, ix0, iz0, ix1, zMid, true, !twoRows, dist);
-        if (twoRows) lotRow(c, ix0, zMid, ix1, iz1, false, true, dist);
+        streetFurniture(c, bx0, bz0, bx1, bz1, zone);
+        float ix0 = bx0 + s, ix1 = bx1 - s, iz0 = bz0 + s, iz1 = bz1 - s;
+        if (zone == Zone.RAIL) {
+            railBlock(c, i, ix0, iz0, ix1, iz1);
+            gb.end();
+            return;
+        }
+        float depth = iz1 - iz0;
+        boolean twoRows = depth >= 30f;
+        float zMid = twoRows ? iz0 + Math.round(depth * (0.45f + rnd.nextFloat() * 0.1f)) : iz1;
+        lotRow(c, ix0, iz0, ix1, zMid, true, !twoRows, zone, isFireBlock(i, j), i == iCentre && j == jRail + 1);
+        if (twoRows) lotRow(c, ix0, zMid, ix1, iz1, false, true, zone, false, false);
         gb.end();
     }
 
-    private static final class Ctx {
-        final Chunk ch;
-        final GeoBuilder gb;
-        final Random rnd;
-        Ctx(Chunk ch, GeoBuilder gb, Random rnd) { this.ch = ch; this.gb = gb; this.rnd = rnd; }
-    }
+    // ------------------------------------------------------------------ street furniture
 
-    private void streetFurniture(Chunk ch, float bx0, float bz0, float bx1, float bz1, Flora tree) {
-        float in = 1.0f;
-        boolean palms = tree != null;
-        boolean wide = tree == Flora.LIVE_OAK || tree == Flora.POINCIANA;
-        float step = palms ? (wide ? 16f : 12f) : 26f;
+    private void streetFurniture(Ctx c, float bx0, float bz0, float bx1, float bz1, Zone zone) {
+        Flora tree;
+        switch (zone) {
+            case CENTRAL: case RAIL: tree = Flora.GINKGO; break;
+            case MIXED: tree = c.rnd.nextInt(3) == 0 ? null : (c.rnd.nextBoolean() ? Flora.ZELKOVA : Flora.SAKURA); break;
+            case SEASIDE: tree = Flora.BLACK_PINE; break;
+            default: tree = null; break;
+        }
+        boolean poles = zone == Zone.MIXED || zone == Zone.SUBURB || zone == Zone.SEASIDE || zone == Zone.ENTERTAINMENT;
         for (int side = 0; side < 4; side++) {
             boolean horiz = side < 2;
             float a = horiz ? bx0 + 7f : bz0 + 7f, b = horiz ? bx1 - 7f : bz1 - 7f;
-            int k = 0;
-            for (float t = a; t <= b; t += step, k++) {
-                float x, z, yaw;
-                if (side == 0) { x = t; z = bz0 + in; yaw = (float) Math.PI; }
-                else if (side == 1) { x = t; z = bz1 - in; yaw = 0f; }
-                else if (side == 2) { x = bx0 + in; z = t; yaw = (float) (-Math.PI / 2); }
-                else { x = bx1 - in; z = t; yaw = (float) (Math.PI / 2); }
-                if (palms) {
-                    plantAt(ch, tree, x, terrain.height(x, z) + CURB, z);
-                    if ((k % 3) == 1) lampAt(ch, x + (horiz ? step * 0.5f : 0), z + (horiz ? 0 : step * 0.5f), yaw);
-                } else if ((k & 1) == 0) lampAt(ch, x, z, yaw);
+            float yaw = side == 0 ? (float) Math.PI : side == 1 ? 0f : side == 2 ? (float) (-Math.PI / 2) : (float) (Math.PI / 2);
+            if (tree != null) {
+                int k = 0;
+                for (float t = a; t <= b; t += 14f, k++) {
+                    float[] p = sidePoint(side, t, 1.0f, bx0, bz0, bx1, bz1);
+                    plantAt(c.ch, tree, p[0], terrain.height(p[0], p[1]) + CURB, p[1]);
+                    if (!poles && (k & 1) == 1) {
+                        float[] q = sidePoint(side, t + 7f, 1.0f, bx0, bz0, bx1, bz1);
+                        if (t + 7f <= b) lampAt(c.ch, q[0], q[1], yaw);
+                    }
+                }
+            } else if (!poles) {
+                for (float t = a; t <= b; t += 26f) {
+                    float[] p = sidePoint(side, t, 1.0f, bx0, bz0, bx1, bz1);
+                    lampAt(c.ch, p[0], p[1], yaw);
+                }
+            }
+            if (poles) utilityPoles(c, side, a - 3f, b + 3f, bx0, bz0, bx1, bz1);
+            if (zone != Zone.RAIL && c.rnd.nextInt(100) < 45) {
+                float t = a + c.rnd.nextFloat() * (b - a);
+                vendingMachine(c, side, t, bx0, bz0, bx1, bz1);
             }
         }
+    }
+
+    /** Point along block side {@code side} (0=N,1=S,2=W,3=E) at parameter t, {@code in} metres in from the curb. */
+    private static float[] sidePoint(int side, float t, float in, float bx0, float bz0, float bx1, float bz1) {
+        switch (side) {
+            case 0: return new float[]{t, bz0 + in};
+            case 1: return new float[]{t, bz1 - in};
+            case 2: return new float[]{bx0 + in, t};
+            default: return new float[]{bx1 - in, t};
+        }
+    }
+
+    /** Concrete utility poles along a block side with sagging overhead wires between them. */
+    private void utilityPoles(Ctx c, int side, float a, float b, float bx0, float bz0, float bx1, float bz1) {
+        float step = 26f;
+        int n = Math.max(1, (int) ((b - a) / step));
+        float prevX = 0, prevZ = 0, prevY = 0;
+        boolean horiz = side < 2;
+        for (int k = 0; k <= n; k++) {
+            float t = a + (b - a) * k / n;
+            float[] p = sidePoint(side, t, 0.45f, bx0, bz0, bx1, bz1);
+            float y = terrain.height(p[0], p[1]) + CURB;
+            c.ch.sprite(Chunk.SPRITE_UTILITY, 0, p[0], y, p[1], horiz ? 0f : (float) (Math.PI / 2));
+            c.ch.boxes.add(new Box(p[0] - 0.18f, y - 1f, p[1] - 0.18f, p[0] + 0.18f, y + 10.5f, p[1] + 0.18f));
+            if (k > 0) {
+                float[][] wires = {{10.02f, -0.6f}, {10.02f, 0f}, {10.02f, 0.6f}, {9.32f, -0.6f}, {9.32f, 0.6f}};
+                for (float[] w : wires) {
+                    float ox = horiz ? 0f : w[1], oz = horiz ? w[1] : 0f;
+                    wire(c.gb, prevX + ox, prevY + w[0], prevZ + oz, p[0] + ox, y + w[0], p[1] + oz);
+                }
+            }
+            prevX = p[0]; prevZ = p[1]; prevY = y;
+        }
+    }
+
+    private void wire(GeoBuilder gb, float ax, float ay, float az, float bx, float by, float bz) {
+        float mx = (ax + bx) * 0.5f, my = (ay + by) * 0.5f - 0.45f, mz = (az + bz) * 0.5f;
+        float th = 0.05f;
+        float[] l = {0.5f, 0.5f, 0.5f, 0.5f};
+        float[] t = {0, 1, 1, 1, 1, 0, 0, 0};
+        gb.quad(new float[]{ax, ay - th, az, mx, my - th, mz, mx, my + th, mz, ax, ay + th, az}, t, l, lib.pole, L_OBJECT,
+                Geo.FLAG_DETAIL | Geo.FLAG_NO_SUBDIV, -0.2f, true);
+        gb.quad(new float[]{mx, my - th, mz, bx, by - th, bz, bx, by + th, bz, mx, my + th, mz}, t, l, lib.pole, L_OBJECT,
+                Geo.FLAG_DETAIL | Geo.FLAG_NO_SUBDIV, -0.2f, true);
+    }
+
+    /** A drink vending machine standing against the lot line, facing the street. */
+    private void vendingMachine(Ctx c, int side, float t, float bx0, float bz0, float bx1, float bz1) {
+        float[] p = sidePoint(side, t, SIDEWALK - 0.45f, bx0, bz0, bx1, bz1);
+        float y = terrain.height(p[0], p[1]) + CURB, top = y + 1.83f;
+        float hw = 0.5f, hd = 0.37f;
+        boolean horiz = side < 2;
+        float x0 = p[0] - (horiz ? hw : hd), x1 = p[0] + (horiz ? hw : hd), z0 = p[1] - (horiz ? hd : hw), z1 = p[1] + (horiz ? hd : hw);
+        int front = lib.vending[c.rnd.nextInt(lib.vending.length)];
+        GeoBuilder gb = c.gb;
+        int[] tex = {lib.metal, lib.metal, lib.metal, lib.metal};
+        int frontIdx = side == 0 ? 0 : side == 1 ? 1 : side == 2 ? 2 : 3;   // N S W E
+        tex[frontIdx] = front;
+        float[][] edges = {{x1, z0, x0, z0}, {x0, z1, x1, z1}, {x0, z0, x0, z1}, {x1, z1, x1, z0}};
+        for (int e = 0; e < 4; e++)
+            gb.wall(edges[e][0], edges[e][1], edges[e][2], edges[e][3], y, top, tex[e], 0f, 1f, 0f, 1f, L_OBJECT, -0.1f, 1f);
+        gb.floor(x0, z0, x1, z1, top, lib.metal, 1f, 1f, L_OBJECT, 0.9f, -0.1f);
+        c.ch.boxes.add(new Box(x0, y - 1f, z0, x1, top, z1));
     }
 
     void lampAt(Chunk ch, float x, float z, float yaw) {
@@ -532,96 +644,189 @@ public final class City extends World {
         ch.boxes.add(new Box(x - 0.12f, y - 1f, z - 0.12f, x + 0.12f, y + 7f, z + 0.12f));
     }
 
-    private void lotRow(Ctx c, float x0, float z0, float x1, float z1, boolean facesNorth, boolean facesSouth, Kind dist) {
+    // ------------------------------------------------------------------ lots
+
+    private void lotRow(Ctx c, float x0, float z0, float x1, float z1, boolean facesNorth, boolean facesSouth, Zone zone,
+                        boolean fireStation, boolean koban) {
         float x = x0;
+        boolean first = true;
         while (x < x1 - 0.5f) {
-            float w = 14f + 2f * c.rnd.nextInt(10);
-            if (dist == Kind.OFFICE) w += 14f;
-            if (x1 - (x + w) < 12f) w = x1 - x;
+            float w;
+            int special = 0;
+            if (first && fireStation) { w = 24f; special = 1; }
+            else if (first && koban) { w = 8f; special = 2; }
+            else switch (zone) {
+                case CENTRAL: w = 22f + 2f * c.rnd.nextInt(8); break;
+                case ENTERTAINMENT: w = 7f + c.rnd.nextInt(5); break;
+                case SUBURB: w = 9f + c.rnd.nextInt(4); break;
+                case SEASIDE: w = 14f + 2f * c.rnd.nextInt(8); break;
+                default: w = 10f + 2f * c.rnd.nextInt(6); break;
+            }
+            if (x1 - (x + w) < 6f) w = x1 - x;
             float lx1 = Math.min(x1, x + w);
-            lot(c, x, z0, lx1, z1, facesNorth, facesSouth, x <= x0 + 0.1f, lx1 >= x1 - 0.1f, dist);
+            lot(c, x, z0, lx1, z1, facesNorth, facesSouth, x <= x0 + 0.1f, lx1 >= x1 - 0.1f, zone, special);
             x = lx1;
+            first = false;
         }
     }
 
-    private void lot(Ctx c, float x0, float z0, float x1, float z1, boolean fN, boolean fS, boolean fW, boolean fE, Kind dist) {
+    private void lot(Ctx c, float x0, float z0, float x1, float z1, boolean fN, boolean fS, boolean fW, boolean fE,
+                     Zone zone, int special) {
         Random rnd = c.rnd;
+        boolean[] street = {fN, fS, fW, fE};
+        BuildingGen.Type type;
+        int[] set;
+        float roll = rnd.nextFloat();
+        if (special == 1) { type = BuildingGen.Type.FIRE_STATION; set = shopsMixed; }
+        else if (special == 2) { type = BuildingGen.Type.KOBAN; set = shopsMixed; }
+        else switch (zone) {
+            case CENTRAL:
+                if (roll < 0.55f) { type = BuildingGen.Type.TOWER; set = shopsCentral; }
+                else if (roll < 0.75f) { type = BuildingGen.Type.DEPT_STORE; set = shopsCentral; }
+                else if (roll < 0.83f) { type = BuildingGen.Type.PACHINKO; set = shopsPachinko; }
+                else if (roll < 0.92f) { park(c, x0, z0, x1, z1, true); return; }
+                else { type = BuildingGen.Type.KONBINI; set = shopsKonbini; }
+                break;
+            case ENTERTAINMENT:
+                if (roll < 0.68f) { type = BuildingGen.Type.ZAKKYO; set = shopsEnt; }
+                else if (roll < 0.78f) { type = BuildingGen.Type.PACHINKO; set = shopsPachinko; }
+                else if (roll < 0.92f) { type = BuildingGen.Type.SHOPHOUSE; set = shopsEnt; }
+                else { type = BuildingGen.Type.KONBINI; set = shopsKonbini; }
+                break;
+            case SUBURB:
+                if (roll < 0.72f) { house(c, x0, z0, x1, z1, street); return; }
+                else if (roll < 0.84f) { type = BuildingGen.Type.APAATO; set = shopsSuburb; }
+                else if (roll < 0.9f) { type = BuildingGen.Type.SHOPHOUSE; set = shopsSuburb; }
+                else if (roll < 0.96f) { park(c, x0, z0, x1, z1, false); return; }
+                else { parking(c, x0, z0, x1, z1); return; }
+                break;
+            case SEASIDE:
+                if (roll < 0.4f) { type = BuildingGen.Type.WAREHOUSE; set = shopsSeaside; }
+                else if (roll < 0.62f) { type = BuildingGen.Type.SHOPHOUSE; set = shopsSeaside; }
+                else if (roll < 0.82f) { type = BuildingGen.Type.MANSION; set = shopsSeaside; }
+                else { parking(c, x0, z0, x1, z1); return; }
+                break;
+            default:
+                if (roll < 0.42f) { type = BuildingGen.Type.MANSION; set = shopsMixed; }
+                else if (roll < 0.67f) { type = BuildingGen.Type.SHOPHOUSE; set = shopsMixed; }
+                else if (roll < 0.73f) { type = BuildingGen.Type.KONBINI; set = shopsKonbini; }
+                else if (roll < 0.8f) { type = BuildingGen.Type.ZAKKYO; set = shopsMixed; }
+                else if (roll < 0.88f) { parking(c, x0, z0, x1, z1); return; }
+                else if (roll < 0.95f) { park(c, x0, z0, x1, z1, false); return; }
+                else { type = BuildingGen.Type.APAATO; set = shopsMixed; }
+                break;
+        }
+        boolean urban = type != BuildingGen.Type.APAATO && type != BuildingGen.Type.WAREHOUSE;
+        float front = type == BuildingGen.Type.MANSION ? 1.5f : (type == BuildingGen.Type.APAATO ? 2f : 0f);
+        float fx0 = x0, fx1 = x1;
+        if (!urban) { fx0 += fW ? 0.5f : 0.8f; fx1 -= fE ? 0.5f : 0.8f; }
+        float fz0 = z0 + (fN ? front : 0.6f), fz1 = z1 - (fS ? front : 0.6f);
+        if (type == BuildingGen.Type.KOBAN) { fz1 = Math.min(fz1, fz0 + 6f); }
+        if (fx1 - fx0 < 5f || fz1 - fz0 < 5f) { park(c, x0, z0, x1, z1, false); return; }
+        int lotTex = urban ? lib.concrete : lib.grass;
+        groundAround(c, x0, z0, x1, z1, fx0, fz0, fx1, fz1, lotTex);
+        boolean shopsOk = type != BuildingGen.Type.APAATO && type != BuildingGen.Type.WAREHOUSE
+                && type != BuildingGen.Type.FIRE_STATION && type != BuildingGen.Type.KOBAN;
+        boolean[] shops = {shopsOk && fN && front < 0.5f, shopsOk && fS && front < 0.5f,
+                shopsOk && fW && (fN || fS) && type != BuildingGen.Type.MANSION, shopsOk && fE && (fN || fS) && type != BuildingGen.Type.MANSION};
+        if (type == BuildingGen.Type.MANSION && rnd.nextBoolean()) { shops[0] = fN; shops[1] = fS; fz0 = fN ? z0 : fz0; fz1 = fS ? z1 : fz1; }
+        new BuildingGen(this, lib, c.gb, rnd, c.ch).build(type, fx0, fz0, fx1, fz1, street, shops, set.length > 0 ? set : lib.shops);
+    }
+
+    private void groundAround(Ctx c, float x0, float z0, float x1, float z1, float fx0, float fz0, float fx1, float fz1, int tex) {
         GeoBuilder gb = c.gb;
-        int use = rnd.nextInt(100);
-        if (use < 6) { parkingLot(c, x0, z0, x1, z1); return; }
-        if (use < 11) { garden(c, x0, z0, x1, z1, rnd.nextBoolean()); return; }
-
-        Kind kind = dist;
-        if (kind == Kind.OFFICE && rnd.nextInt(4) == 0) kind = rnd.nextBoolean() ? Kind.GARAGE : Kind.HOTEL;
-        if (kind == Kind.COMMERCIAL && rnd.nextInt(6) == 0) kind = Kind.GARAGE;
-        if (kind == Kind.RESIDENTIAL && rnd.nextInt(5) == 0) kind = Kind.COMMERCIAL;
-
-        float front = (kind == Kind.RESIDENTIAL || kind == Kind.HOTEL) ? 2f + rnd.nextInt(3) : 0f;
-        float sideGap = (kind == Kind.RESIDENTIAL || kind == Kind.HOTEL || kind == Kind.OFFICE) ? 1f + rnd.nextInt(3) : 0f;
-        float fx0 = x0 + (fW ? 0 : sideGap * 0.5f), fx1 = x1 - (fE ? 0 : sideGap * 0.5f);
-        float fz0 = z0 + (fN ? front : 1f), fz1 = z1 - (fS ? front : 1f);
-        if (fx1 - fx0 < 6f || fz1 - fz0 < 6f) { garden(c, x0, z0, x1, z1, false); return; }
-
-        int lotTex = kind == Kind.RESIDENTIAL || kind == Kind.HOTEL ? lib.grass : lib.concrete;
-        if (fz0 > z0 + 0.01f) gb.floorAreaT(x0, z0, x1, fz0, CURB, lotTex, 2f, 2f, L_RAISED, 8f, 0, 0f);
-        if (fz1 < z1 - 0.01f) gb.floorAreaT(x0, fz1, x1, z1, CURB, lotTex, 2f, 2f, L_RAISED, 8f, 0, 0f);
-        if (fx0 > x0 + 0.01f) gb.floorAreaT(x0, fz0, fx0, fz1, CURB, lotTex, 2f, 2f, L_RAISED, 8f, 0, 0f);
-        if (fx1 < x1 - 0.01f) gb.floorAreaT(fx1, fz0, x1, fz1, CURB, lotTex, 2f, 2f, L_RAISED, 8f, 0, 0f);
-        if (front >= 2f && lotTex == lib.grass) {
-            boolean hedges = rnd.nextBoolean();
-            Flora[] shrubs = {Flora.HIBISCUS, Flora.BOUGAINVILLEA, Flora.CROTON, Flora.BIRD_OF_PARADISE};
-            for (int side = 0; side < 2; side++) {
-                if (side == 0 ? !fN : !fS) continue;
-                float zz0 = side == 0 ? z0 + 0.4f : z1 - 1.2f, zz1 = zz0 + 0.8f;
-                if (hedges) hedge(c, fx0, zz0, fx1, zz1);
-                else for (float x = fx0 + 1f; x < fx1 - 0.5f; x += 2.5f + rnd.nextFloat() * 2f)
-                    plantAt(c.ch, shrubs[rnd.nextInt(shrubs.length)], x, terrain.height(x, zz0) + CURB, (zz0 + zz1) * 0.5f);
-            }
-            if (kind == Kind.HOTEL || rnd.nextInt(3) == 0) {
-                float tz = fN ? z0 + (fz0 - z0) * 0.6f : z1 - (z1 - fz1) * 0.6f;
-                plantAt(c.ch, kind == Kind.HOTEL ? Flora.DATE_PALM : Flora.FOXTAIL_PALM, fx0 + 1.2f, terrain.height(fx0 + 1.2f, tz) + CURB, tz);
-            }
-        }
-        new BuildingGen(this, lib, gb, rnd, c.ch).build(kind, fx0, fz0, fx1, fz1,
-                fN && front < 0.5f, fS && front < 0.5f, fW, fE, fN, fS);
+        if (fz0 > z0 + 0.01f) gb.floorAreaT(x0, z0, x1, fz0, CURB, tex, 2f, 2f, L_RAISED, 8f, 0, 0f);
+        if (fz1 < z1 - 0.01f) gb.floorAreaT(x0, fz1, x1, z1, CURB, tex, 2f, 2f, L_RAISED, 8f, 0, 0f);
+        if (fx0 > x0 + 0.01f) gb.floorAreaT(x0, fz0, fx0, fz1, CURB, tex, 2f, 2f, L_RAISED, 8f, 0, 0f);
+        if (fx1 < x1 - 0.01f) gb.floorAreaT(fx1, fz0, x1, fz1, CURB, tex, 2f, 2f, L_RAISED, 8f, 0, 0f);
     }
 
-    private void parkingLot(Ctx c, float x0, float z0, float x1, float z1) {
+    /** Detached house: front garden behind a block wall with a gate, house, backyard with a tree. */
+    private void house(Ctx c, float x0, float z0, float x1, float z1, boolean[] street) {
+        Random rnd = c.rnd;
+        boolean faceN = street[0] || !street[1];
+        float front = 2.6f, houseDepth = 8.5f + rnd.nextFloat() * 2.5f;
+        float fx0 = x0 + 0.7f, fx1 = x1 - 0.7f;
+        float fz0, fz1;
+        if (faceN) { fz0 = z0 + front; fz1 = Math.min(z1 - 1f, fz0 + houseDepth); }
+        else { fz1 = z1 - front; fz0 = Math.max(z0 + 1f, fz1 - houseDepth); }
+        if (fx1 - fx0 < 5f || fz1 - fz0 < 5f) { park(c, x0, z0, x1, z1, false); return; }
+        groundAround(c, x0, z0, x1, z1, fx0, fz0, fx1, fz1, lib.grass);
+        boolean[] st = {faceN, !faceN, street[2], street[3]};
+        new BuildingGen(this, lib, c.gb, rnd, c.ch).build(BuildingGen.Type.HOUSE, fx0, fz0, fx1, fz1, st, new boolean[4], shopsSuburb);
+        // block wall with a gate gap along the street edge
+        float wz = faceN ? z0 + 0.15f : z1 - 0.15f;
+        float gate0 = x0 + (x1 - x0) * (0.3f + rnd.nextFloat() * 0.3f), gate1 = gate0 + 1.8f;
+        blockWall(c, x0, wz, gate0, wz, faceN);
+        blockWall(c, gate1, wz, x1, wz, faceN);
+        // garden planting
+        Flora[] garden = {Flora.BLACK_PINE, Flora.MAPLE, Flora.CAMELLIA, Flora.BOXWOOD, Flora.HYDRANGEA, Flora.AZALEA};
+        float gz = faceN ? z0 + 1.3f : z1 - 1.3f;
+        plantAt(c.ch, garden[rnd.nextInt(garden.length)], x0 + 1.4f, terrain.height(x0 + 1.4f, gz) + CURB, gz);
+        if (rnd.nextBoolean()) plantAt(c.ch, garden[rnd.nextInt(garden.length)], x1 - 1.4f, terrain.height(x1 - 1.4f, gz) + CURB, gz);
+        float bz = faceN ? (fz1 + z1) * 0.5f : (z0 + fz0) * 0.5f;
+        if (Math.abs((faceN ? z1 - fz1 : fz0 - z0)) > 4f && rnd.nextInt(3) > 0)
+            plantAt(c.ch, rnd.nextBoolean() ? Flora.MAPLE : (rnd.nextBoolean() ? Flora.SAKURA : Flora.BAMBOO),
+                    (x0 + x1) * 0.5f, terrain.height((x0 + x1) * 0.5f, bz) + CURB, bz);
+    }
+
+    private void blockWall(Ctx c, float ax, float z, float bx, float z2, boolean faceN) {
+        if (bx - ax < 0.3f) return;
+        float y = terrain.height((ax + bx) * 0.5f, z) + CURB, h = 1.2f, t = 0.08f;
+        c.gb.box(ax, y - 0.1f, z - t, bx, y + h, z + t, lib.blockWall, lib.concrete, 0.5f, 0.5f / 0.6f, L_OBJECT, 0f, 0);
+        c.ch.boxes.add(new Box(ax, y - 1f, z - t, bx, y + h, z + t));
+    }
+
+    private void parking(Ctx c, float x0, float z0, float x1, float z1) {
         c.gb.floorAreaT(x0, z0, x1, z1, CURB, lib.parking, 2.5f, 5f, L_RAISED, 8f, 0, 0f);
-        for (float x = x0 + 2f; x < x1 - 1f; x += 10f) lampAt(c.ch, x, (z0 + z1) * 0.5f, 0f);
+        lampAt(c.ch, x0 + 1.5f, (z0 + z1) * 0.5f, 0f);
     }
 
-    private void garden(Ctx c, float x0, float z0, float x1, float z1, boolean plaza) {
+    private void park(Ctx c, float x0, float z0, float x1, float z1, boolean plaza) {
         c.gb.floorAreaT(x0, z0, x1, z1, CURB, plaza ? lib.pavers : lib.grass, 2f, 2f, L_RAISED, 8f, 0, 0f);
-        Flora[] trees = {Flora.LIVE_OAK, Flora.GUMBO_LIMBO, Flora.POINCIANA, Flora.SABAL_PALM, Flora.COCONUT, Flora.ROYAL_PALM};
-        Flora[] shrubs = {Flora.HIBISCUS, Flora.BOUGAINVILLEA, Flora.CROTON, Flora.BIRD_OF_PARADISE, Flora.SEA_GRAPE};
-        boolean bigTree = !plaza && (x1 - x0) > 18f && (z1 - z0) > 16f && c.rnd.nextInt(3) == 0;
-        if (bigTree) {   // a park banyan
-            float bx = (x0 + x1) * 0.5f, bz = (z0 + z1) * 0.5f;
-            plantAt(c.ch, Flora.BANYAN, bx, terrain.height(bx, bz) + CURB, bz);
-        }
-        int k = 0;
+        Flora[] trees = {Flora.SAKURA, Flora.SAKURA, Flora.CAMPHOR, Flora.ZELKOVA, Flora.MAPLE, Flora.BLACK_PINE, Flora.GINKGO};
+        Flora[] shrubs = {Flora.AZALEA, Flora.HYDRANGEA, Flora.BOXWOOD, Flora.CAMELLIA};
         for (float z = z0 + 3f; z < z1 - 2f; z += 7f + c.rnd.nextInt(4))
-            for (float x = x0 + 3f; x < x1 - 2f; x += 7f + c.rnd.nextInt(4), k++) {
-                if (bigTree && Math.abs(x - (x0 + x1) * 0.5f) < 8f && Math.abs(z - (z0 + z1) * 0.5f) < 8f) continue;
+            for (float x = x0 + 3f; x < x1 - 2f; x += 7f + c.rnd.nextInt(4)) {
                 float y = terrain.height(x, z) + CURB;
-                if (plaza) planter(c, x, z, k);
-                else if (c.rnd.nextInt(3) > 0) plantAt(c.ch, trees[c.rnd.nextInt(trees.length)], x + c.rnd.nextFloat() * 2f, y, z + c.rnd.nextFloat() * 2f);
+                if (c.rnd.nextInt(3) > 0) plantAt(c.ch, trees[c.rnd.nextInt(trees.length)], x + c.rnd.nextFloat() * 2f, y, z + c.rnd.nextFloat() * 2f);
                 else plantAt(c.ch, shrubs[c.rnd.nextInt(shrubs.length)], x, y, z);
             }
     }
 
-    private void hedge(Ctx c, float x0, float z0, float x1, float z1) {
-        float y = terrain.height((x0 + x1) * 0.5f, (z0 + z1) * 0.5f) + CURB;
-        c.gb.box(x0, y - 0.2f, z0, x1, y + 1.0f, z1, lib.hedge, lib.hedge, 0.5f, 0.5f, L_OBJECT, 0f, 0);
-        c.ch.boxes.add(new Box(x0, y - 1f, z0, x1, y + 1.0f, z1));
+    // ------------------------------------------------------------------ railway corridor
+
+    /** Blocks under the elevated line: a station with a plaza, or shops tucked under the tracks. */
+    private void railBlock(Ctx c, int i, float ix0, float iz0, float ix1, float iz1) {
+        float zc = railway.zc;
+        int station = railway.stationForBlock(i);
+        GeoBuilder gb = c.gb;
+        if (station >= 0) {
+            gb.floorAreaT(ix0, iz0, ix1, iz1, CURB, lib.pavers, 2f, 2f, L_RAISED, 8f, 0, 0f);
+            railway.stationBuilding(c.ch, gb, station, ix0 + 3f, zc - 9f, ix1 - 3f, zc + 9f, shopsCentral);
+            for (float x = ix0 + 4f; x < ix1 - 3f; x += 12f) {
+                plantAt(c.ch, Flora.ZELKOVA, x, terrain.height(x, iz0 + 3f) + CURB, iz0 + 3f);
+                plantAt(c.ch, Flora.ZELKOVA, x, terrain.height(x, iz1 - 3f) + CURB, iz1 - 3f);
+            }
+            return;
+        }
+        // coin parking strips along the streets, shops under the viaduct
+        float nz = zc - 6f, sz = zc + 6f;
+        gb.floorAreaT(ix0, iz0, ix1, nz, CURB, lib.parking, 2.5f, 5f, L_RAISED, 8f, 0, 0f);
+        gb.floorAreaT(ix0, sz, ix1, iz1, CURB, lib.parking, 2.5f, 5f, L_RAISED, 8f, 0, 0f);
+        gb.floorAreaT(ix0, nz, ix1, sz, CURB, lib.concrete, 2f, 2f, L_RAISED, 8f, 0, 0f);
+        float x = ix0 + 1f;
+        while (x < ix1 - 4f) {
+            float w = Math.min(ix1 - 1f - x, 6f + c.rnd.nextInt(3));
+            if (w < 4f) break;
+            boolean[] stN = {true, false, false, false}, stS = {false, true, false, false};
+            new BuildingGen(this, lib, gb, c.rnd, c.ch).build(BuildingGen.Type.KONBINI, x, nz, x + w, zc - 1.1f, stN, stN, shopsUnderTrack);
+            new BuildingGen(this, lib, gb, c.rnd, c.ch).build(BuildingGen.Type.KONBINI, x, zc + 1.1f, x + w, sz, stS, stS, shopsUnderTrack);
+            x += w + 0.4f;
+        }
     }
 
-    private void planter(Ctx c, float x, float z, int k) {
-        float y = terrain.height(x, z) + CURB;
-        c.gb.box(x - 1f, y - 0.2f, z - 1f, x + 1f, y + 0.6f, z + 1f, lib.planter, lib.hedge, 0.5f, 0.5f, L_OBJECT, 0f, 0);
-        c.ch.boxes.add(new Box(x - 1f, y - 1f, z - 1f, x + 1f, y + 0.6f, z + 1f));
-        plantAt(c.ch, (k & 1) == 0 ? Flora.DATE_PALM : Flora.FOXTAIL_PALM, x, y + 0.6f, z);
-        if ((k % 3) == 0) plantAt(c.ch, Flora.BIRD_OF_PARADISE, x + 1.6f, y, z + 0.4f);
+    void plantAtTerrain(Chunk ch, Flora f, float x, float z) {
+        plantAt(ch, f, x, terrain.height(x, z) + CURB, z);
     }
 }

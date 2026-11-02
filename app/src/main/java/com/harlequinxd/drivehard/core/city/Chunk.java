@@ -10,7 +10,7 @@ import java.util.List;
 /** One streamed 64x64 m piece of the island: render batches, collision boxes and sprite props. */
 public final class Chunk {
     /** Sprite kinds: 0..99 are {@link com.harlequinxd.drivehard.core.model.Flora} species (by ordinal). */
-    public static final int SPRITE_LAMP = 100, SPRITE_SIGNAL = 101, SPRITE_UMBRELLA = 102;
+    public static final int SPRITE_LAMP = 100, SPRITE_SIGNAL = 101, SPRITE_UMBRELLA = 102, SPRITE_UTILITY = 103;
     /** Sprite record: kind, variant (or signal ref), x, y, z, yaw. */
     public static final int SPRITE_STRIDE = 6;
 

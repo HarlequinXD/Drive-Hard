@@ -141,47 +141,62 @@ public final class PropModels {
     public static final int SIGNAL_GREEN = 0, SIGNAL_YELLOW = 1, SIGNAL_RED = 2;
 
     /**
-     * Mast-arm traffic signal. Pole at the origin, arm reaching along -X over the lanes, signal
-     * faces +Z (toward approaching traffic). {@code state} chooses which lamp is lit.
+     * Japanese traffic signal: grey pole on the corner, short arm reaching along +X over the lane,
+     * a horizontal head facing +Z with blue-green / yellow / red lamps (left to right as seen by
+     * drivers) under visors, plus a pedestrian signal on the pole.
      */
     public static List<Part> trafficSignal(int state) {
         List<Part> parts = new ArrayList<>();
-        int metal = 0x8C9296;
+        int metal = 0x9CA2A6;
         parts.add(new Lathe().sides(8)
-                .ring(0f, 0.2f, 0.2f).ring(0.3f, 0.18f, 0.18f).ring(0.35f, 0.12f, 0.12f)
-                .ring(5.6f, 0.095f, 0.095f).ring(5.75f, 0.05f, 0.05f)
+                .ring(0f, 0.16f, 0.16f).ring(0.25f, 0.14f, 0.14f).ring(0.3f, 0.1f, 0.1f)
+                .ring(5.4f, 0.085f, 0.085f).ring(5.5f, 0.04f, 0.04f)
                 .color(metal).build(0));
-        float armY = 5.35f, armLen = 4.6f;
-        parts.add(new Lathe().sides(6).ring(0f, 0.075f, 0.075f).ring(armLen, 0.05f, 0.05f).color(metal)
-                .transform(Mat4.mul(Mat4.translation(0, armY, 0), Mat4.rotZ((float) (Math.PI / 2)))).build(0));
-        float[] heads = {-2.3f, -4.1f};
-        for (float hx : heads) signalHead(parts, hx, armY - 0.75f, state);
-        // pedestrian signal box on the pole
-        parts.add(box(0.16f, 0.16f, 0.12f, 0x2A2C2E, Mat4.translation(0, 2.6f, 0.16f)));
-        parts.add(box(0.1f, 0.1f, 0.02f, state == SIGNAL_GREEN ? 0xF0F0E8 : 0xF07020, Mat4.translation(0, 2.6f, 0.29f), true));
-        return parts;
-    }
-
-    private static void signalHead(List<Part> parts, float x, float y, int state) {
-        // backplate + housing
-        parts.add(box(0.32f, 0.62f, 0.02f, 0x1A1A1C, Mat4.translation(x, y, -0.16f)));
-        parts.add(box(0.2f, 0.5f, 0.15f, 0xD8B030, Mat4.translation(x, y, 0f)));
-        int[] lit = {0x40FF70, 0xFFC830, 0xFF3828};
-        int[] dark = {0x1C3A24, 0x3A3418, 0x3A1A18};
-        // red top, yellow middle, green bottom
-        int[] order = {SIGNAL_RED, SIGNAL_YELLOW, SIGNAL_GREEN};
+        float armY = 5.1f, armLen = 3.6f;
+        parts.add(new Lathe().sides(6).ring(0f, 0.06f, 0.06f).ring(armLen, 0.045f, 0.045f).color(metal)
+                .transform(Mat4.mul(Mat4.translation(0, armY, 0), Mat4.rotZ((float) (-Math.PI / 2)))).build(0));
+        float hx = armLen - 0.6f, hy = armY - 0.05f;
+        parts.add(box(0.62f, 0.2f, 0.12f, 0x6A6E70, Mat4.translation(hx, hy, 0f)));
+        parts.add(box(0.7f, 0.26f, 0.02f, 0x1A1A1C, Mat4.translation(hx, hy, -0.13f)));
+        int[] lit = {0x30E0B0, 0xFFC830, 0xFF3828};
+        int[] dark = {0x1A3A34, 0x3A3418, 0x3A1A18};
+        // seen from the front (+Z), screen-right is +X: green on the left, red on the right
+        int[] order = {SIGNAL_GREEN, SIGNAL_YELLOW, SIGNAL_RED};
         for (int i = 0; i < 3; i++) {
             int lamp = order[i];
             boolean on = lamp == state;
-            float ly = y + 0.32f - i * 0.32f;
-            Lathe l = Lathe.ellipsoid(on ? 0.13f : 0.11f, on ? 0.13f : 0.11f, 0.04f, 4, 8)
-                    .color(on ? lit[lamp] : dark[lamp])
-                    .transform(Mat4.translation(x, ly, 0.16f));
+            float lx = hx - 0.4f + i * 0.4f;
+            Lathe l = Lathe.ellipsoid(on ? 0.15f : 0.13f, on ? 0.15f : 0.13f, 0.04f, 4, 8)
+                    .color(on ? lit[lamp] : dark[lamp]).transform(Mat4.translation(lx, hy, 0.13f));
             if (on) l.emissive();
             parts.add(l.build(0));
-            // visor
-            parts.add(box(0.15f, 0.02f, 0.1f, 0x1A1A1C, Mat4.translation(x, ly + 0.14f, 0.24f)));
+            parts.add(box(0.16f, 0.015f, 0.1f, 0x5A5E60, Mat4.translation(lx, hy + 0.17f, 0.2f)));
         }
+        // pedestrian signal (red/green figure box) facing the crosswalk
+        parts.add(box(0.18f, 0.32f, 0.1f, 0x6A6E70, Mat4.translation(0.25f, 2.6f, 0f)));
+        parts.add(box(0.12f, 0.12f, 0.02f, state == SIGNAL_GREEN ? 0x30E0B0 : 0x3A1A18, Mat4.translation(0.25f, 2.42f, 0.11f), state == SIGNAL_GREEN));
+        parts.add(box(0.12f, 0.12f, 0.02f, state != SIGNAL_GREEN ? 0xFF3828 : 0x1A3A34, Mat4.translation(0.25f, 2.76f, 0.11f), state != SIGNAL_GREEN));
+        return parts;
+    }
+
+    // ------------------------------------------------------------------ utility pole
+
+    /** Concrete utility pole with cross-arms, insulators and a transformer; wires run along Z. */
+    public static List<Part> utilityPole() {
+        List<Part> parts = new ArrayList<>();
+        parts.add(new Lathe().sides(8)
+                .ring(0f, 0.17f, 0.17f).ring(10.5f, 0.11f, 0.11f).ring(10.6f, 0.05f, 0.05f)
+                .color((x, y, z) -> y < 1.8f ? ((((int) (y / 0.25f)) & 1) == 0 ? 0xE8C020 : 0x202020) : 0xB8B4AC)
+                .build(0));
+        for (float y : new float[]{9.9f, 9.2f}) {
+            parts.add(box(0.05f, 0.05f, 0.75f, 0x7A7672, Mat4.translation(0, y, 0)));
+            for (float z = -0.6f; z <= 0.61f; z += 0.6f)
+                parts.add(box(0.04f, 0.08f, 0.04f, 0xE8E8E0, Mat4.translation(0, y + 0.12f, z)));
+        }
+        parts.add(new Lathe().sides(8).ring(-0.45f, 0.28f, 0.28f).ring(0.45f, 0.28f, 0.28f).color(0x8A9096)
+                .transform(Mat4.translation(0.42f, 7.8f, 0)).build(0));
+        parts.add(box(0.03f, 0.3f, 0.12f, 0x5A5E60, Mat4.translation(0.2f, 4.0f, 0)));
+        return parts;
     }
 
     private static Part box(float hx, float hy, float hz, int color, Mat4 at) {

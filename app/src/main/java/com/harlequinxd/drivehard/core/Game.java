@@ -36,8 +36,8 @@ public final class Game {
     public final City city;
     public final Player player;
     public final OrbitCamera cam = new OrbitCamera();
-    public final SpriteSheet sheet, lamps, signals, umbrellas;
-    private final int playerTex, lampTex, signalTex, umbrellaTex;
+    public final SpriteSheet sheet, lamps, signals, umbrellas, poles;
+    private final int playerTex, lampTex, signalTex, umbrellaTex, poleTex;
     public final Texture[] textures = new Texture[4096];
     public final SpriteCache cache;
     public final Traffic traffic;
@@ -67,18 +67,18 @@ public final class Game {
         lamps = PropSprites.lamp();
         signals = PropSprites.signals();
         umbrellas = PropSprites.umbrellas();
+        poles = PropSprites.utilityPole();
         playerTex = lib.add(Texture.padded(sheet.pixels, sheet.width, sheet.height));
         lampTex = lib.add(Texture.padded(lamps.pixels, lamps.width, lamps.height));
         signalTex = lib.add(Texture.padded(signals.pixels, signals.width, signals.height));
         umbrellaTex = lib.add(Texture.padded(umbrellas.pixels, umbrellas.width, umbrellas.height));
+        poleTex = lib.add(Texture.padded(poles.pixels, poles.width, poles.height));
         for (int i = 0; i < lib.list.size(); i++) textures[i] = lib.list.get(i);
         cache = new SpriteCache(textures, lib.list.size(), new int[]{0, CAR_CACHE, PED_CACHE});
 
         // plants bake in the background, most common species first
-        Flora[] order = {Flora.COCONUT, Flora.ROYAL_PALM, Flora.SABAL_PALM, Flora.LIVE_OAK, Flora.SEA_GRAPE,
-                Flora.HIBISCUS, Flora.WASHINGTONIA, Flora.POINCIANA, Flora.GUMBO_LIMBO, Flora.BOUGAINVILLEA,
-                Flora.FOXTAIL_PALM, Flora.DATE_PALM, Flora.CROTON, Flora.BIRD_OF_PARADISE, Flora.SEA_OATS,
-                Flora.BANYAN, Flora.MANGROVE, Flora.AGAVE};
+        Flora[] order = {Flora.GINKGO, Flora.ZELKOVA, Flora.SAKURA, Flora.BLACK_PINE, Flora.MAPLE, Flora.CEDAR,
+                Flora.CAMPHOR, Flora.BAMBOO, Flora.AZALEA, Flora.BOXWOOD, Flora.CAMELLIA, Flora.HYDRANGEA};
         for (int i = 0; i < order.length; i++) {
             final Flora f = order[i];
             flora[f.ordinal()] = cache.get("flora:" + f, GROUP_FLORA, i, () -> PropSprites.flora(f));
@@ -166,6 +166,7 @@ public final class Game {
         city.chunks.update(player.x, player.z);
         city.chunks.ensureAround(player.x, player.z);
         traffic.update(dt, time, player.x, player.z);
+        city.railway.update(dt);
         pedestrians.update(dt, time, player.x, player.z);
         cam.orbit(dYaw, dPitch);
         cam.toWorld(stickX, stickY, move);
@@ -229,6 +230,10 @@ public final class Game {
             }
             drawSprites(c, r, terrain);
         }
+        for (com.harlequinxd.drivehard.core.city.Railway.Train t : city.railway.trains) {
+            if (Math.abs(t.x - r.ex) - t.halfLen() > r.far + 20f) continue;
+            r.drawGeoOffset(t.geo, t.x, t.y(), t.z);
+        }
         drawTraffic(r);
         drawPedestrians(r);
 
@@ -262,6 +267,9 @@ public final class Game {
             } else if (kind == Chunk.SPRITE_LAMP) {
                 if (d2 > tree2) continue;
                 s = lamps; tex = lampTex; frame = 0;
+            } else if (kind == Chunk.SPRITE_UTILITY) {
+                if (d2 > tree2) continue;
+                s = poles; tex = poleTex; frame = 0;
             } else if (kind == Chunk.SPRITE_UMBRELLA) {
                 if (d2 > small2) continue;
                 s = umbrellas; tex = umbrellaTex; frame = (int) sp[o + 1];

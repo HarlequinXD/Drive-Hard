@@ -215,12 +215,15 @@ public final class SoftRenderer {
     private final float[] wp = new float[12], wuv = new float[8], wl = new float[4];
 
     /** Submits every visible polygon of a static geometry chunk. */
-    public void drawGeo(Geo g) {
-        if (g.count == 0 || !boxVisible(g.minX, g.minY, g.minZ, g.maxX, g.maxY, g.maxZ)) return;
+    public void drawGeo(Geo g) { drawGeoOffset(g, 0f, 0f, 0f); }
+
+    /** Draws a batch translated by (ox,oy,oz): moving rigid objects such as trains. */
+    public void drawGeoOffset(Geo g, float ox, float oy, float oz) {
+        if (g.count == 0 || !boxVisible(g.minX + ox, g.minY + oy, g.minZ + oz, g.maxX + ox, g.maxY + oy, g.maxZ + oz)) return;
         float far2 = far * far, detail2 = detailDist * detailDist;
         for (int i = 0; i < g.count; i++) {
             int o = i * 12;
-            float p0x = g.pos[o], p0y = g.pos[o + 1], p0z = g.pos[o + 2];
+            float p0x = g.pos[o] + ox, p0y = g.pos[o + 1] + oy, p0z = g.pos[o + 2] + oz;
             float nx = g.nrm[i * 3], ny = g.nrm[i * 3 + 1], nz = g.nrm[i * 3 + 2];
             if ((nx != 0f || ny != 0f || nz != 0f) && nx * (ex - p0x) + ny * (ey - p0y) + nz * (ez - p0z) <= 0f) continue;
             // cheap distance reject on the first vertex (+ generous slack for big polys)
@@ -231,7 +234,7 @@ public final class SoftRenderer {
             if ((fl & Geo.FLAG_DETAIL) != 0 && d2 > detail2) continue;
             Texture t = textures[g.tex[i]];
             float su = t.scrollU * time;
-            for (int k = 0; k < 12; k++) wp[k] = g.pos[o + k];
+            for (int k = 0; k < 12; k += 3) { wp[k] = g.pos[o + k] + ox; wp[k + 1] = g.pos[o + k + 1] + oy; wp[k + 2] = g.pos[o + k + 2] + oz; }
             for (int k = 0; k < 4; k++) {
                 wuv[k * 2] = (g.uv[i * 8 + k * 2] + su) * t.w;
                 wuv[k * 2 + 1] = g.uv[i * 8 + k * 2 + 1] * t.h;
@@ -243,8 +246,8 @@ public final class SoftRenderer {
     }
 
     /**
-     * Camera-facing sprite. Offsets are in metres relative to (x,y,z) along the camera's
-     * right/up axes; uv in texels.
+     * Upright sprite facing the camera horizontally. Offsets are in metres relative to (x,y,z) along the
+     * camera's horizontal right axis and world up; uv in texels.
      */
     public void billboard(int texId, float x, float y, float z, float left, float right, float bottom, float top,
                           float u0, float v0, float u1, float v1, float bias) {
@@ -265,10 +268,11 @@ public final class SoftRenderer {
 
     private float depthOverride = Float.NaN;
 
+    /** Upright billboard corner: rotates only about the vertical axis (no tilt toward the camera). */
     private void corner(float[] p, int k, float x, float y, float z, float sx, float sy) {
-        p[k * 3] = x + rx * sx + ux * sy;
-        p[k * 3 + 1] = y + ry * sx + uy * sy;
-        p[k * 3 + 2] = z + rz * sx + uz * sy;
+        p[k * 3] = x + rx * sx;
+        p[k * 3 + 1] = y + sy;
+        p[k * 3 + 2] = z + rz * sx;
     }
 
     /** Flat horizontal quad (e.g. a blob shadow) centred at x,z, uv covering the whole texture. */

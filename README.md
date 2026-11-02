@@ -1,7 +1,8 @@
 # Drive Hard
 
 Open-world 2.5D action/driving game for Android phones (Driver 3-style), set in a procedurally
-generated Miami-like city with a PS1 low-poly look. Written in plain Java + OpenGL ES 2.0, no engine.
+generated modern Japanese island city with a PS1 low-poly look. Written in plain Java with a
+software renderer, no engine.
 
 ## Current state
 - **Software renderer, PS1 style (no OpenGL, no z-buffer).** CPU rasteriser into a ~240p
@@ -18,33 +19,45 @@ generated Miami-like city with a PS1 low-poly look. Written in plain Java + Open
   background thread around the player and unloaded when far away (~45 chunks in memory).
   Terrain heightfield: gently rolling city plateau, hills up to ~40 m around it, beaches all
   around the coast, the Ocean Drive beach on the east, open sea.
-- **City:** street grid following the terrain, palm-lined avenues with medians, crosswalks,
-  stop lines, curbs, sidewalks, art-deco / residential / hotel / office / commercial / garage /
-  industrial buildings with foundations on slopes, parks, plazas, parking lots, beach
-  promenade, lifeguard huts. ~390 generated textures incl. 120 shopfronts with invented names.
-- **8-direction sprites** baked from procedural 3D models: the player (idle/walk/run/jump),
-  palm trees (3 variants), street lamps, traffic signals (green/yellow/red frames) and beach
-  umbrellas (4 colours).
-- **Miami flora (18 species, 8-direction sprites baked from 3D models):** coconut, royal, sabal,
-  Washingtonia, Canary date and foxtail palms; banyan, live oak with Spanish moss, royal poinciana,
-  gumbo limbo; sea grape, red mangrove, bougainvillea, hibiscus, croton, bird of paradise,
-  sea oats and agave — placed by zone (royal palms on medians, oaks/poincianas on residential
-  streets, banyans in parks, shrubs in front gardens, dunes with sea oats and sea grape,
-  mangroves on the wild coast, mixed hammock on the hills).
-- **Cars:** 25 procedural models (hatchbacks, sedans, 80s boxy, luxury, coupes, sports, wedge,
-  muscle, wagon, SUVs, pickups, minivan, cargo van, box truck, convertible, jeep, limo, taxi,
-  police, 50s finned cruiser, bug, old pickup) x 4 paint schemes = **100 styles**, 16 angles each.
-  Traffic AI: right-hand lanes, car following, braking for the player, left/right/straight
-  turns on smooth curves, stops at red / late-yellow signals.
-- **Pedestrians:** **100 styles** of men and women (all skin tones, heights, builds, elders;
-  tank tops, tees, long sleeves, dresses, shorts, trousers, skirts; ponytails, buns, afros,
-  long/short hair; caps, sun hats, sunglasses, beards). They walk the sidewalks and cross at
+- **City (modern Japan):** street grid following the terrain, vehicles keep left, signals on
+  the far-left corner, crosswalks, curbs, sidewalks. Districts: a central business district
+  of office towers and department stores around the main station, an entertainment quarter of
+  narrow multi-tenant bar buildings with vertical signboards, pachinko parlours, karaoke and
+  clubs, mixed streets of apartment mansions and shophouses, suburbs of detached houses with
+  tiled gable roofs, block walls and garden trees plus small apartment blocks, and a seaside
+  strip of warehouses. Fire stations, police boxes (koban), convenience stores, drink vending
+  machines, concrete utility poles with sagging overhead wires, parks and coin parking.
+- **Railway:** an elevated line runs east-west through the city on a concrete viaduct with two
+  tracks and three stations (MINATO-CHUO, SAKURAGAOKA, HIGASHI-HAMA): side platforms with
+  canopies and name boards, glass station halls at street level, izakaya and ramen shops
+  tucked under the tracks. Two four-car trains run the line, stopping at each station.
+- **Textures:** ~810 generated at startup, including **520 shopfronts** across 59 kinds of
+  business (ramen, udon, sushi, izakaya, yakitori, kissaten, bakeries, bars, snack bars,
+  clubs, karaoke, game centres, convenience stores, drugstores, 100-yen shops, greengrocers,
+  fishmongers, butchers, tofu, sake, florists, bookshops, electronics, fashion, kimono,
+  barbers, coin laundries, estate agents, clinics, dentists, banks, cram schools, cycle shops,
+  capsule hotels and more) with invented names and pseudo-kanji signage, plus apartment,
+  office, glass, zakkyo, house and warehouse facades, tiled roofs and train liveries.
+- **Sprites, front-on with no tilt:** everything is baked from procedural 3D models seen
+  straight from the side and drawn as upright billboards that only rotate about the vertical
+  axis — the player (idle/walk/run/jump, 8 directions), plants (8 directions), street lamps,
+  traffic signals, utility poles, beach umbrellas, cars (16 directions) and pedestrians.
+- **Japanese flora (12 species):** sakura, ginkgo, zelkova, black pine, Japanese maple, bamboo,
+  cedar, camphor, azalea, hydrangea, boxwood and camellia — ginkgo-lined avenues, zelkova and
+  sakura on side streets, pines on the coast, cedar forest and bamboo on the hills.
+- **Cars:** 25 Japanese-style models (kei cars, kei trucks and vans, compacts, sedans, a rotary
+  wedge, minivans, wagons, SUVs, taxis, patrol car, delivery vans, trucks, fire engine, city
+  bus, ambulance, roadster) x 4 paint schemes = **100 styles**, 16 angles each. Traffic AI:
+  left-hand lanes, car following, braking for the player, turns on smooth curves, stops at red
+  / late-yellow signals.
+- **Pedestrians:** **100 styles** of men and women — office workers in suits, casual wear,
+  dresses, skirts, face masks, caps and sun hats. They walk the sidewalks and cross at
   crosswalks only on the walk phase.
 - **Sprite cache:** car, pedestrian and plant sprites are baked on a background thread on
   demand; an LRU cache keeps memory bounded while rotating through all styles over time.
 - **Traffic signals:** every intersection has a working controller (N-S green → yellow →
-  all-red → E-W green → yellow → all-red, offset for a green wave); mast-arm signals show the
-  live state. `TrafficLights.state(...)` / `timeToChange(...)` are ready for cars.
+  all-red → E-W green → yellow → all-red, offset for a green wave); horizontal Japanese
+  signal heads show the live state.
 - **Player:** camera-relative touch controls, walk/run/jump, curb step-up, slope following,
   collision with buildings and props, stops at the water's edge; camera collision.
 
@@ -55,8 +68,8 @@ app/src/main/java/com/harlequinxd/drivehard/
     Game.java  world + player + camera + renderer
     render/    SoftRenderer (ordering table rasteriser), Geo, Texture
     city/      City (layout + chunk generator), Terrain, ChunkManager (streaming), Chunk,
-               BuildingGen, GeoBuilder, TrafficLights
-    tex/       TextureLibrary, Facades, Storefronts, ShopNames, PixelFont, Noise, Img
+               BuildingGen, Railway (viaduct, stations, trains), GeoBuilder, TrafficLights
+    tex/       TextureLibrary, JpTextures (shops, facades, signs), Kanji, PixelFont, Noise, Img
     model/     CharacterSpec, CharacterModel, Animations, Pose, PropModels, Flora, Cars, Loft
     sim/       Traffic (car AI), Pedestrians
     sprite/    SpriteBaker, SpriteSheet, PropSprites, SpriteCache (background baking, LRU)

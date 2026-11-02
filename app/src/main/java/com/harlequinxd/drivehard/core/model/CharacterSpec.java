@@ -8,7 +8,7 @@ import java.util.Random;
  */
 public final class CharacterSpec {
     public enum Hair { PONYTAIL, SHORT, LONG, BALD, BUN, AFRO }
-    public enum Top { TANK, TSHIRT, LONGSLEEVE, DRESS }
+    public enum Top { TANK, TSHIRT, LONGSLEEVE, DRESS, SUIT }
     public enum Bottom { SHORTS, PANTS, SKIRT }
     public enum Hat { NONE, CAP, SUNHAT }
 
@@ -28,7 +28,7 @@ public final class CharacterSpec {
     public int lipColor = 0xC0766E;
     public Hat hat = Hat.NONE;
     public int hatColor = 0xF2F2EE;
-    public boolean sunglasses, beard;
+    public boolean sunglasses, beard, mask;
 
     /** The main character: a woman in a tank top, denim shorts and sneakers, honey blonde hair. */
     public static CharacterSpec player() {
@@ -42,43 +42,62 @@ public final class CharacterSpec {
     private static final int[] BOTTOMS = {0x4D6E9C, 0x2C3E5C, 0x22252B, 0xC8B89A, 0x6E6E6E, 0xF1EFE8, 0x5A6A3C, 0x8C2A2A};
 
     private static final int[] GREYS = {0xB8B8B4, 0xD8D8D4, 0x8C8C88};
+    private static final int[] JP_SKINS = {0xF3D7BE, 0xEDCDB0, 0xE6C4A2, 0xDDB892, 0xD2A882, 0xC69A74};
+    private static final int[] JP_HAIRS = {0x141210, 0x1E1814, 0x1E1814, 0x2A2018, 0x3A2A1E, 0x5A3E28, 0x8A6A44, 0xB89A70, 0x6A6A70};
+    private static final int[] SUITS = {0x1E2230, 0x2A2C30, 0x3A3E46, 0x22283A, 0x4A4A4E};
+    private static final int[] CASUAL = {0xF1EFE8, 0x22252B, 0xC8443C, 0x2F5C9E, 0x3E8A5A, 0xE8B33A, 0xE07AA8, 0x40B8B0,
+            0x7A4AA0, 0xF08A3C, 0x6E6E6E, 0xB8D8F0, 0x8C6A48, 0xD8CDB8, 0xA8B89A, 0xF4E4D4};
 
-    /** One of the pedestrian styles: a varied mix of men and women of all looks and ages. */
+    /**
+     * One of the 100 pedestrian styles for a modern Japanese city: half women, half men, all
+     * ages, from salaryman suits and office wear to casual and summer clothes, with some visitors.
+     */
     public static CharacterSpec randomPedestrian(long seed) {
         Random r = new Random(seed * 7919L + 17L);
         CharacterSpec s = new CharacterSpec();
-        s.female = (seed & 1) == 0;              // alternate so the 100 styles are half women, half men
+        s.female = (seed & 1) == 0;
         boolean elder = r.nextInt(6) == 0;
-        s.height = s.female ? 1.56f + r.nextFloat() * 0.18f : 1.66f + r.nextFloat() * 0.2f;
-        if (elder) s.height -= 0.04f;
-        s.build = r.nextFloat() * r.nextFloat() + (elder ? 0.2f : 0f);
-        s.skin = SKINS[r.nextInt(SKINS.length)];
-        Hair[] hairs = s.female ? new Hair[]{Hair.PONYTAIL, Hair.LONG, Hair.LONG, Hair.SHORT, Hair.BUN, Hair.AFRO}
-                : new Hair[]{Hair.SHORT, Hair.SHORT, Hair.SHORT, Hair.BALD, Hair.AFRO, Hair.PONYTAIL};
+        boolean visitor = r.nextInt(7) == 0;
+        s.height = s.female ? 1.52f + r.nextFloat() * 0.16f : 1.62f + r.nextFloat() * 0.18f;
+        if (elder) s.height -= 0.05f;
+        s.build = r.nextFloat() * r.nextFloat() * 0.8f + (elder ? 0.15f : 0f);
+        s.skin = visitor ? SKINS[r.nextInt(SKINS.length)] : JP_SKINS[r.nextInt(JP_SKINS.length)];
+        Hair[] hairs = s.female ? new Hair[]{Hair.PONYTAIL, Hair.LONG, Hair.LONG, Hair.SHORT, Hair.BUN, Hair.SHORT}
+                : new Hair[]{Hair.SHORT, Hair.SHORT, Hair.SHORT, Hair.SHORT, Hair.BALD};
         s.hair = hairs[r.nextInt(hairs.length)];
-        s.hairColor = elder ? GREYS[r.nextInt(GREYS.length)] : HAIRS[r.nextInt(HAIRS.length)];
-        Top[] tops = s.female ? new Top[]{Top.TANK, Top.TSHIRT, Top.LONGSLEEVE, Top.DRESS, Top.DRESS, Top.TSHIRT}
-                : new Top[]{Top.TANK, Top.TSHIRT, Top.TSHIRT, Top.LONGSLEEVE};
-        s.top = tops[r.nextInt(tops.length)];
-        s.topColor = CLOTH[r.nextInt(CLOTH.length)];
-        if (s.top == Top.DRESS) {
-            s.bottom = Bottom.SKIRT;
-            s.bottomColor = s.topColor;
+        s.hairColor = elder ? GREYS[r.nextInt(GREYS.length)] : (visitor ? HAIRS[r.nextInt(HAIRS.length)] : JP_HAIRS[r.nextInt(JP_HAIRS.length)]);
+        int look = r.nextInt(10);
+        if (look < 3 && !elder) {                 // office wear
+            if (s.female && r.nextBoolean()) {
+                s.top = Top.LONGSLEEVE; s.topColor = r.nextBoolean() ? 0xF4F2EE : 0xE8E0F0;
+                s.bottom = Bottom.SKIRT; s.bottomColor = SUITS[r.nextInt(SUITS.length)];
+            } else {
+                s.top = Top.SUIT; s.topColor = SUITS[r.nextInt(SUITS.length)];
+                s.bottom = s.female && r.nextBoolean() ? Bottom.SKIRT : Bottom.PANTS; s.bottomColor = s.topColor;
+            }
+            s.shoeColor = 0x1A1A1C; s.soleColor = 0x1A1A1C;
         } else {
-            Bottom[] bs = s.female ? new Bottom[]{Bottom.SHORTS, Bottom.PANTS, Bottom.SKIRT}
-                    : new Bottom[]{Bottom.SHORTS, Bottom.PANTS, Bottom.PANTS};
-            s.bottom = bs[r.nextInt(bs.length)];
-            s.bottomColor = BOTTOMS[r.nextInt(BOTTOMS.length)];
+            Top[] tops = s.female ? new Top[]{Top.TSHIRT, Top.LONGSLEEVE, Top.DRESS, Top.DRESS, Top.TSHIRT, Top.TANK}
+                    : new Top[]{Top.TSHIRT, Top.TSHIRT, Top.LONGSLEEVE, Top.TANK};
+            s.top = tops[r.nextInt(tops.length)];
+            s.topColor = CASUAL[r.nextInt(CASUAL.length)];
+            if (s.top == Top.DRESS) { s.bottom = Bottom.SKIRT; s.bottomColor = s.topColor; }
+            else {
+                Bottom[] bs = s.female ? new Bottom[]{Bottom.PANTS, Bottom.SKIRT, Bottom.SHORTS}
+                        : new Bottom[]{Bottom.PANTS, Bottom.PANTS, Bottom.SHORTS};
+                s.bottom = bs[r.nextInt(bs.length)];
+                s.bottomColor = BOTTOMS[r.nextInt(BOTTOMS.length)];
+            }
+            s.shoeColor = r.nextInt(3) == 0 ? 0x22252B : (r.nextBoolean() ? 0xF2F2F0 : CASUAL[r.nextInt(CASUAL.length)]);
+            s.soleColor = r.nextBoolean() ? 0xEDEDEA : 0x3A3A3A;
         }
-        s.shoeColor = r.nextInt(3) == 0 ? 0x22252B : (r.nextBoolean() ? 0xF2F2F0 : CLOTH[r.nextInt(CLOTH.length)]);
-        s.soleColor = r.nextBoolean() ? 0xEDEDEA : 0x3A3A3A;
-        s.lipColor = s.female ? 0xB86A68 : mix(s.skin, 0x8A4A44, 0.35f);
-        int hatRoll = r.nextInt(10);
+        s.lipColor = s.female ? 0xC07070 : mix(s.skin, 0x8A4A44, 0.35f);
+        int hatRoll = r.nextInt(12);
         s.hat = hatRoll < 2 ? Hat.CAP : (hatRoll == 2 && s.female ? Hat.SUNHAT : Hat.NONE);
-        if (s.hair == Hair.AFRO) s.hat = Hat.NONE;
-        s.hatColor = r.nextBoolean() ? CLOTH[r.nextInt(CLOTH.length)] : (s.hat == Hat.SUNHAT ? 0xE8D8A8 : 0xF2F2EE);
-        s.sunglasses = r.nextInt(4) == 0;
-        s.beard = !s.female && r.nextInt(4) == 0;
+        s.hatColor = r.nextBoolean() ? CASUAL[r.nextInt(CASUAL.length)] : (s.hat == Hat.SUNHAT ? 0xE8D8A8 : 0xF2F2EE);
+        s.sunglasses = r.nextInt(10) == 0;
+        s.beard = !s.female && visitor && r.nextInt(3) == 0;
+        s.mask = r.nextInt(4) == 0;
         return s;
     }
 

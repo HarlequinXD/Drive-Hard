@@ -19,7 +19,8 @@ public final class SpriteBaker {
     public float pixelsPerMeter = 32f;
     public int directions = 8;
     public int supersample = 3;
-    public float pitchDeg = 20f;
+    /** Zero: sprites are rendered straight-on (no tilt) and only rotated about the vertical axis. */
+    public float pitchDeg = 0f;
     public boolean outline = true;
 
     // light direction in view space (x right, y up, z toward viewer)

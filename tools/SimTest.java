@@ -32,7 +32,20 @@ public class SimTest {
 
         // cross a street: curb down, road, curb up
         int j0 = 3;
-        Player q = new Player((c.rx1[2] + c.rx0[3]) * 0.5f, c.rz1[j0] + 1.0f);
+        // pick a crossing line clear of street furniture (poles, trees, vending machines)
+        float qx = (c.rx1[2] + c.rx0[3]) * 0.5f;
+        c.chunks.ensureAround(qx, c.rz1[j0]);
+        search:
+        for (float off = 0f; off < 20f; off += 0.5f)
+            for (int sgn = -1; sgn <= 1; sgn += 2) {
+                float x = qx + off * sgn;
+                boolean clear = true;
+                for (float z = c.rz0[j0] - 5f; z <= c.rz1[j0] + 1.5f && clear; z += 0.5f)
+                    for (com.harlequinxd.drivehard.core.game.Box b : c.near(x, z))
+                        if (x > b.minX - 0.6f && x < b.maxX + 0.6f && z > b.minZ - 0.6f && z < b.maxZ + 0.6f) { clear = false; break; }
+                if (clear) { qx = x; break search; }
+            }
+        Player q = new Player(qx, c.rz1[j0] + 1.0f);
         c.chunks.ensureAround(q.x, q.z);
         q.y = c.surface(q.x, q.z);
         for (int i = 0; i < 700; i++) { c.chunks.ensureAround(q.x, q.z); q.update(dt, 0, -0.5f, false, c); }

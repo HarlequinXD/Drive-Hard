@@ -54,6 +54,12 @@ public final class PropSprites {
         return baker(120, 168, 60, 162, 20f).bakeStatic(v);
     }
 
+    public static SpriteSheet utilityPole() {
+        List<List<Part>> v = new ArrayList<>();
+        v.add(PropModels.utilityPole());
+        return baker(48, 232, 24, 226, 20f).bakeStatic(v);
+    }
+
     public static final int UMBRELLA_VARIANTS = 4;
 
     public static SpriteSheet umbrellas() {
@@ -68,7 +74,7 @@ public final class PropSprites {
         v.add(PropModels.trafficSignal(PropModels.SIGNAL_GREEN));
         v.add(PropModels.trafficSignal(PropModels.SIGNAL_YELLOW));
         v.add(PropModels.trafficSignal(PropModels.SIGNAL_RED));
-        return baker(200, 140, 100, 134, 20f).bakeStatic(v);
+        return baker(176, 128, 88, 122, 20f).bakeStatic(v);
     }
 
     private static SpriteBaker baker(int w, int h, int ax, int ay, float ppm) {

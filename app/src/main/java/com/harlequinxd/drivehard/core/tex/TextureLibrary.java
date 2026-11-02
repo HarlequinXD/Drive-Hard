@@ -18,13 +18,18 @@ public final class TextureLibrary {
     public final List<Texture> list = new ArrayList<>();
 
     public final int asphalt, asphaltPatched, sidewalk, pavers, concrete, curb, grass, sand, water, roofGravel,
-            roofMembrane, roofTar, parking, paintWhite, paintYellow, trunk, frond, hedge, metal, pole, shadow,
+            roofMembrane, roofTar, parking, paintWhite, paintYellow, paintRed, trunk, frond, hedge, metal, pole, shadow,
             planter, lampHead, umbrella, rock, hillGrass;
 
-    public final int[][] facades = new int[Facades.Kind.values().length][];
-    public final int[] shops;
+    public final int[][] jp = new int[JpTextures.Kind.values().length][];
+    public static final int SHOP_COUNT = 520;
+    public final int[] shops = new int[SHOP_COUNT];
+    public final int[] shopCategory = new int[SHOP_COUNT];
     public final int[] lobbies;
+    public final int[] roofs, signs, vending, stationSigns, koban, fireDoors;
+    public final int trainSideA, trainSideB, trainFrontA, trainFrontB, track, platform, blockWall;
     public final List<String> shopNames = new ArrayList<>();
+    public static final String[] STATIONS = {"MINATO-CHUO", "SAKURAGAOKA", "HIGASHI-HAMA"};
 
     public TextureLibrary(long seed) {
         asphalt = add(asphalt(seed, false));
@@ -44,6 +49,7 @@ public final class TextureLibrary {
         parking = add(parking(seed));
         paintWhite = add(solid(0xFFEDEDE6, seed));
         paintYellow = add(solid(0xFFE2B33A, seed));
+        paintRed = add(solid(0xFFC0282A, seed));
         trunk = add(trunk(seed));
         frond = add(frond(seed));
         hedge = add(hedge(seed));
@@ -57,22 +63,40 @@ public final class TextureLibrary {
         hillGrass = add(hillGrass(seed));
 
         Random r = new Random(seed);
-        int[] counts = {44, 40, 24, 30, 36, 12, 16, 30}; // DECO RESIDENTIAL HOTEL OFFICE COMMERCIAL GARAGE INDUSTRIAL BLANK
-        Facades.Kind[] kinds = Facades.Kind.values();
+        int[] counts = {24, 10, 30, 20, 14, 16, 20, 8, 3, 8, 16};
+        JpTextures.Kind[] kinds = JpTextures.Kind.values();
         int s = 1000;
         for (int k = 0; k < kinds.length; k++) {
-            facades[k] = new int[counts[k]];
-            for (int i = 0; i < counts[k]; i++) facades[k][i] = add(Facades.generate(r, kinds[k], s++));
+            jp[k] = new int[counts[k]];
+            for (int i = 0; i < counts[k]; i++) jp[k][i] = add(JpTextures.facade(r, kinds[k], s++));
         }
-        ShopNames names = new ShopNames(seed + 77);
-        shops = new int[120];
-        for (int i = 0; i < shops.length; i++) {
-            String[] n = names.next();
-            shopNames.add(n[0] + " " + n[1]);
-            shops[i] = add(Storefronts.shop(r, n, s++));
+        String[] name = new String[1];
+        for (int i = 0; i < SHOP_COUNT; i++) {
+            int cat = i % JpTextures.CATEGORIES.length;
+            shopCategory[i] = cat;
+            shops[i] = add(JpTextures.shop(cat, s++, name));
+            shopNames.add(name[0]);
         }
         lobbies = new int[12];
         for (int i = 0; i < lobbies.length; i++) lobbies[i] = add(Storefronts.lobby(r, s++));
+        int[] roofColors = {0x6A6E72, 0x2E3034, 0x3A4A6A, 0x6A4A3A, 0x8A8E90};
+        roofs = new int[roofColors.length];
+        for (int i = 0; i < roofs.length; i++) roofs[i] = add(JpTextures.roofTiles(roofColors[i], s++));
+        signs = new int[60];
+        for (int i = 0; i < signs.length; i++) signs[i] = add(JpTextures.verticalSign(s++));
+        vending = new int[5];
+        for (int i = 0; i < vending.length; i++) vending[i] = add(JpTextures.vending(s++));
+        stationSigns = new int[STATIONS.length];
+        for (int i = 0; i < STATIONS.length; i++) stationSigns[i] = add(JpTextures.stationSign(STATIONS[i], s++));
+        koban = new int[]{add(JpTextures.koban(s++)), add(JpTextures.koban(s++))};
+        fireDoors = new int[]{add(JpTextures.fireDoors(s++)), add(JpTextures.fireDoors(s++))};
+        trainSideA = add(JpTextures.trainSide(0x2E9A4A));
+        trainSideB = add(JpTextures.trainSide(0xF07820));
+        trainFrontA = add(JpTextures.trainFront(0x2E9A4A));
+        trainFrontB = add(JpTextures.trainFront(0xF07820));
+        track = add(JpTextures.track());
+        platform = add(JpTextures.platform());
+        blockWall = add(JpTextures.blockWall(s++));
     }
 
     public int add(Texture t) {
@@ -82,7 +106,7 @@ public final class TextureLibrary {
 
     public Texture[] array() { return list.toArray(new Texture[0]); }
 
-    public int[] facades(Facades.Kind k) { return facades[k.ordinal()]; }
+    public int[] facades(JpTextures.Kind k) { return jp[k.ordinal()]; }
 
     // ------------------------------------------------------------------ base materials
 

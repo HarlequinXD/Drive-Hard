@@ -64,9 +64,9 @@ public final class Traffic {
     /** World position of a lane point: axis coordinate s on the road, lateral lane offset. */
     private void lanePoint(boolean ns, int dir, int road, float lane, float s, float[] out) {
         float c = roadCentre(ns, road);
-        // right of travel: for +Z travel, right is -X; for +X travel, right is +Z
-        if (ns) { out[0] = c - dir * lane; out[1] = s; }
-        else { out[0] = s; out[1] = c + dir * lane; }
+        // keep left (Japan): for +Z travel, left is +X; for +X travel, left is -Z
+        if (ns) { out[0] = c + dir * lane; out[1] = s; }
+        else { out[0] = s; out[1] = c - dir * lane; }
     }
 
     private int crossCount(boolean ns) { return ns ? city.nbz : city.nbx; }

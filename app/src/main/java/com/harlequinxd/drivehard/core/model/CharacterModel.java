@@ -102,6 +102,10 @@ public final class CharacterModel {
                 if (y > 0.29f) return (ax > 0.045f && ax < 0.09f) ? s.topColor : skin;
                 if (y > 0.235f && z > 0.03f && ax < 0.075f) return skin;
                 return s.topColor;
+            } else if (top == Top.SUIT) {
+                if (y > 0.385f) return skin;
+                if (z > 0.03f && ax < 0.06f - (0.36f - y) * 0.12f && y > 0.2f) return ax < 0.012f ? 0x8A2030 : 0xF4F2EE;
+                return s.topColor;
             } else {
                 if (y > 0.385f) return skin;
                 if (y > 0.33f && z > 0.02f && ax < 0.055f) return skin;
@@ -147,7 +151,7 @@ public final class CharacterModel {
 
         // Arms
         final boolean sleeve = top != Top.TANK;
-        final boolean longSleeve = top == Top.LONGSLEEVE;
+        final boolean longSleeve = top == Top.LONGSLEEVE || top == Top.SUIT;
         for (int side = 0; side < 2; side++) {
             int ua = side == 0 ? UARM_L : UARM_R, fa = side == 0 ? FARM_L : FARM_R;
             float am = (f ? 1f : 1.15f) * bw;
@@ -289,6 +293,10 @@ public final class CharacterModel {
         if (s.sunglasses) {
             parts.add(Lathe.ellipsoid(0.07f, 0.016f, 0.02f, 3, 8).color(0x141418)
                     .transform(Mat4.mul(K, Mat4.translation(0, 0.138f, 0.078f))).build(HEAD));
+        }
+        if (s.mask) {
+            parts.add(Lathe.ellipsoid(0.05f, 0.034f, 0.035f, 4, 8).color(0xF2F2EE)
+                    .transform(Mat4.mul(K, Mat4.translation(0, 0.088f, 0.068f))).build(HEAD));
         }
         if (s.beard) {
             parts.add(Lathe.ellipsoid(0.062f, 0.045f, 0.05f, 4, 8).color(darken(s.hairColor, 0.8f)).foliage()
