@@ -16,8 +16,6 @@ public class BakePreview {
         File outDir = new File(args.length > 0 ? args[0] : "preview");
         outDir.mkdirs();
         int scale = 4;
-        com.harlequinxd.drivehard.core.gfx.ProcTextures tex = new com.harlequinxd.drivehard.core.gfx.ProcTextures();
-        write(tex.pixels, 256, 256, 3, new File(outDir, "textures.png"));
 
         long t0 = System.nanoTime();
         SpriteSheet player = new SpriteBaker().bake(new CharacterModel(CharacterSpec.player()));
