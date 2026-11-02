@@ -259,7 +259,9 @@ public final class City extends World {
         float slope = (max - min) / Math.max(bx - ax, bz - az);
         float mx = (ax + bx) * 0.5f, mz = (az + bz) * 0.5f;
         int tex = slope > 0.6f ? lib.rock : (terrain.isSand(mx, mz, avg) ? lib.sand : (avg > 22f ? lib.hillGrass : lib.grass));
-        gb.floorT(ax, az, bx, bz, 0f, tex, 2f, 2f, L_GROUND, 0, 0f, true);
+        // Natural terrain sorts in the object layer, by depth, together with buildings and sprites,
+        // so hills hide whatever stands behind them instead of always being painted first.
+        gb.floorT(ax, az, bx, bz, 0f, tex, 2f, 2f, L_OBJECT, Geo.FLAG_SORT_FAR, 0.3f, true);
     }
 
     private void vegetation(Chunk ch, GeoBuilder gb, float ax, float az) {
@@ -349,7 +351,7 @@ public final class City extends World {
         float a = Math.max(z0, cityZ0), b = Math.min(z1, cityZ1);
         float c0 = Math.max(x0, px0), c1 = Math.min(x1, px1);
         if (b <= a || c1 <= c0) return;
-        gb.floorAreaT(c0, a, c1, b, 0.04f, lib.pavers, 2f, 2f, L_DECAL, 8f, 0, 0f);
+        gb.floorAreaT(c0, a, c1, b, 0.04f, lib.pavers, 2f, 2f, L_OBJECT, 8f, 0, -0.6f);
     }
 
     // ------------------------------------------------------------------ roads

@@ -11,6 +11,8 @@ public final class Geo {
     public static final int FLAG_ALPHA = 1, FLAG_NO_SUBDIV = 2;
     /** Small detail (markings, rooftop clutter): culled beyond the renderer's detail distance. */
     public static final int FLAG_DETAIL = 4;
+    /** Sort by the polygon's farthest point instead of its average (terrain under standing objects). */
+    public static final int FLAG_SORT_FAR = 8;
 
     public int count;
     /** Tall object batch (building): eligible for terrain occlusion culling. */

@@ -49,6 +49,8 @@ public final class SoftRenderer {
      */
     public float spriteErrorPx = 0.75f;
     private boolean spriteMode;
+    /** Current polygon sorts by its farthest vertex (see {@link Geo#FLAG_SORT_FAR}). */
+    private boolean sortFar;
 
     // ordering table + primitive pool
     private final int[] head = new int[LAYERS * BUCKETS];
@@ -247,8 +249,10 @@ public final class SoftRenderer {
                 wuv[k * 2 + 1] = g.uv[i * 8 + k * 2 + 1] * t.h;
                 wl[k] = g.light[i * 4 + k];
             }
+            sortFar = (fl & Geo.FLAG_SORT_FAR) != 0;
             submit(wp, wuv, wl, g.vertexCount(i), g.tex[i], g.layer(i),
                     (fl & Geo.FLAG_ALPHA) != 0 ? MODE_ALPHA : MODE_OPAQUE, g.bias[i], (fl & Geo.FLAG_NO_SUBDIV) == 0);
+            sortFar = false;
         }
     }
 
@@ -286,6 +290,10 @@ public final class SoftRenderer {
 
     /** Flat horizontal quad (e.g. a blob shadow) centred at x,z, uv covering the whole texture. */
     public void groundQuad(int texId, float x, float y, float z, float r, int mode, int layer) {
+        groundQuad(texId, x, y, z, r, mode, layer, 0f);
+    }
+
+    public void groundQuad(int texId, float x, float y, float z, float r, int mode, int layer, float bias) {
         Texture t = textures[texId];
         float[] p = wp;
         p[0] = x - r; p[1] = y; p[2] = z + r;
@@ -294,7 +302,7 @@ public final class SoftRenderer {
         p[9] = x - r; p[10] = y; p[11] = z - r;
         wuv[0] = 0; wuv[1] = t.h; wuv[2] = t.w; wuv[3] = t.h; wuv[4] = t.w; wuv[5] = 0; wuv[6] = 0; wuv[7] = 0;
         wl[0] = wl[1] = wl[2] = wl[3] = 1f;
-        submit(p, wuv, wl, 4, texId, layer, mode, 0f, false);
+        submit(p, wuv, wl, 4, texId, layer, mode, bias, false);
     }
 
     /** Rotated flat quad on the ground (e.g. a car's shadow): half length along yaw, half width across. */
@@ -323,7 +331,7 @@ public final class SoftRenderer {
      */
     public void submit(float[] p, float[] uvT, float[] l, int nv, int texId, int layer, int mode, float bias, boolean subdiv) {
         int allNear = 1, allFar = 1;
-        float zsum = 0f;
+        float zsum = 0f, zmax = -Float.MAX_VALUE;
         for (int k = 0; k < nv; k++) {
             float dx = p[k * 3] - ex, dy = p[k * 3 + 1] - ey, dz = p[k * 3 + 2] - ez;
             float vx = dx * rx + dy * ry + dz * rz;
@@ -335,6 +343,7 @@ public final class SoftRenderer {
             if (vz >= near) allNear = 0;
             if (vz <= far) allFar = 0;
             zsum += vz;
+            if (vz > zmax) zmax = vz;
         }
         if (allNear == 1 || allFar == 1) return;
         // side planes
@@ -352,16 +361,17 @@ public final class SoftRenderer {
             System.arraycopy(vq, 0, child[0], 0, 4 * VA);
             quadRec(0, texId, layer, mode, bias);
         } else {
-            emit(vq, nv, Float.isNaN(depthOverride) ? zsum / nv + bias : depthOverride, texId, layer, mode);
+            emit(vq, nv, !Float.isNaN(depthOverride) ? depthOverride : (sortFar ? zmax : zsum / nv) + bias, texId, layer, mode);
         }
     }
 
     private void quadRec(int level, int texId, int layer, int mode, float bias) {
         float[] q = child[level];
-        float minZ = Float.MAX_VALUE, maxEdge = 0f, zsum = 0f;
+        float minZ = Float.MAX_VALUE, maxEdge = 0f, zsum = 0f, zmax = -Float.MAX_VALUE;
         for (int k = 0; k < 4; k++) {
             float z = q[k * VA + 2];
             zsum += z;
+            if (z > zmax) zmax = z;
             if (z < minZ) minZ = z;
             int n = ((k + 1) & 3) * VA;
             float dx = q[n] - q[k * VA], dy = q[n + 1] - q[k * VA + 1], dz = q[n + 2] - q[k * VA + 2];
@@ -383,7 +393,7 @@ public final class SoftRenderer {
             stop = level >= MAX_LEVEL || minZ > subdivDist || maxEdge <= limit;
         }
         if (stop) {
-            emit(q, 4, Float.isNaN(depthOverride) ? zsum * 0.25f + bias : depthOverride, texId, layer, mode);
+            emit(q, 4, !Float.isNaN(depthOverride) ? depthOverride : (sortFar ? zmax : zsum * 0.25f) + bias, texId, layer, mode);
             return;
         }
         // 3x3 grid of points: corners 0..3 = (0,0) (1,0) (1,1) (0,1) in quad param space
