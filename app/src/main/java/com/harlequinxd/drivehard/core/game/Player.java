@@ -63,10 +63,13 @@ public final class Player {
 
         // --- move & collide
         boolean wasGround = onGround;
+        float px = x, pz = z;
         x += vx * dt;
         collideHorizontal(world, true);
+        if (world.blocked(x, z)) { x = px; vx = 0f; }
         z += vz * dt;
         collideHorizontal(world, false);
+        if (world.blocked(x, z)) { z = pz; vz = 0f; }
         x = Math.max(world.minX + RADIUS, Math.min(world.maxX - RADIUS, x));
         z = Math.max(world.minZ + RADIUS, Math.min(world.maxZ - RADIUS, z));
 
@@ -86,7 +89,7 @@ public final class Player {
             y = floor;
             vy = 0f;
             onGround = true;
-        } else if (wasGround && vy <= 0f && y - floor < STEP && y > floor) {
+        } else if (wasGround && vy <= 0f && y - floor < STEP + (float) Math.sqrt(vx * vx + vz * vz) * dt * 0.6f && y > floor) {
             // stick to the ground when walking down small steps
             y = floor;
             vy = 0f;

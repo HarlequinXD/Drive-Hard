@@ -13,6 +13,8 @@ public final class Part {
     public final float shine;    // 0..1 specular amount
     /** True for feet/shoes: used to ground grounded poses. */
     public final boolean isFoot;
+    /** Unlit (light bulbs, signal lamps). */
+    public boolean emissive;
 
     public Part(int bone, float[] pos, float[] nrm, int[] tris, int[] colors, float shine, boolean isFoot) {
         this.bone = bone;

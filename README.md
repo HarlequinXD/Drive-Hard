@@ -4,23 +4,32 @@ Open-world 2.5D action/driving game for Android phones (Driver 3-style), set in 
 generated Miami-like city with a PS1 low-poly look. Written in plain Java + OpenGL ES 2.0, no engine.
 
 ## Current state
-- **Software renderer, PS1 style (no OpenGL).** Everything is rasterised on the CPU into a
-  ~240p framebuffer and scaled up with nearest-neighbour. No z-buffer: polygons are depth-sorted
-  with a PlayStation-style **ordering table** (4096 depth buckets per draw layer). Draw layers
-  (road → road markings → raised sidewalks/curbs → shadows → objects) plus per-polygon bias
-  remove the usual z-fighting; sprites sort by an upright mid-height point. Vertex snapping,
-  affine texture mapping, 15-bit colour with 4x4 ordered dither, fog, near-plane clipping,
-  near-camera subdivision, chunk frustum culling, multi-threaded band rasterisation.
-- **Procedural Miami city.** Street grid with palm-lined avenues and planted medians,
-  crosswalks, lane markings, raised sidewalks with curbs, lots with art-deco low-rises,
-  apartments, beach hotels, downtown office towers on podiums, parking garages (open concrete
-  decks), warehouses, parks, plazas, parking lots, street lights, a beachfront promenade, sand,
-  umbrellas, lifeguard huts and ocean.
-- **~390 generated textures:** 64x64 base materials (2 m tiles), 232 facades in 8 styles
-  (deco, residential, hotel, office glass, commercial/brick, garage, industrial, blank concrete
-  walls) and 120 shopfronts whose signs carry generated, made-up business names.
-- **Player:** procedural 3D model baked to 8-direction sprites (idle/walk/run/jump), orbit
-  camera, camera-relative touch controls, jump, curb step-up, collision against the city.
+- **Software renderer, PS1 style (no OpenGL, no z-buffer).** CPU rasteriser into a ~240p
+  framebuffer, scaled up with nearest-neighbour. Depth uses a PlayStation-style **ordering
+  table** (4096 depth buckets) per draw layer: water → ground/roads → road markings & paths →
+  raised sidewalks/curbs → shadows → objects, plus per-polygon bias. Vertex snapping, affine
+  texturing, 15-bit dithered colour, fog, near-plane clipping, PS1-style draw distances
+  (polygons 120 m, small detail 55 m, sprites 105 m, umbrellas 60 m), near-camera subdivision,
+  crack sealing, multi-threaded band rasterisation.
+- **Culling:** per-chunk and per-batch (each building is its own batch) frustum culling,
+  per-polygon backface/distance culling, per-sprite frustum culling, and terrain occlusion
+  culling (buildings and sprites hidden behind hills are skipped via heightfield ray tests).
+- **Streaming island.** The world is a procedural island generated in 64 m chunks on a
+  background thread around the player and unloaded when far away (~45 chunks in memory).
+  Terrain heightfield: gently rolling city plateau, hills up to ~40 m around it, beaches all
+  around the coast, the Ocean Drive beach on the east, open sea.
+- **City:** street grid following the terrain, palm-lined avenues with medians, crosswalks,
+  stop lines, curbs, sidewalks, art-deco / residential / hotel / office / commercial / garage /
+  industrial buildings with foundations on slopes, parks, plazas, parking lots, beach
+  promenade, lifeguard huts. ~390 generated textures incl. 120 shopfronts with invented names.
+- **8-direction sprites** baked from procedural 3D models: the player (idle/walk/run/jump),
+  palm trees (3 variants), street lamps, traffic signals (green/yellow/red frames) and beach
+  umbrellas (4 colours).
+- **Traffic signals:** every intersection has a working controller (N-S green → yellow →
+  all-red → E-W green → yellow → all-red, offset for a green wave); mast-arm signals show the
+  live state. `TrafficLights.state(...)` / `timeToChange(...)` are ready for cars.
+- **Player:** camera-relative touch controls, walk/run/jump, curb step-up, slope following,
+  collision with buildings and props, stops at the water's edge; camera collision.
 
 ## Layout
 ```
@@ -28,14 +37,15 @@ app/src/main/java/com/harlequinxd/drivehard/
   core/        pure Java (no Android) — runs on desktop too
     Game.java  world + player + camera + renderer
     render/    SoftRenderer (ordering table rasteriser), Geo, Texture
-    city/      City (layout, roads, blocks, props), BuildingGen, GeoBuilder (chunks)
+    city/      City (layout + chunk generator), Terrain, ChunkManager (streaming), Chunk,
+               BuildingGen, GeoBuilder, TrafficLights
     tex/       TextureLibrary, Facades, Storefronts, ShopNames, PixelFont, Noise, Img
-    model/     CharacterSpec, CharacterModel, Animations, Pose
-    sprite/    SpriteBaker, SpriteSheet
+    model/     CharacterSpec, CharacterModel, Animations, Pose, PropModels
+    sprite/    SpriteBaker, SpriteSheet, PropSprites
     game/      Player, OrbitCamera, World (grid-indexed collision), Box
   GameView     SurfaceView loop: game thread, framebuffer -> Bitmap -> screen, touch HUD
   input/       TouchControls
-tools/         RenderShot (desktop screenshots + timing), TexPreview, BakePreview, SimTest
+tools/         RenderShot (desktop screenshots + timing), TexPreview, PropPreview, BakePreview, SimTest
 ```
 
 ## Building

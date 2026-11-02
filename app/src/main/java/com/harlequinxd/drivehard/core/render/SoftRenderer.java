@@ -19,7 +19,7 @@ import java.util.Arrays;
  * </ul>
  */
 public final class SoftRenderer {
-    public static final int L_GROUND = 0, L_DECAL = 1, L_RAISED = 2, L_SHADOW = 3, L_OBJECT = 4, LAYERS = 5;
+    public static final int L_WATER = 0, L_GROUND = 1, L_DECAL = 2, L_RAISED = 3, L_SHADOW = 4, L_OBJECT = 5, LAYERS = 6;
     public static final int MODE_OPAQUE = 0, MODE_ALPHA = 1, MODE_SHADOW = 2;
     private static final int BUCKETS = 4096;
     private static final float BUCKET_SCALE = 24f;     // buckets per metre (~170 m range)
@@ -34,8 +34,9 @@ public final class SoftRenderer {
     public float ex, ey, ez;
     private float rx, ry, rz, ux, uy, uz, fx, fy, fz;
     private float focal, cx, cy, tanX, tanY;
-    public float near = 0.2f, far = 130f;
-    public float fogStart = 40f, fogEnd = 125f;
+    /** PS1-style draw distances: polygons beyond {@code far} are dropped, small detail earlier. */
+    public float near = 0.2f, far = 120f, detailDist = 55f;
+    public float fogStart = 45f, fogEnd = 116f;
     private int fogR = 170, fogG = 205, fogB = 230;
     private int zenR = 58, zenG = 120, zenB = 200;
     private int groundR = 92, groundG = 92, groundB = 94;
@@ -113,7 +114,7 @@ public final class SoftRenderer {
                 r = (int) (fogR + (zenR - fogR) * t); g = (int) (fogG + (zenG - fogG) * t); b = (int) (fogB + (zenB - fogB) * t);
             } else {
                 // below the horizon: a ground tone, so hairline cracks between polygons don't flash sky
-                float t = Math.min(1f, -elev * 5f);
+                float t = Math.max(0f, Math.min(1f, (-elev - 0.1f) * 4f));
                 r = (int) (fogR + (groundR - fogR) * t); g = (int) (fogG + (groundG - fogG) * t); b = (int) (fogB + (groundB - fogB) * t);
             }
             int row = y * W;
@@ -216,7 +217,7 @@ public final class SoftRenderer {
     /** Submits every visible polygon of a static geometry chunk. */
     public void drawGeo(Geo g) {
         if (g.count == 0 || !boxVisible(g.minX, g.minY, g.minZ, g.maxX, g.maxY, g.maxZ)) return;
-        float far2 = far * far;
+        float far2 = far * far, detail2 = detailDist * detailDist;
         for (int i = 0; i < g.count; i++) {
             int o = i * 12;
             float p0x = g.pos[o], p0y = g.pos[o + 1], p0z = g.pos[o + 2];
@@ -224,7 +225,10 @@ public final class SoftRenderer {
             if ((nx != 0f || ny != 0f || nz != 0f) && nx * (ex - p0x) + ny * (ey - p0y) + nz * (ez - p0z) <= 0f) continue;
             // cheap distance reject on the first vertex (+ generous slack for big polys)
             float dx = p0x - ex, dz = p0z - ez;
-            if (dx * dx + dz * dz > far2 * 1.6f) continue;
+            float d2 = dx * dx + dz * dz;
+            if (d2 > far2 * 1.6f) continue;
+            int fl = g.flags(i);
+            if ((fl & Geo.FLAG_DETAIL) != 0 && d2 > detail2) continue;
             Texture t = textures[g.tex[i]];
             float su = t.scrollU * time;
             for (int k = 0; k < 12; k++) wp[k] = g.pos[o + k];
@@ -233,7 +237,6 @@ public final class SoftRenderer {
                 wuv[k * 2 + 1] = g.uv[i * 8 + k * 2 + 1] * t.h;
                 wl[k] = g.light[i * 4 + k];
             }
-            int fl = g.flags(i);
             submit(wp, wuv, wl, g.vertexCount(i), g.tex[i], g.layer(i),
                     (fl & Geo.FLAG_ALPHA) != 0 ? MODE_ALPHA : MODE_OPAQUE, g.bias[i], (fl & Geo.FLAG_NO_SUBDIV) == 0);
         }
@@ -450,7 +453,7 @@ public final class SoftRenderer {
 
         Texture tex = textures[ptex[p]];
         int[] tp = tex.px;
-        int wm = tex.wMask, hm = tex.hMask, ws = tex.wShift;
+        int wm = tex.wMask, hm = tex.hMask, ws = tex.wShift, hmax = tex.hMax;
         // re-base uvs near zero so fixed point never overflows on large repeating polygons
         float u0 = A[i0 + 2], u1 = A[i1 + 2], u2 = A[i2 + 2];
         float v0 = A[i0 + 3], v1 = A[i1 + 3], v2 = A[i2 + 3];
@@ -474,6 +477,8 @@ public final class SoftRenderer {
         float invL = 1f / dy2;
         float invA = dy1 > 0f ? 1f / dy1 : 0f, invB = (y2 - y1) > 0f ? 1f / (y2 - y1) : 0f;
         int mode = pmode[p];
+        // opaque spans overlap their right neighbour by a pixel: seals T-junction hairline cracks
+        int seal = mode == MODE_OPAQUE ? 1 : 0;
         int fr = fogR, fg = fogG, fbb = fogB;
         int[] out = fb;
         int width = W;
@@ -483,7 +488,7 @@ public final class SoftRenderer {
             float xa = x0 + dx2 * (yc - y0) * invL;
             float xb = yc < y1 ? x0 + dx1 * (yc - y0) * invA : x1 + (x2 - x1) * (yc - y1) * invB;
             float xl = xa < xb ? xa : xb, xr = xa < xb ? xb : xa;
-            int xs = (int) Math.ceil(xl - 0.5f), xe = (int) Math.ceil(xr - 0.5f);
+            int xs = (int) Math.ceil(xl - 0.5f), xe = (int) Math.ceil(xr - 0.5f) + seal;
             if (xs < 0) xs = 0;
             if (xe > width) xe = width;
             if (xs >= xe) continue;
@@ -496,7 +501,9 @@ public final class SoftRenderer {
             int db = (y & 3) << 2;
             if (mode == MODE_SHADOW) {
                 for (int x = xs; x < xe; x++, U += dU, V += dV) {
-                    int c = tp[(((V >> 16) & hm) << ws) | ((U >> 16) & wm)];
+                    int ty = V >> 16;
+                    ty = ty < 0 ? 0 : (ty > hmax ? hmax : ty);
+                    int c = tp[(ty << ws) | ((U >> 16) & wm)];
                     if ((c >>> 24) > (BAYER[db | (x & 3)] << 4) + 8) {
                         int d = out[row + x];
                         out[row + x] = 0xFF000000 | ((((d >> 16) & 255) * 9 >> 4) << 16)
@@ -507,8 +514,15 @@ public final class SoftRenderer {
             }
             boolean alpha = mode == MODE_ALPHA;
             for (int x = xs; x < xe; x++, U += dU, V += dV, L += dL, F += dF) {
-                int c = tp[(((V >> 16) & hm) << ws) | ((U >> 16) & wm)];
-                if (alpha && (c >>> 24) < 128) continue;
+                int c;
+                if (alpha) {   // sprites/foliage: clamp v (atlases may be non power-of-two tall)
+                    int ty = V >> 16;
+                    ty = ty < 0 ? 0 : (ty > hmax ? hmax : ty);
+                    c = tp[(ty << ws) | ((U >> 16) & wm)];
+                    if ((c >>> 24) < 128) continue;
+                } else {
+                    c = tp[(((V >> 16) & hm) << ws) | ((U >> 16) & wm)];
+                }
                 int lv = L >> 8, fv = F >> 8;
                 if (lv < 0) lv = 0;
                 if (fv < 0) fv = 0; else if (fv > 256) fv = 256;

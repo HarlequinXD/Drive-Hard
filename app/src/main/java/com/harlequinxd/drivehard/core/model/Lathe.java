@@ -33,7 +33,7 @@ public final class Lathe {
     private KeepFn keepFn = null;
     private Mat4 transform = new Mat4();
     private float shine = 0f;
-    private boolean foot = false;
+    private boolean foot = false, emissive = false;
     private boolean capStart = true, capEnd = true;
 
     public Lathe sides(int n) { sides = n; return this; }
@@ -45,6 +45,7 @@ public final class Lathe {
     public Lathe transform(Mat4 m) { transform = m; return this; }
     public Lathe shine(float s) { shine = s; return this; }
     public Lathe foot() { foot = true; return this; }
+    public Lathe emissive() { emissive = true; return this; }
     public Lathe openEnds() { capStart = false; capEnd = false; return this; }
 
     public Part build(int bone) {
@@ -137,7 +138,9 @@ public final class Lathe {
             ti[i * 3] = t[0]; ti[i * 3 + 1] = t[1]; ti[i * 3 + 2] = t[2];
             tc[i] = cols.get(i);
         }
-        return new Part(bone, tp, tn, ti, tc, shine, foot);
+        Part part = new Part(bone, tp, tn, ti, tc, shine, foot);
+        part.emissive = emissive;
+        return part;
     }
 
     /** Convenience: an ellipsoid built from latitude rings. */

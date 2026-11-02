@@ -3,64 +3,61 @@ package com.harlequinxd.drivehard.core.city;
 import com.harlequinxd.drivehard.core.game.Box;
 import com.harlequinxd.drivehard.core.game.World;
 import com.harlequinxd.drivehard.core.render.Geo;
+import com.harlequinxd.drivehard.core.sprite.PropSprites;
 import com.harlequinxd.drivehard.core.tex.Facades.Kind;
+import com.harlequinxd.drivehard.core.tex.Noise;
 import com.harlequinxd.drivehard.core.tex.TextureLibrary;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Random;
 
 import static com.harlequinxd.drivehard.core.render.SoftRenderer.L_DECAL;
 import static com.harlequinxd.drivehard.core.render.SoftRenderer.L_GROUND;
 import static com.harlequinxd.drivehard.core.render.SoftRenderer.L_OBJECT;
 import static com.harlequinxd.drivehard.core.render.SoftRenderer.L_RAISED;
+import static com.harlequinxd.drivehard.core.render.SoftRenderer.L_WATER;
 
 /**
- * Procedural Miami-style city: a grid of streets and palm-lined avenues, raised sidewalks with
- * curbs, lots with art-deco low-rises, apartments, hotels, office towers, garages and
- * warehouses, parks and parking lots, and a beachfront promenade, sand and ocean on the east.
+ * Procedural Miami-style island city, generated chunk by chunk.
  *
- * +X is east (toward the ocean), +Z is south.
+ * The street grid and the terrain are cheap pure functions of the seed; {@link #generate}
+ * builds the geometry, collision boxes and sprite props of any 64 m chunk on demand, so the
+ * {@link ChunkManager} can stream the island in and out of memory.
+ *
+ * +X is east (toward the Ocean Drive beach), +Z is south.
  */
 public final class City extends World {
     public static final float CURB = 0.15f, SIDEWALK = 4f;
     public static final float FLOOR_H = 3.4f, SHOP_H = 4.6f;
 
-    private final TextureLibrary lib;
-    private final Random rnd;
-    public final GeoBuilder gb;
+    final TextureLibrary lib;
+    private final long seed;
+    public final Terrain terrain;
+    public final TrafficLights traffic;
+    public final ChunkManager chunks;
 
     public final int nbx = 9, nbz = 10;
-    public final float[] rx0 = new float[nbx + 1], rx1 = new float[nbx + 1];   // N-S roads (x ranges)
-    public final float[] rz0 = new float[nbz + 1], rz1 = new float[nbz + 1];   // E-W roads (z ranges)
+    public final float[] rx0 = new float[nbx + 1], rx1 = new float[nbx + 1];
+    public final float[] rz0 = new float[nbz + 1], rz1 = new float[nbz + 1];
     public final boolean[] avenueX = new boolean[nbx + 1], avenueZ = new boolean[nbz + 1];
     public float cityX0, cityX1, cityZ0, cityZ1;
-    public float parkX0, sandX0, waterX0;
     public float spawnX, spawnZ;
-    public int buildingCount;
 
     public City(TextureLibrary lib, long seed) {
         this.lib = lib;
-        this.rnd = new Random(seed);
-        layout();
-        float outer = 140f;
-        gb = new GeoBuilder(cityX0 - outer, cityZ0 - outer, waterX0 + 420f, cityZ1 + outer);
-        minX = cityX0 + 1f; maxX = waterX0 + 6f; minZ = cityZ0 + 1f; maxZ = cityZ1 - 1f;
-
-        roads();
-        for (int j = 0; j < nbz; j++)
-            for (int i = 0; i < nbx; i++) block(i, j);
-        beach(outer);
-        outskirts(outer);
-        buildIndex();
-
-        // spawn on the Ocean Drive sidewalk, mid-city
+        this.seed = seed;
+        layout(new Random(seed));
+        terrain = new Terrain((int) seed, cityX0, cityZ0, cityX1, cityZ1);
+        traffic = new TrafficLights(nbx + 1, (int) seed);
+        chunks = new ChunkManager(this);
+        minX = cityX0 - 700; maxX = cityX1 + 700; minZ = cityZ0 - 700; maxZ = cityZ1 + 700;
         int mj = nbz / 2;
-        spawnX = rx1[nbx] + 2f;
+        spawnX = cityX1 + 7f;
         spawnZ = (rz1[mj] + rz0[mj + 1]) * 0.5f;
     }
 
-    // ------------------------------------------------------------------ layout
-
-    private void layout() {
+    private void layout(Random rnd) {
         float x = 0;
         for (int i = 0; i <= nbx; i++) {
             avenueX[i] = i % 3 == 0 && i != nbx;
@@ -79,38 +76,231 @@ public final class City extends World {
         }
         cityX0 = rx0[0]; cityX1 = rx1[nbx];
         cityZ0 = rz0[0]; cityZ1 = rz1[nbz];
-        parkX0 = cityX1;
-        sandX0 = parkX0 + 26f;
-        waterX0 = sandX0 + 64f;
+    }
+
+    // ------------------------------------------------------------------ World (collision)
+
+    private final List<Box> nearList = new ArrayList<>();
+
+    @Override
+    public List<Box> near(float x, float z) {
+        nearList.clear();
+        int cx = ChunkManager.chunkOf(x), cz = ChunkManager.chunkOf(z);
+        for (int dz = -1; dz <= 1; dz++)
+            for (int dx = -1; dx <= 1; dx++) {
+                Chunk c = chunks.get(cx + dx, cz + dz);
+                if (c == null) continue;
+                for (Box b : c.boxes)
+                    if (x > b.minX - 1.5f && x < b.maxX + 1.5f && z > b.minZ - 1.5f && z < b.maxZ + 1.5f) nearList.add(b);
+            }
+        return nearList;
+    }
+
+    @Override
+    public float surface(float x, float z) {
+        return terrain.height(x, z) + (isRaised(x, z) ? CURB : 0f);
+    }
+
+    @Override
+    public boolean blocked(float x, float z) {
+        return terrain.height(x, z) < -0.5f;
+    }
+
+    /** Sidewalks/blocks and avenue medians sit one curb height above the road. */
+    public boolean isRaised(float x, float z) {
+        if (x <= cityX0 || x >= cityX1 || z <= cityZ0 || z >= cityZ1) return false;
+        int bi = -1, bj = -1;
+        for (int i = 0; i < nbx; i++) if (x > rx1[i] && x < rx0[i + 1]) { bi = i; break; }
+        for (int j = 0; j < nbz; j++) if (z > rz1[j] && z < rz0[j + 1]) { bj = j; break; }
+        if (bi >= 0 && bj >= 0) return true;
+        if (bi < 0 && bj >= 0) {   // on a N-S road
+            for (int i = 0; i <= nbx; i++) {
+                if (!avenueX[i]) continue;
+                float c = (rx0[i] + rx1[i]) * 0.5f;
+                if (Math.abs(x - c) <= 1.2f && z > rz1[bj] + 6f && z < rz0[bj + 1] - 6f) return true;
+            }
+        }
+        if (bj < 0 && bi >= 0) {   // on an E-W road
+            for (int j = 0; j <= nbz; j++) {
+                if (!avenueZ[j]) continue;
+                float c = (rz0[j] + rz1[j]) * 0.5f;
+                if (Math.abs(z - c) <= 1.2f && x > rx1[bi] + 6f && x < rx0[bi + 1] - 6f) return true;
+            }
+        }
+        return false;
+    }
+
+    // ------------------------------------------------------------------ chunk generation
+
+    /** Builds one chunk. Thread-safe: only reads shared immutable data. */
+    public Chunk generate(int cx, int cz) {
+        Chunk ch = new Chunk(cx, cz);
+        GeoBuilder gb = new GeoBuilder(terrain, ch);
+        float x0 = cx * ChunkManager.SIZE, z0 = cz * ChunkManager.SIZE;
+        float x1 = x0 + ChunkManager.SIZE, z1 = z0 + ChunkManager.SIZE;
+
+        gb.begin(false);
+        terrainAndWater(ch, gb, x0, z0, x1, z1);
+        roadSurfaces(gb, x0, z0, x1, z1);
+        promenadePath(gb, x0, z0, x1, z1);
+        gb.end();
+
+        for (int i = 0; i <= nbx; i++)
+            for (int j = 0; j < nbz; j++) {
+                float mx = (rx0[i] + rx1[i]) * 0.5f, mz = (rz1[j] + rz0[j + 1]) * 0.5f;
+                if (in(mx, mz, x0, z0, x1, z1)) {
+                    gb.begin(false);
+                    roadSegment(ch, gb, true, rx0[i], rx1[i], rz1[j], rz0[j + 1], avenueX[i]);
+                    gb.end();
+                }
+            }
+        for (int j = 0; j <= nbz; j++)
+            for (int i = 0; i < nbx; i++) {
+                float mx = (rx1[i] + rx0[i + 1]) * 0.5f, mz = (rz0[j] + rz1[j]) * 0.5f;
+                if (in(mx, mz, x0, z0, x1, z1)) {
+                    gb.begin(false);
+                    roadSegment(ch, gb, false, rz0[j], rz1[j], rx1[i], rx0[i + 1], avenueZ[j]);
+                    gb.end();
+                }
+            }
+        for (int j = 0; j <= nbz; j++)
+            for (int i = 0; i <= nbx; i++) {
+                float mx = (rx0[i] + rx1[i]) * 0.5f, mz = (rz0[j] + rz1[j]) * 0.5f;
+                if (in(mx, mz, x0, z0, x1, z1)) signals(ch, i, j);
+            }
+        for (int j = 0; j < nbz; j++)
+            for (int i = 0; i < nbx; i++) {
+                float mx = (rx1[i] + rx0[i + 1]) * 0.5f, mz = (rz1[j] + rz0[j + 1]) * 0.5f;
+                if (in(mx, mz, x0, z0, x1, z1)) block(ch, gb, i, j);
+            }
+        gb.end();
+        ch.finish();
+        return ch;
+    }
+
+    private static boolean in(float x, float z, float x0, float z0, float x1, float z1) {
+        return x >= x0 && x < x1 && z >= z0 && z < z1;
+    }
+
+    // ------------------------------------------------------------------ terrain, water, vegetation
+
+    private void terrainAndWater(Chunk ch, GeoBuilder gb, float x0, float z0, float x1, float z1) {
+        float wl = GeoBuilder.sunLight(0, 1, 0);
+        for (float qz = z0; qz < z1; qz += 32f)
+            for (float qx = x0; qx < x1; qx += 32f) {
+                float m = Math.min(Math.min(terrain.height(qx, qz), terrain.height(qx + 32, qz)),
+                        Math.min(terrain.height(qx, qz + 32), terrain.height(qx + 32, qz + 32)));
+                m = Math.min(m, terrain.height(qx + 16, qz + 16));
+                if (m < 0.4f) gb.floor(qx, qz, qx + 32f, qz + 32f, 0f, lib.water, 4f, 4f, L_WATER, wl, 0f);
+            }
+        for (float z = z0; z < z1; z += 8f) {
+            for (float x = x0; x < x1; x += 8f) {
+                float ax = x, az = z, bx = x + 8f, bz = z + 8f;
+                boolean overlaps = bx > cityX0 && ax < cityX1 && bz > cityZ0 && az < cityZ1;
+                if (!overlaps) {
+                    terrainCell(gb, ax, az, bx, bz);
+                    vegetation(ch, gb, ax, az);
+                    continue;
+                }
+                // pieces of the cell outside the city rectangle
+                if (ax < cityX0) terrainCell(gb, ax, az, Math.min(bx, cityX0), bz);
+                if (bx > cityX1) terrainCell(gb, Math.max(ax, cityX1), az, bx, bz);
+                float mx0 = Math.max(ax, cityX0), mx1 = Math.min(bx, cityX1);
+                if (mx1 > mx0) {
+                    if (az < cityZ0) terrainCell(gb, mx0, az, mx1, Math.min(bz, cityZ0));
+                    if (bz > cityZ1) terrainCell(gb, mx0, Math.max(az, cityZ1), mx1, bz);
+                }
+            }
+        }
+    }
+
+    private void terrainCell(GeoBuilder gb, float ax, float az, float bx, float bz) {
+        if (bx - ax < 0.01f || bz - az < 0.01f) return;
+        float h0 = terrain.height(ax, az), h1 = terrain.height(bx, az), h2 = terrain.height(ax, bz), h3 = terrain.height(bx, bz);
+        float max = Math.max(Math.max(h0, h1), Math.max(h2, h3)), min = Math.min(Math.min(h0, h1), Math.min(h2, h3));
+        if (max < -0.6f) return;
+        float avg = (h0 + h1 + h2 + h3) * 0.25f;
+        float slope = (max - min) / Math.max(bx - ax, bz - az);
+        float mx = (ax + bx) * 0.5f, mz = (az + bz) * 0.5f;
+        int tex = slope > 0.6f ? lib.rock : (terrain.isSand(mx, mz, avg) ? lib.sand : (avg > 22f ? lib.hillGrass : lib.grass));
+        gb.floorT(ax, az, bx, bz, 0f, tex, 2f, 2f, L_GROUND, 0, 0f, true);
+    }
+
+    private void vegetation(Chunk ch, GeoBuilder gb, float ax, float az) {
+        int ix = (int) Math.floor(ax / 8f), iz = (int) Math.floor(az / 8f);
+        float r = Noise.rnd(ix, iz, (int) seed + 500);
+        float jx = ax + 1.5f + Noise.rnd(ix, iz, (int) seed + 501) * 5f;
+        float jz = az + 1.5f + Noise.rnd(ix, iz, (int) seed + 502) * 5f;
+        float h = terrain.height(jx, jz);
+        float slope = Math.abs(terrain.height(jx + 2, jz) - terrain.height(jx - 2, jz)) / 4f
+                + Math.abs(terrain.height(jx, jz + 2) - terrain.height(jx, jz - 2)) / 4f;
+        int variant = (int) (Noise.rnd(ix, iz, (int) seed + 503) * PropSprites.PALM_VARIANTS);
+        float yaw = Noise.rnd(ix, iz, (int) seed + 504) * 6.2832f;
+        boolean promenade = jx > cityX1 + 2f && jx < cityX1 + 26f && jz > cityZ0 && jz < cityZ1;
+        if (promenade) {
+            boolean onPath = jx > cityX1 + 9f && jx < cityX1 + 16f;
+            if (!onPath && r < 0.45f && h > 0.5f) {
+                ch.sprite(Chunk.SPRITE_PALM, variant, jx, h, jz, yaw);
+                ch.boxes.add(new Box(jx - 0.25f, h - 1, jz - 0.25f, jx + 0.25f, h + 9f, jz + 0.25f));
+            }
+            return;
+        }
+        if (h < 0.3f || slope > 0.5f) return;
+        if (terrain.isSand(jx, jz, h)) {
+            if (r < 0.08f && h > 0.5f) {
+                ch.sprite(Chunk.SPRITE_UMBRELLA, (int) (Noise.rnd(ix, iz, (int) seed + 505) * PropSprites.UMBRELLA_VARIANTS),
+                        jx, h, jz, yaw);
+                ch.boxes.add(new Box(jx - 0.12f, h - 1, jz - 0.12f, jx + 0.12f, h + 2.3f, jz + 0.12f));
+            } else if (r > 0.993f) {
+                lifeguard(ch, gb, jx, h, jz);
+            }
+            return;
+        }
+        float p = h < 7f ? 0.14f : (h < 25f ? 0.05f : 0.02f);
+        if (r < p) {
+            ch.sprite(Chunk.SPRITE_PALM, variant, jx, h, jz, yaw);
+            ch.boxes.add(new Box(jx - 0.25f, h - 1, jz - 0.25f, jx + 0.25f, h + 9f, jz + 0.25f));
+        }
+    }
+
+    private void lifeguard(Chunk ch, GeoBuilder gb, float x, float h, float z) {
+        int[] blank = lib.facades(Kind.BLANK);
+        int t = blank[(int) (Noise.rnd((int) x, (int) z, 7) * blank.length)];
+        for (int k = 0; k < 4; k++) {
+            float lx = x + ((k & 1) == 0 ? -1.1f : 1.1f), lz = z + ((k & 2) == 0 ? -1.1f : 1.1f);
+            gb.box(lx - 0.08f, h - 0.5f, lz - 0.08f, lx + 0.08f, h + 1.6f, lz + 0.08f, lib.planter, -1, 1f, 1f, L_OBJECT, 0f, 0);
+        }
+        gb.box(x - 1.4f, h + 1.6f, z - 1.4f, x + 1.4f, h + 3.8f, z + 1.4f, t, lib.roofMembrane, 0.5f, 0.45f, L_OBJECT, 0f, 0);
+        ch.boxes.add(new Box(x - 1.4f, h - 1, z - 1.4f, x + 1.4f, h + 3.8f, z + 1.4f));
+    }
+
+    private void promenadePath(GeoBuilder gb, float x0, float z0, float x1, float z1) {
+        float px0 = cityX1 + 10f, px1 = cityX1 + 15f;
+        float a = Math.max(z0, cityZ0), b = Math.min(z1, cityZ1);
+        float c0 = Math.max(x0, px0), c1 = Math.min(x1, px1);
+        if (b <= a || c1 <= c0) return;
+        gb.floorAreaT(c0, a, c1, b, 0.04f, lib.pavers, 2f, 2f, L_DECAL, 8f, 0, 0f);
     }
 
     // ------------------------------------------------------------------ roads
 
-    private void roads() {
-        float zA = cityZ0, zB = cityZ1;
-        // N-S roads (full length, they own the intersections)
-        for (int i = 0; i <= nbx; i++) {
-            roadSurface(rx0[i], zA, rx1[i], zB);
-        }
-        // E-W roads between N-S roads
-        for (int j = 0; j <= nbz; j++)
-            for (int i = 0; i < nbx; i++) roadSurface(rx1[i], rz0[j], rx0[i + 1], rz1[j]);
-
-        // markings + medians on N-S roads, per block segment
+    private void roadSurfaces(GeoBuilder gb, float x0, float z0, float x1, float z1) {
         for (int i = 0; i <= nbx; i++)
-            for (int j = 0; j < nbz; j++) roadSegment(true, rx0[i], rx1[i], rz1[j], rz0[j + 1], avenueX[i]);
-        for (int j = 0; j <= nbz; j++)
-            for (int i = 0; i < nbx; i++) roadSegment(false, rz0[j], rz1[j], rx1[i], rx0[i + 1], avenueZ[j]);
+            if (rx1[i] > x0 && rx0[i] < x1) roadCells(gb, rx0[i], cityZ0, rx1[i], cityZ1, x0, z0, x1, z1);
+        for (int j = 0; j <= nbz; j++) {
+            if (rz1[j] <= z0 || rz0[j] >= z1) continue;
+            for (int i = 0; i < nbx; i++) roadCells(gb, rx1[i], rz0[j], rx0[i + 1], rz1[j], x0, z0, x1, z1);
+        }
     }
 
-    private void roadSurface(float ax, float az, float bx, float bz) {
-        float cell = 8f;
-        for (float z = az; z < bz - 1e-3f; z += cell) {
-            float zz = Math.min(bz, z + cell);
-            for (float x = ax; x < bx - 1e-3f; x += cell) {
-                float xx = Math.min(bx, x + cell);
-                int t = rnd.nextInt(14) == 0 ? lib.asphaltPatched : lib.asphalt;
-                gb.floor(x, z, xx, zz, 0f, t, 2f, 2f, L_GROUND, GeoBuilder.sunLight(0, 1, 0), 0f);
+    private void roadCells(GeoBuilder gb, float ax, float az, float bx, float bz, float x0, float z0, float x1, float z1) {
+        for (float z = az; z < bz - 1e-3f; z += 8f) {
+            float zz = Math.min(bz, z + 8f);
+            for (float x = ax; x < bx - 1e-3f; x += 8f) {
+                float xx = Math.min(bx, x + 8f);
+                if (!in((x + xx) * 0.5f, (z + zz) * 0.5f, x0, z0, x1, z1)) continue;
+                int t = Noise.rnd((int) x, (int) z, (int) seed + 9) < 0.07f ? lib.asphaltPatched : lib.asphalt;
+                gb.floorT(x, z, xx, zz, 0f, t, 2f, 2f, L_GROUND, 0, 0f, false);
             }
         }
     }
@@ -119,84 +309,115 @@ public final class City extends World {
      * One road segment between two intersections. {@code alongZ}: road runs N-S, crossing axis is x.
      * w0..w1 = road extent across, s0..s1 = extent along.
      */
-    private void roadSegment(boolean alongZ, float w0, float w1, float s0, float s1, boolean avenue) {
+    private void roadSegment(Chunk ch, GeoBuilder gb, boolean alongZ, float w0, float w1, float s0, float s1, boolean avenue) {
         float c = (w0 + w1) * 0.5f;
-        float y = 0.02f;
         if (avenue) {
-            // raised planted median with palms
             float m0 = c - 1.2f, m1 = c + 1.2f, a = s0 + 6f, b = s1 - 6f;
             if (b > a) {
-                if (alongZ) median(m0, a, m1, b, true);
-                else median(a, m0, b, m1, false);
+                if (alongZ) median(ch, gb, m0, a, m1, b, true);
+                else median(ch, gb, a, m0, b, m1, false);
             }
-            line(alongZ, c - 1.55f, c - 1.37f, s0 + 4f, s1 - 4f, lib.paintYellow, y);
-            line(alongZ, c + 1.37f, c + 1.55f, s0 + 4f, s1 - 4f, lib.paintYellow, y);
-            dashes(alongZ, c - 5.1f, s0 + 4f, s1 - 4f, y);
-            dashes(alongZ, c + 5.1f, s0 + 4f, s1 - 4f, y);
-            line(alongZ, w0 + 1.6f, w0 + 1.78f, s0 + 4f, s1 - 4f, lib.paintWhite, y);
-            line(alongZ, w1 - 1.78f, w1 - 1.6f, s0 + 4f, s1 - 4f, lib.paintWhite, y);
+            line(gb, alongZ, c - 1.55f, c - 1.37f, s0 + 4f, s1 - 4f, lib.paintYellow);
+            line(gb, alongZ, c + 1.37f, c + 1.55f, s0 + 4f, s1 - 4f, lib.paintYellow);
+            dashes(gb, alongZ, c - 5.1f, s0 + 4f, s1 - 4f);
+            dashes(gb, alongZ, c + 5.1f, s0 + 4f, s1 - 4f);
+            line(gb, alongZ, w0 + 1.6f, w0 + 1.78f, s0 + 4f, s1 - 4f, lib.paintWhite);
+            line(gb, alongZ, w1 - 1.78f, w1 - 1.6f, s0 + 4f, s1 - 4f, lib.paintWhite);
         } else {
-            line(alongZ, c - 0.26f, c - 0.08f, s0 + 4f, s1 - 4f, lib.paintYellow, y);
-            line(alongZ, c + 0.08f, c + 0.26f, s0 + 4f, s1 - 4f, lib.paintYellow, y);
-            line(alongZ, w0 + 2.4f, w0 + 2.58f, s0 + 4f, s1 - 4f, lib.paintWhite, y);
-            line(alongZ, w1 - 2.58f, w1 - 2.4f, s0 + 4f, s1 - 4f, lib.paintWhite, y);
+            line(gb, alongZ, c - 0.26f, c - 0.08f, s0 + 4f, s1 - 4f, lib.paintYellow);
+            line(gb, alongZ, c + 0.08f, c + 0.26f, s0 + 4f, s1 - 4f, lib.paintYellow);
+            line(gb, alongZ, w0 + 2.4f, w0 + 2.58f, s0 + 4f, s1 - 4f, lib.paintWhite);
+            line(gb, alongZ, w1 - 2.58f, w1 - 2.4f, s0 + 4f, s1 - 4f, lib.paintWhite);
         }
-        // crosswalks at both ends + stop lines
         for (int end = 0; end < 2; end++) {
             float cs0 = end == 0 ? s0 + 0.6f : s1 - 3.6f;
             for (float x = w0 + 0.8f; x < w1 - 1.2f; x += 1.2f) {
                 if (avenue && x + 0.6f > c - 1.3f && x < c + 1.3f) continue;
-                line(alongZ, x, x + 0.6f, cs0, cs0 + 3f, lib.paintWhite, y);
+                line(gb, alongZ, x, x + 0.6f, cs0, cs0 + 3f, lib.paintWhite);
             }
             float sl = end == 0 ? s0 + 4.3f : s1 - 4.7f;
-            if (end == 0) line(alongZ, w0 + 0.5f, c - (avenue ? 1.5f : 0.2f), sl, sl + 0.4f, lib.paintWhite, y);
-            else line(alongZ, c + (avenue ? 1.5f : 0.2f), w1 - 0.5f, sl, sl + 0.4f, lib.paintWhite, y);
+            if (end == 0) line(gb, alongZ, w0 + 0.5f, c - (avenue ? 1.5f : 0.2f), sl, sl + 0.4f, lib.paintWhite);
+            else line(gb, alongZ, c + (avenue ? 1.5f : 0.2f), w1 - 0.5f, sl, sl + 0.4f, lib.paintWhite);
         }
     }
 
-    private void dashes(boolean alongZ, float c, float s0, float s1, float y) {
-        for (float s = s0 + 2f; s + 3f < s1; s += 9f) line(alongZ, c - 0.1f, c + 0.1f, s, s + 3f, lib.paintWhite, y);
+    private void dashes(GeoBuilder gb, boolean alongZ, float c, float s0, float s1) {
+        for (float s = s0 + 2f; s + 3f < s1; s += 9f) line(gb, alongZ, c - 0.1f, c + 0.1f, s, s + 3f, lib.paintWhite);
     }
 
-    /** Painted strip: across range a..b, along range s0..s1. */
-    private void line(boolean alongZ, float a, float b, float s0, float s1, int tex, float y) {
+    /** Painted strip following the road surface, split into 8 m pieces (detail: drops out at range). */
+    private void line(GeoBuilder gb, boolean alongZ, float a, float b, float s0, float s1, int tex) {
         if (s1 <= s0 || b <= a) return;
-        float l = GeoBuilder.sunLight(0, 1, 0);
-        if (alongZ) gb.floor(a, s0, b, s1, y, tex, 1f, 1f, L_DECAL, l, 0f);
-        else gb.floor(s0, a, s1, b, y, tex, 1f, 1f, L_DECAL, l, 0f);
+        for (float s = s0; s < s1 - 1e-3f; s += 8f) {
+            float e = Math.min(s1, s + 8f);
+            if (alongZ) gb.floorT(a, s, b, e, 0.03f, tex, 1f, 1f, L_DECAL, Geo.FLAG_DETAIL | Geo.FLAG_NO_SUBDIV, 0f, false);
+            else gb.floorT(s, a, e, b, 0.03f, tex, 1f, 1f, L_DECAL, Geo.FLAG_DETAIL | Geo.FLAG_NO_SUBDIV, 0f, false);
+        }
     }
 
-    private void median(float ax, float az, float bx, float bz, boolean alongZ) {
-        plate(ax, az, bx, bz, lib.grass, 2f);
-        boxes.add(new Box(ax, 0, az, bx, CURB, bz));
-        if (alongZ) for (float z = az + 3f; z < bz - 1f; z += 11f) palm((ax + bx) * 0.5f, z, CURB);
-        else for (float x = ax + 3f; x < bx - 1f; x += 11f) palm(x, (az + bz) * 0.5f, CURB);
+    private void median(Chunk ch, GeoBuilder gb, float ax, float az, float bx, float bz, boolean alongZ) {
+        gb.floorAreaT(ax, az, bx, bz, CURB, lib.grass, 2f, 2f, L_RAISED, 8f, 0, 0f);
+        curbs(gb, ax, az, bx, bz);
+        int k = 0;
+        if (alongZ) for (float z = az + 3f; z < bz - 1f; z += 11f) palmAt(ch, (ax + bx) * 0.5f, z, k++);
+        else for (float x = ax + 3f; x < bx - 1f; x += 11f) palmAt(ch, x, (az + bz) * 0.5f, k++);
     }
 
-    /** Raised slab top (layer RAISED) + curb faces around it. */
-    private void plate(float ax, float az, float bx, float bz, int topTex, float uvScale) {
-        gb.floorArea(ax, az, bx, bz, CURB, topTex, uvScale, uvScale, L_RAISED, 8f, 0f);
-        curbs(ax, az, bx, bz);
+    private void palmAt(Chunk ch, float x, float z, int k) {
+        float y = terrain.height(x, z) + CURB;
+        int v = (int) (Noise.rnd((int) (x * 3), (int) (z * 3), (int) seed + 33) * PropSprites.PALM_VARIANTS);
+        float yaw = Noise.rnd((int) (x * 3), (int) (z * 3), (int) seed + 34) * 6.2832f;
+        ch.sprite(Chunk.SPRITE_PALM, v, x, y, z, yaw);
+        ch.boxes.add(new Box(x - 0.25f, y - 1f, z - 0.25f, x + 0.25f, y + 9f, z + 0.25f));
     }
 
-    private void curbs(float ax, float az, float bx, float bz) {
+    /** Curb faces (bottom on the road, top at sidewalk height) around a raised rectangle. */
+    private void curbs(GeoBuilder gb, float ax, float az, float bx, float bz) {
         int t = lib.curb;
         float v = CURB / 2f;
         for (float s = ax; s < bx - 1e-3f; s += 8f) {
             float e = Math.min(bx, s + 8f);
-            gb.wall(s, bz, e, bz, 0, CURB, t, s / 2f, e / 2f, 0, v, L_RAISED, 0f, 0.85f);      // south
-            gb.wall(e, az, s, az, 0, CURB, t, e / 2f, s / 2f, 0, v, L_RAISED, 0f, 0.85f);      // north
+            curb(gb, s, bz, e, bz, t, s / 2f, e / 2f, v);
+            curb(gb, e, az, s, az, t, e / 2f, s / 2f, v);
         }
         for (float s = az; s < bz - 1e-3f; s += 8f) {
             float e = Math.min(bz, s + 8f);
-            gb.wall(bx, e, bx, s, 0, CURB, t, e / 2f, s / 2f, 0, v, L_RAISED, 0f, 0.85f);      // east
-            gb.wall(ax, s, ax, e, 0, CURB, t, s / 2f, e / 2f, 0, v, L_RAISED, 0f, 0.85f);      // west
+            curb(gb, bx, e, bx, s, t, e / 2f, s / 2f, v);
+            curb(gb, ax, s, ax, e, t, s / 2f, e / 2f, v);
+        }
+    }
+
+    private void curb(GeoBuilder gb, float ax, float az, float bx, float bz, int t, float u0, float u1, float v) {
+        float ha = terrain.height(ax, az), hb = terrain.height(bx, bz);
+        gb.wallSloped(ax, az, bx, bz, ha, hb, ha + CURB, hb + CURB, t, u0, u1, 0, v, L_RAISED, 0f, 0.85f, 0);
+    }
+
+    // ------------------------------------------------------------------ traffic signals
+
+    private void signals(Chunk ch, int i, int j) {
+        float cx = (rx0[i] + rx1[i]) * 0.5f, cz = (rz0[j] + rz1[j]) * 0.5f;
+        float hx = (rx1[i] - rx0[i]) * 0.5f, hz = (rz1[j] - rz0[j]) * 0.5f;
+        int id = traffic.id(i, j);
+        int[][] dirs = {{0, 1}, {0, -1}, {1, 0}, {-1, 0}};
+        for (int[] d : dirs) {
+            boolean ns = d[0] == 0;
+            // edge approaches that come from outside the city have no road behind them
+            if (ns && ((d[1] > 0 && j == 0) || (d[1] < 0 && j == nbz))) continue;
+            if (!ns && ((d[0] > 0 && i == 0) || (d[0] < 0 && i == nbx))) continue;
+            float along = ns ? hz : hx, across = ns ? hx : hz;
+            float rxv = -d[1], rzv = d[0];                       // right of travel
+            float px = cx - d[0] * (along + 1.3f) + rxv * (across + 1.3f);
+            float pz = cz - d[1] * (along + 1.3f) + rzv * (across + 1.3f);
+            float yaw = (float) Math.atan2(-d[0], -d[1]);         // signal faces oncoming traffic
+            float y = terrain.height(px, pz) + CURB;
+            ch.sprite(Chunk.SPRITE_SIGNAL, id * 2 + (ns ? 1 : 0), px, y, pz, yaw);
+            ch.boxes.add(new Box(px - 0.2f, y - 1f, pz - 0.2f, px + 0.2f, y + 6f, pz + 0.2f));
         }
     }
 
     // ------------------------------------------------------------------ blocks & lots
 
-    private Kind district(int i, int j) {
+    private Kind district(int i, int j, Random rnd) {
         float bx = (rx1[i] + rx0[i + 1]) * 0.5f, bz = (rz1[j] + rz0[j + 1]) * 0.5f;
         float dx = (bx - (cityX0 + (cityX1 - cityX0) * 0.36f)) / (cityX1 - cityX0);
         float dz = (bz - (cityZ0 + (cityZ1 - cityZ0) * 0.42f)) / (cityZ1 - cityZ0);
@@ -208,66 +429,82 @@ public final class City extends World {
         return rnd.nextInt(3) == 0 ? Kind.COMMERCIAL : (rnd.nextInt(3) == 0 ? Kind.DECO : Kind.RESIDENTIAL);
     }
 
-    private void block(int i, int j) {
+    private void block(Chunk ch, GeoBuilder gb, int i, int j) {
+        Random rnd = new Random(seed * 1000003L + i * 7919L + j * 104729L);
         float bx0 = rx1[i], bx1 = rx0[i + 1], bz0 = rz1[j], bz1 = rz0[j + 1];
-        boxes.add(new Box(bx0, 0, bz0, bx1, CURB, bz1));
-        curbs(bx0, bz0, bx1, bz1);
-        // sidewalk ring
         float s = SIDEWALK;
+        gb.begin(false);
+        curbs(gb, bx0, bz0, bx1, bz1);
         int sw = lib.sidewalk;
-        gb.floorArea(bx0, bz0, bx1, bz0 + s, CURB, sw, 2f, 2f, L_RAISED, 8f, 0f);
-        gb.floorArea(bx0, bz1 - s, bx1, bz1, CURB, sw, 2f, 2f, L_RAISED, 8f, 0f);
-        gb.floorArea(bx0, bz0 + s, bx0 + s, bz1 - s, CURB, sw, 2f, 2f, L_RAISED, 8f, 0f);
-        gb.floorArea(bx1 - s, bz0 + s, bx1, bz1 - s, CURB, sw, 2f, 2f, L_RAISED, 8f, 0f);
+        gb.floorAreaT(bx0, bz0, bx1, bz0 + s, CURB, sw, 2f, 2f, L_RAISED, 8f, 0, 0f);
+        gb.floorAreaT(bx0, bz1 - s, bx1, bz1, CURB, sw, 2f, 2f, L_RAISED, 8f, 0, 0f);
+        gb.floorAreaT(bx0, bz0 + s, bx0 + s, bz1 - s, CURB, sw, 2f, 2f, L_RAISED, 8f, 0, 0f);
+        gb.floorAreaT(bx1 - s, bz0 + s, bx1, bz1 - s, CURB, sw, 2f, 2f, L_RAISED, 8f, 0, 0f);
 
-        Kind dist = district(i, j);
+        Kind dist = district(i, j, rnd);
         boolean palmStreet = dist == Kind.DECO || dist == Kind.HOTEL || rnd.nextInt(3) == 0;
-        streetFurniture(bx0, bz0, bx1, bz1, palmStreet);
+        streetFurniture(ch, bx0, bz0, bx1, bz1, palmStreet);
 
         float ix0 = bx0 + s, ix1 = bx1 - s, iz0 = bz0 + s, iz1 = bz1 - s;
         float depth = iz1 - iz0;
         boolean twoRows = depth >= 36f;
         float zMid = twoRows ? iz0 + Math.round(depth * (0.42f + rnd.nextFloat() * 0.16f)) : iz1;
-        lotRow(ix0, iz0, ix1, zMid, true, !twoRows, dist);
-        if (twoRows) lotRow(ix0, zMid, ix1, iz1, false, true, dist);
+        Ctx c = new Ctx(ch, gb, rnd);
+        lotRow(c, ix0, iz0, ix1, zMid, true, !twoRows, dist);
+        if (twoRows) lotRow(c, ix0, zMid, ix1, iz1, false, true, dist);
+        gb.end();
     }
 
-    private void streetFurniture(float bx0, float bz0, float bx1, float bz1, boolean palms) {
+    private static final class Ctx {
+        final Chunk ch;
+        final GeoBuilder gb;
+        final Random rnd;
+        Ctx(Chunk ch, GeoBuilder gb, Random rnd) { this.ch = ch; this.gb = gb; this.rnd = rnd; }
+    }
+
+    private void streetFurniture(Chunk ch, float bx0, float bz0, float bx1, float bz1, boolean palms) {
         float in = 1.0f;
         float step = palms ? 12f : 26f;
         for (int side = 0; side < 4; side++) {
-            float a, b;
             boolean horiz = side < 2;
-            if (horiz) { a = bx0 + 7f; b = bx1 - 7f; } else { a = bz0 + 7f; b = bz1 - 7f; }
+            float a = horiz ? bx0 + 7f : bz0 + 7f, b = horiz ? bx1 - 7f : bz1 - 7f;
             int k = 0;
             for (float t = a; t <= b; t += step, k++) {
-                float x, z;
-                if (side == 0) { x = t; z = bz0 + in; }
-                else if (side == 1) { x = t; z = bz1 - in; }
-                else if (side == 2) { x = bx0 + in; z = t; }
-                else { x = bx1 - in; z = t; }
-                if (palms) palm(x, z, CURB);
-                else if ((k & 1) == 0) streetLight(x, z, side);
+                float x, z, yaw;
+                if (side == 0) { x = t; z = bz0 + in; yaw = (float) Math.PI; }
+                else if (side == 1) { x = t; z = bz1 - in; yaw = 0f; }
+                else if (side == 2) { x = bx0 + in; z = t; yaw = (float) (-Math.PI / 2); }
+                else { x = bx1 - in; z = t; yaw = (float) (Math.PI / 2); }
+                if (palms) palmAt(ch, x, z, k);
+                else if ((k & 1) == 0) lampAt(ch, x, z, yaw);
             }
         }
     }
 
-    private void lotRow(float x0, float z0, float x1, float z1, boolean facesNorth, boolean facesSouth, Kind dist) {
+    void lampAt(Chunk ch, float x, float z, float yaw) {
+        float y = terrain.height(x, z) + CURB;
+        ch.sprite(Chunk.SPRITE_LAMP, 0, x, y, z, yaw);
+        ch.boxes.add(new Box(x - 0.12f, y - 1f, z - 0.12f, x + 0.12f, y + 7f, z + 0.12f));
+    }
+
+    private void lotRow(Ctx c, float x0, float z0, float x1, float z1, boolean facesNorth, boolean facesSouth, Kind dist) {
         float x = x0;
         while (x < x1 - 0.5f) {
-            float w = 14f + 2f * rnd.nextInt(10);
+            float w = 14f + 2f * c.rnd.nextInt(10);
             if (dist == Kind.OFFICE) w += 14f;
             if (x1 - (x + w) < 12f) w = x1 - x;
             float lx1 = Math.min(x1, x + w);
-            lot(x, z0, lx1, z1, facesNorth, facesSouth, x <= x0 + 0.1f, lx1 >= x1 - 0.1f, dist);
+            lot(c, x, z0, lx1, z1, facesNorth, facesSouth, x <= x0 + 0.1f, lx1 >= x1 - 0.1f, dist);
             x = lx1;
         }
     }
 
-    private void lot(float x0, float z0, float x1, float z1, boolean fN, boolean fS, boolean fW, boolean fE, Kind dist) {
+    private void lot(Ctx c, float x0, float z0, float x1, float z1, boolean fN, boolean fS, boolean fW, boolean fE, Kind dist) {
+        Random rnd = c.rnd;
+        GeoBuilder gb = c.gb;
         int use = rnd.nextInt(100);
-        if (use < 6) { parkingLot(x0, z0, x1, z1); return; }
-        if (use < 11) { garden(x0, z0, x1, z1, rnd.nextBoolean()); return; }
+        if (use < 6) { parkingLot(c, x0, z0, x1, z1); return; }
+        if (use < 11) { garden(c, x0, z0, x1, z1, rnd.nextBoolean()); return; }
 
         Kind kind = dist;
         if (kind == Kind.OFFICE && rnd.nextInt(4) == 0) kind = rnd.nextBoolean() ? Kind.GARAGE : Kind.HOTEL;
@@ -278,188 +515,48 @@ public final class City extends World {
         float sideGap = (kind == Kind.RESIDENTIAL || kind == Kind.HOTEL || kind == Kind.OFFICE) ? 1f + rnd.nextInt(3) : 0f;
         float fx0 = x0 + (fW ? 0 : sideGap * 0.5f), fx1 = x1 - (fE ? 0 : sideGap * 0.5f);
         float fz0 = z0 + (fN ? front : 1f), fz1 = z1 - (fS ? front : 1f);
-        if (fx1 - fx0 < 6f || fz1 - fz0 < 6f) { garden(x0, z0, x1, z1, false); return; }
+        if (fx1 - fx0 < 6f || fz1 - fz0 < 6f) { garden(c, x0, z0, x1, z1, false); return; }
 
-        // ground around the footprint (setbacks)
         int lotTex = kind == Kind.RESIDENTIAL || kind == Kind.HOTEL ? lib.grass : lib.concrete;
-        if (fz0 > z0 + 0.01f) gb.floorArea(x0, z0, x1, fz0, CURB, lotTex, 2f, 2f, L_RAISED, 8f, 0f);
-        if (fz1 < z1 - 0.01f) gb.floorArea(x0, fz1, x1, z1, CURB, lotTex, 2f, 2f, L_RAISED, 8f, 0f);
-        if (fx0 > x0 + 0.01f) gb.floorArea(x0, fz0, fx0, fz1, CURB, lotTex, 2f, 2f, L_RAISED, 8f, 0f);
-        if (fx1 < x1 - 0.01f) gb.floorArea(fx1, fz0, x1, fz1, CURB, lotTex, 2f, 2f, L_RAISED, 8f, 0f);
+        if (fz0 > z0 + 0.01f) gb.floorAreaT(x0, z0, x1, fz0, CURB, lotTex, 2f, 2f, L_RAISED, 8f, 0, 0f);
+        if (fz1 < z1 - 0.01f) gb.floorAreaT(x0, fz1, x1, z1, CURB, lotTex, 2f, 2f, L_RAISED, 8f, 0, 0f);
+        if (fx0 > x0 + 0.01f) gb.floorAreaT(x0, fz0, fx0, fz1, CURB, lotTex, 2f, 2f, L_RAISED, 8f, 0, 0f);
+        if (fx1 < x1 - 0.01f) gb.floorAreaT(fx1, fz0, x1, fz1, CURB, lotTex, 2f, 2f, L_RAISED, 8f, 0, 0f);
         if (front >= 2f && lotTex == lib.grass) {
-            if (fN) hedge(fx0, z0 + 0.4f, fx1, z0 + 1.2f);
-            if (fS) hedge(fx0, z1 - 1.2f, fx1, z1 - 0.4f);
+            if (fN) hedge(c, fx0, z0 + 0.4f, fx1, z0 + 1.2f);
+            if (fS) hedge(c, fx0, z1 - 1.2f, fx1, z1 - 0.4f);
         }
-
-        new BuildingGen(this, lib, gb, rnd).build(kind, fx0, fz0, fx1, fz1, CURB,
+        new BuildingGen(this, lib, gb, rnd, c.ch).build(kind, fx0, fz0, fx1, fz1,
                 fN && front < 0.5f, fS && front < 0.5f, fW, fE, fN, fS);
-        buildingCount++;
     }
 
-    private void parkingLot(float x0, float z0, float x1, float z1) {
-        gb.floorArea(x0, z0, x1, z1, CURB, lib.parking, 2.5f, 5f, L_RAISED, 8f, 0f);
-        for (float x = x0 + 2f; x < x1 - 1f; x += 10f) streetLight(x, (z0 + z1) * 0.5f, 0);
+    private void parkingLot(Ctx c, float x0, float z0, float x1, float z1) {
+        c.gb.floorAreaT(x0, z0, x1, z1, CURB, lib.parking, 2.5f, 5f, L_RAISED, 8f, 0, 0f);
+        for (float x = x0 + 2f; x < x1 - 1f; x += 10f) lampAt(c.ch, x, (z0 + z1) * 0.5f, 0f);
     }
 
-    private void garden(float x0, float z0, float x1, float z1, boolean plaza) {
-        gb.floorArea(x0, z0, x1, z1, CURB, plaza ? lib.pavers : lib.grass, 2f, 2f, L_RAISED, 8f, 0f);
-        for (float z = z0 + 3f; z < z1 - 2f; z += 7f + rnd.nextInt(4))
-            for (float x = x0 + 3f; x < x1 - 2f; x += 7f + rnd.nextInt(4)) {
-                if (plaza) {
-                    planter(x, z);
-                } else if (rnd.nextInt(3) > 0) palm(x + rnd.nextFloat() * 2f, z + rnd.nextFloat() * 2f, CURB);
-                else hedge(x - 1f, z - 0.6f, x + 1.5f, z + 0.6f);
+    private void garden(Ctx c, float x0, float z0, float x1, float z1, boolean plaza) {
+        c.gb.floorAreaT(x0, z0, x1, z1, CURB, plaza ? lib.pavers : lib.grass, 2f, 2f, L_RAISED, 8f, 0, 0f);
+        int k = 0;
+        for (float z = z0 + 3f; z < z1 - 2f; z += 7f + c.rnd.nextInt(4))
+            for (float x = x0 + 3f; x < x1 - 2f; x += 7f + c.rnd.nextInt(4)) {
+                if (plaza) planter(c, x, z, k++);
+                else if (c.rnd.nextInt(3) > 0) palmAt(c.ch, x + c.rnd.nextFloat() * 2f, z + c.rnd.nextFloat() * 2f, k++);
+                else hedge(c, x - 1f, z - 0.6f, x + 1.5f, z + 0.6f);
             }
     }
 
-    // ------------------------------------------------------------------ props
-
-    void palm(float x, float z, float baseY) {
-        float h = 7f + rnd.nextFloat() * 4f;
-        float lean = 0.3f + rnd.nextFloat() * 0.9f, dir = rnd.nextFloat() * 6.283f;
-        float lx = (float) Math.sin(dir) * lean, lz = (float) Math.cos(dir) * lean;
-        int segs = 3, sides = 5;
-        float[] p = new float[12], t = new float[8], l = new float[4];
-        for (int s = 0; s < segs; s++) {
-            float t0 = s / (float) segs, t1 = (s + 1) / (float) segs;
-            float y0 = baseY + h * t0, y1 = baseY + h * t1;
-            float o0 = t0 * t0, o1 = t1 * t1;
-            float r0 = 0.22f - 0.07f * t0, r1 = 0.22f - 0.07f * t1;
-            for (int k = 0; k < sides; k++) {
-                double a0 = Math.PI * 2 * k / sides, a1 = Math.PI * 2 * (k + 1) / sides;
-                float c0 = (float) Math.cos(a0), s0 = (float) Math.sin(a0), c1 = (float) Math.cos(a1), s1 = (float) Math.sin(a1);
-                p[0] = x + lx * o0 + s0 * r0; p[1] = y0; p[2] = z + lz * o0 + c0 * r0;
-                p[3] = x + lx * o0 + s1 * r0; p[4] = y0; p[5] = z + lz * o0 + c1 * r0;
-                p[6] = x + lx * o1 + s1 * r1; p[7] = y1; p[8] = z + lz * o1 + c1 * r1;
-                p[9] = x + lx * o1 + s0 * r1; p[10] = y1; p[11] = z + lz * o1 + c0 * r1;
-                float u0 = k / (float) sides, u1 = (k + 1) / (float) sides;
-                t[0] = u0; t[1] = (1 - t0) * 3; t[2] = u1; t[3] = (1 - t0) * 3; t[4] = u1; t[5] = (1 - t1) * 3; t[6] = u0; t[7] = (1 - t1) * 3;
-                float nx = (float) Math.sin((a0 + a1) / 2), nz = (float) Math.cos((a0 + a1) / 2);
-                float lt = GeoBuilder.sunLight(nx, 0, nz);
-                l[0] = l[1] = l[2] = l[3] = lt;
-                gb.quad(p, t, l, lib.trunk, L_OBJECT, Geo.FLAG_NO_SUBDIV, 0f, false);
-            }
-        }
-        // crown
-        float cx = x + lx, cz = z + lz, cy = baseY + h;
-        int fronds = 7;
-        float rot = rnd.nextFloat() * 6.283f;
-        for (int f = 0; f < fronds; f++) {
-            float a = rot + 6.283f * f / fronds;
-            float dx = (float) Math.sin(a), dz = (float) Math.cos(a);
-            float px = -dz, pz = dx;                  // perpendicular
-            float len = 2.6f + rnd.nextFloat() * 0.8f, wdt = 0.55f;
-            float rise = 0.6f + rnd.nextFloat() * 0.4f, droop = -1.6f - rnd.nextFloat() * 0.8f;
-            // inner piece: crown -> mid (rising), outer: mid -> tip (drooping)
-            float mx = cx + dx * len * 0.5f, my = cy + rise, mz = cz + dz * len * 0.5f;
-            float ex = cx + dx * len, ey = cy + rise + droop, ez = cz + dz * len;
-            frondQuad(cx, cy, cz, mx, my, mz, px, pz, wdt * 0.7f, wdt, 0f, 0.5f);
-            frondQuad(mx, my, mz, ex, ey, ez, px, pz, wdt, wdt * 0.5f, 0.5f, 1f);
-        }
-        boxes.add(new Box(x - 0.25f, 0, z - 0.25f, x + 0.25f, baseY + h, z + 0.25f));
+    private void hedge(Ctx c, float x0, float z0, float x1, float z1) {
+        float y = terrain.height((x0 + x1) * 0.5f, (z0 + z1) * 0.5f) + CURB;
+        c.gb.box(x0, y - 0.2f, z0, x1, y + 1.0f, z1, lib.hedge, lib.hedge, 0.5f, 0.5f, L_OBJECT, 0f, 0);
+        c.ch.boxes.add(new Box(x0, y - 1f, z0, x1, y + 1.0f, z1));
     }
 
-    private void frondQuad(float ax, float ay, float az, float bx, float by, float bz, float px, float pz,
-                           float wa, float wb, float u0, float u1) {
-        float[] p = {
-                ax - px * wa, ay, az - pz * wa,
-                bx - px * wb, by, bz - pz * wb,
-                bx + px * wb, by, bz + pz * wb,
-                ax + px * wa, ay, az + pz * wa};
-        float[] t = {u0, 0f, u1, 0f, u1, 1f, u0, 1f};
-        gb.foliage(p, t, lib.frond, 0.95f);
-    }
-
-    void streetLight(float x, float z, int side) {
-        float h = 7f, w = 0.09f;
-        gb.box(x - w, CURB, z - w, x + w, CURB + h, z + w, lib.pole, -1, 1f, 1f, L_OBJECT, 0f);
-        // arm reaching toward the road
-        float dx = 0, dz = 0;
-        if (side == 0) dz = -1; else if (side == 1) dz = 1; else if (side == 2) dx = -1; else dx = 1;
-        float ex = x + dx * 2.2f, ez = z + dz * 2.2f;
-        float ax0 = Math.min(x, ex) - 0.06f, ax1 = Math.max(x, ex) + 0.06f, az0 = Math.min(z, ez) - 0.06f, az1 = Math.max(z, ez) + 0.06f;
-        gb.box(ax0, CURB + h - 0.12f, az0, ax1, CURB + h, az1, lib.pole, lib.pole, 1f, 1f, L_OBJECT, -0.1f);
-        gb.box(ex - 0.3f, CURB + h - 0.3f, ez - 0.3f, ex + 0.3f, CURB + h - 0.1f, ez + 0.3f, lib.lampHead, lib.pole, 1f, 1f, L_OBJECT, -0.2f);
-        boxes.add(new Box(x - 0.12f, 0, z - 0.12f, x + 0.12f, CURB + h, z + 0.12f));
-    }
-
-    void hedge(float x0, float z0, float x1, float z1) {
-        gb.box(x0, CURB, z0, x1, CURB + 1.0f, z1, lib.hedge, lib.hedge, 0.5f, 0.5f, L_OBJECT, 0f);
-        boxes.add(new Box(x0, 0, z0, x1, CURB + 1.0f, z1));
-    }
-
-    void planter(float x, float z) {
-        gb.box(x - 1f, CURB, z - 1f, x + 1f, CURB + 0.6f, z + 1f, lib.planter, lib.hedge, 0.5f, 0.5f, L_OBJECT, 0f);
-        boxes.add(new Box(x - 1f, 0, z - 1f, x + 1f, CURB + 0.6f, z + 1f));
-        palm(x, z, CURB + 0.6f);
-    }
-
-    // ------------------------------------------------------------------ beach & surroundings
-
-    private void beach(float outer) {
-        // promenade park strip
-        float px0 = parkX0, px1 = sandX0;
-        gb.floorArea(px0, cityZ0, px1, cityZ1, CURB, lib.grass, 2f, 2f, L_RAISED, 8f, 0f);
-        gb.floorArea(px0 + 10f, cityZ0, px0 + 15f, cityZ1, CURB + 0.01f, lib.pavers, 2f, 2f, L_RAISED, 8f, -0.05f);
-        curbs(px0, cityZ0, px1, cityZ1);
-        boxes.add(new Box(px0, 0, cityZ0, px1, CURB, cityZ1));
-        for (float z = cityZ0 + 4f; z < cityZ1 - 2f; z += 9f + rnd.nextInt(5)) {
-            palm(px0 + 4f + rnd.nextFloat() * 4f, z, CURB);
-            if (rnd.nextBoolean()) palm(px0 + 18f + rnd.nextFloat() * 5f, z + 3f, CURB);
-        }
-        // sand
-        gb.floorArea(sandX0, cityZ0 - outer, waterX0, cityZ1 + outer, 0f, lib.sand, 2f, 2f, L_GROUND, 8f, 0f);
-        // umbrellas and lifeguard huts
-        for (float z = cityZ0 + 10f; z < cityZ1 - 10f; z += 14f + rnd.nextInt(10)) {
-            if (rnd.nextInt(5) == 0) lifeguard(sandX0 + 40f, z);
-            else umbrella(sandX0 + 20f + rnd.nextFloat() * 30f, z);
-        }
-        // ocean
-        float l = GeoBuilder.sunLight(0, 1, 0);
-        for (float z = cityZ0 - outer; z < cityZ1 + outer; z += 32f)
-            for (float x = waterX0; x < waterX0 + 420f; x += 32f)
-                gb.floor(x, z, x + 32f, z + 32f, -0.05f, lib.water, 4f, 4f, L_GROUND, l, 0f);
-    }
-
-    private void umbrella(float x, float z) {
-        gb.box(x - 0.04f, 0, z - 0.04f, x + 0.04f, 2.2f, z + 0.04f, lib.pole, -1, 1f, 1f, L_OBJECT, 0f);
-        int n = 6;
-        float r = 1.3f, top = 2.5f, rim = 2.0f;
-        for (int k = 0; k < n; k++) {
-            double a0 = Math.PI * 2 * k / n, a1 = Math.PI * 2 * (k + 1) / n;
-            float[] p = {x, top, z,
-                    x + (float) Math.sin(a0) * r, rim, z + (float) Math.cos(a0) * r,
-                    x + (float) Math.sin(a1) * r, rim, z + (float) Math.cos(a1) * r};
-            float[] t = {0.5f, 0f, 0f, 1f, 1f, 1f};
-            float[] l = {1f, 0.85f, 0.85f};
-            gb.quad3(p, t, l, lib.umbrella, L_OBJECT);
-        }
-        boxes.add(new Box(x - 0.1f, 0, z - 0.1f, x + 0.1f, 2.2f, z + 0.1f));
-    }
-
-    private void lifeguard(float x, float z) {
-        int[] deco = lib.facades(Kind.BLANK);
-        int t = deco[rnd.nextInt(deco.length)];
-        for (int k = 0; k < 4; k++) {
-            float lx = x + ((k & 1) == 0 ? -1.1f : 1.1f), lz = z + ((k & 2) == 0 ? -1.1f : 1.1f);
-            gb.box(lx - 0.08f, 0, lz - 0.08f, lx + 0.08f, 1.6f, lz + 0.08f, lib.planter, -1, 1f, 1f, L_OBJECT, 0f);
-        }
-        gb.box(x - 1.4f, 1.6f, z - 1.4f, x + 1.4f, 3.8f, z + 1.4f, t, lib.roofMembrane, 0.5f, 0.45f, L_OBJECT, 0f);
-        boxes.add(new Box(x - 1.4f, 0, z - 1.4f, x + 1.4f, 3.8f, z + 1.4f));
-    }
-
-    private void outskirts(float outer) {
-        // flat lots beyond the playable grid so the fog has something to fade into
-        float x0 = cityX0 - outer, z0 = cityZ0 - outer, z1 = cityZ1 + outer;
-        float l = GeoBuilder.sunLight(0, 1, 0);
-        for (float z = z0; z < z1; z += 16f)
-            for (float x = x0; x < sandX0; x += 16f) {
-                boolean inside = x >= cityX0 && x + 16f <= sandX0 && z >= cityZ0 && z + 16f <= cityZ1;
-                if (inside) continue;
-                boolean overlaps = x + 16f > cityX0 && x < sandX0 && z + 16f > cityZ0 && z < cityZ1;
-                if (overlaps) continue;
-                gb.floor(x, z, x + 16f, z + 16f, 0f, ((int) (x / 16) + (int) (z / 16)) % 5 == 0 ? lib.concrete : lib.grass,
-                        2f, 2f, L_GROUND, l, 0f);
-            }
+    private void planter(Ctx c, float x, float z, int k) {
+        float y = terrain.height(x, z) + CURB;
+        c.gb.box(x - 1f, y - 0.2f, z - 1f, x + 1f, y + 0.6f, z + 1f, lib.planter, lib.hedge, 0.5f, 0.5f, L_OBJECT, 0f, 0);
+        c.ch.boxes.add(new Box(x - 1f, y - 1f, z - 1f, x + 1f, y + 0.6f, z + 1f));
+        int v = (int) (Noise.rnd((int) x, (int) z, (int) seed + 35) * PropSprites.PALM_VARIANTS);
+        c.ch.sprite(Chunk.SPRITE_PALM, v, x, y + 0.6f, z, Noise.rnd((int) x, (int) z, 36) * 6.28f);
     }
 }

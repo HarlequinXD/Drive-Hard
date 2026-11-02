@@ -1,6 +1,7 @@
 package com.harlequinxd.drivehard.core.city;
 
 import com.harlequinxd.drivehard.core.game.Box;
+import com.harlequinxd.drivehard.core.render.Geo;
 import com.harlequinxd.drivehard.core.tex.Facades.Kind;
 import com.harlequinxd.drivehard.core.tex.TextureLibrary;
 
@@ -15,13 +16,36 @@ final class BuildingGen {
     private final TextureLibrary lib;
     private final GeoBuilder gb;
     private final Random r;
+    private final Chunk ch;
 
-    BuildingGen(City city, TextureLibrary lib, GeoBuilder gb, Random r) {
+    BuildingGen(City city, TextureLibrary lib, GeoBuilder gb, Random r, Chunk ch) {
         this.city = city;
         this.lib = lib;
         this.gb = gb;
         this.r = r;
+        this.ch = ch;
     }
+
+    /**
+     * Sits the footprint on the terrain: returns the base (highest corner + curb) and emits
+     * foundation walls down to the sidewalk on the downhill sides.
+     */
+    private float foundation(float x0, float z0, float x1, float z1) {
+        Terrain t = city.terrain;
+        float c = City.CURB;
+        float h00 = t.height(x0, z0) + c, h10 = t.height(x1, z0) + c, h01 = t.height(x0, z1) + c, h11 = t.height(x1, z1) + c;
+        float base = Math.max(Math.max(h00, h10), Math.max(h01, h11));
+        footMin = Math.min(Math.min(h00, h10), Math.min(h01, h11)) - c - 0.3f;
+        int tex = lib.concrete;
+        // N: (x1,z0)->(x0,z0), S: (x0,z1)->(x1,z1), W: (x0,z0)->(x0,z1), E: (x1,z1)->(x1,z0)
+        gb.wallSloped(x1, z0, x0, z0, h10 - 0.1f, h00 - 0.1f, base, base, tex, 0, (x1 - x0) * 0.5f, 0, 0.5f, L_OBJECT, 0f, 0.8f, 0);
+        gb.wallSloped(x0, z1, x1, z1, h01 - 0.1f, h11 - 0.1f, base, base, tex, 0, (x1 - x0) * 0.5f, 0, 0.5f, L_OBJECT, 0f, 0.8f, 0);
+        gb.wallSloped(x0, z0, x0, z1, h00 - 0.1f, h01 - 0.1f, base, base, tex, 0, (z1 - z0) * 0.5f, 0, 0.5f, L_OBJECT, 0f, 0.8f, 0);
+        gb.wallSloped(x1, z1, x1, z0, h11 - 0.1f, h10 - 0.1f, base, base, tex, 0, (z1 - z0) * 0.5f, 0, 0.5f, L_OBJECT, 0f, 0.8f, 0);
+        return base;
+    }
+
+    private float footMin;
 
     private int pick(Kind k) {
         int[] a = lib.facades(k);
@@ -32,7 +56,15 @@ final class BuildingGen {
      * @param shopN/shopS  ground-floor shops on that side (no setback)
      * @param fW/fE/fN/fS  side faces a street
      */
-    void build(Kind kind, float x0, float z0, float x1, float z1, float base,
+    void build(Kind kind, float x0, float z0, float x1, float z1,
+               boolean shopN, boolean shopS, boolean fW, boolean fE, boolean fN, boolean fS) {
+        gb.begin(true);
+        float base = foundation(x0, z0, x1, z1);
+        buildOn(kind, x0, z0, x1, z1, base, shopN, shopS, fW, fE, fN, fS);
+        gb.end();
+    }
+
+    private void buildOn(Kind kind, float x0, float z0, float x1, float z1, float base,
                boolean shopN, boolean shopS, boolean fW, boolean fE, boolean fN, boolean fS) {
         boolean[] street = {fN, fS, fW, fE};
         boolean[] shops = {shopN, shopS, false, false};
@@ -111,7 +143,7 @@ final class BuildingGen {
         roofAndParapet(x0, z0, x1, z1, top, parapet, roof, sideTex);
         rooftop(x0, z0, x1, z1, top, kind);
         if (kind == Kind.DECO && r.nextBoolean()) decoFin(x0, z0, x1, z1, base, top + parapet, street);
-        city.boxes.add(new Box(x0, 0, z0, x1, top + parapet, z1));
+        ch.boxes.add(new Box(x0, footMin, z0, x1, top + parapet, z1));
     }
 
     private void officeTower(float x0, float z0, float x1, float z1, float base, boolean[] street, boolean[] shops) {
@@ -128,7 +160,7 @@ final class BuildingGen {
         int[] podSides = {podFacade, podFacade, podFacade, podFacade};
         if (tx1 - tx0 < 10f || tz1 - tz0 < 10f) {
             roofAndParapet(x0, z0, x1, z1, podTop, 0.9f, lib.roofGravel, podSides);
-            city.boxes.add(new Box(x0, 0, z0, x1, podTop + 0.9f, z1));
+            ch.boxes.add(new Box(x0, footMin, z0, x1, podTop + 0.9f, z1));
             return;
         }
         roofAndParapet(x0, z0, x1, z1, podTop, 0.9f, lib.roofGravel, podSides);
@@ -140,8 +172,8 @@ final class BuildingGen {
         int[] tSides = {tower, tower, tower, tower};
         roofAndParapet(tx0, tz0, tx1, tz1, top, 1.2f, lib.roofMembrane, tSides);
         rooftop(tx0, tz0, tx1, tz1, top, Kind.OFFICE);
-        city.boxes.add(new Box(x0, 0, z0, x1, podTop + 0.9f, z1));
-        city.boxes.add(new Box(tx0, 0, tz0, tx1, top + 1.2f, tz1));
+        ch.boxes.add(new Box(x0, footMin, z0, x1, podTop + 0.9f, z1));
+        ch.boxes.add(new Box(tx0, footMin, tz0, tx1, top + 1.2f, tz1));
     }
 
     /** Outer edge A->B of a footprint side, so that (B-A) x up points outward. */
@@ -216,11 +248,11 @@ final class BuildingGen {
         int n = 1 + r.nextInt(3);
         for (int i = 0; i < n; i++) {
             float ax = x0 + 1.5f + r.nextFloat() * Math.max(0.1f, w - 5f), az = z0 + 1.5f + r.nextFloat() * Math.max(0.1f, d - 4f);
-            gb.box(ax, top, az, ax + 1.8f, top + 1.2f, az + 1.2f, lib.metal, lib.metal, 0.5f, 0.5f, L_OBJECT, -0.3f);
+            gb.box(ax, top, az, ax + 1.8f, top + 1.2f, az + 1.2f, lib.metal, lib.metal, 0.5f, 0.5f, L_OBJECT, -0.3f, Geo.FLAG_DETAIL);
         }
         if (w > 10f && d > 10f && r.nextBoolean()) {
             float ax = x0 + w * 0.5f - 1.5f, az = z0 + d * 0.5f - 1.5f;
-            gb.box(ax, top, az, ax + 3f, top + 3f, az + 3f, lib.planter, lib.roofTar, 0.5f, 0.5f, L_OBJECT, -0.3f);
+            gb.box(ax, top, az, ax + 3f, top + 3f, az + 3f, lib.planter, lib.roofTar, 0.5f, 0.5f, L_OBJECT, -0.3f, Geo.FLAG_DETAIL);
         }
     }
 
@@ -228,7 +260,7 @@ final class BuildingGen {
         float cx = (x0 + x1) * 0.5f, cz = (z0 + z1) * 0.5f;
         float h = top + 2f + r.nextInt(3);
         float hw = 1.2f, out = 0.7f;
-        if (street[N]) gb.box(cx - hw, base + City.SHOP_H, z0 - out, cx + hw, h, z0 + 0.3f, lib.planter, lib.planter, 0.5f, 0.5f, L_OBJECT, -0.2f);
-        else if (street[S]) gb.box(cx - hw, base + City.SHOP_H, z1 - 0.3f, cx + hw, h, z1 + out, lib.planter, lib.planter, 0.5f, 0.5f, L_OBJECT, -0.2f);
+        if (street[N]) gb.box(cx - hw, base + City.SHOP_H, z0 - out, cx + hw, h, z0 + 0.3f, lib.planter, lib.planter, 0.5f, 0.5f, L_OBJECT, -0.2f, 0);
+        else if (street[S]) gb.box(cx - hw, base + City.SHOP_H, z1 - 0.3f, cx + hw, h, z1 + out, lib.planter, lib.planter, 0.5f, 0.5f, L_OBJECT, -0.2f, 0);
     }
 }

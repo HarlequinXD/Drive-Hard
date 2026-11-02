@@ -19,7 +19,7 @@ public final class TextureLibrary {
 
     public final int asphalt, asphaltPatched, sidewalk, pavers, concrete, curb, grass, sand, water, roofGravel,
             roofMembrane, roofTar, parking, paintWhite, paintYellow, trunk, frond, hedge, metal, pole, shadow,
-            planter, lampHead, umbrella;
+            planter, lampHead, umbrella, rock, hillGrass;
 
     public final int[][] facades = new int[Facades.Kind.values().length][];
     public final int[] shops;
@@ -53,6 +53,8 @@ public final class TextureLibrary {
         planter = add(planter(seed));
         lampHead = add(solid(0xFFF4F0D8, seed));
         umbrella = add(umbrella());
+        rock = add(rock(seed));
+        hillGrass = add(hillGrass(seed));
 
         Random r = new Random(seed);
         int[] counts = {44, 40, 24, 30, 36, 12, 16, 30}; // DECO RESIDENTIAL HOTEL OFFICE COMMERCIAL GARAGE INDUSTRIAL BLANK
@@ -274,6 +276,33 @@ public final class TextureLibrary {
             }
             m.set(x, 16, 0xFF8A9A50);
         }
+        return m.texture();
+    }
+
+    private static Texture rock(long seed) {
+        Img m = new Img(64, 64);
+        int sd = (int) seed + 150;
+        for (int y = 0; y < 64; y++)
+            for (int x = 0; x < 64; x++) {
+                float n = Noise.fbm(x, y, 64, 64, sd), g = Noise.rnd(x, y, sd + 1);
+                float strata = (float) Math.sin(y * 0.5 + n * 6) * 0.06f;
+                float k = 0.55f + n * 0.3f + g * 0.1f + strata;
+                m.px[y * 64 + x] = rgb((int) (150 * k), (int) (140 * k), (int) (122 * k));
+            }
+        return m.texture();
+    }
+
+    private static Texture hillGrass(long seed) {
+        Img m = new Img(64, 64);
+        int sd = (int) seed + 160;
+        for (int y = 0; y < 64; y++)
+            for (int x = 0; x < 64; x++) {
+                float n = Noise.fbm(x, y, 64, 64, sd), g = Noise.rnd(x, y, sd + 1);
+                float k = 0.6f + n * 0.35f + g * 0.15f;
+                boolean dry = Noise.value(x, y, 64, 64, 4, 4, sd + 2) > 0.6f;
+                m.px[y * 64 + x] = dry ? rgb((int) (130 * k), (int) (140 * k), (int) (70 * k))
+                        : rgb((int) (64 * k), (int) (116 * k), (int) (46 * k));
+            }
         return m.texture();
     }
 

@@ -6,6 +6,8 @@ import com.harlequinxd.drivehard.core.model.CharacterModel;
 import com.harlequinxd.drivehard.core.model.Part;
 import com.harlequinxd.drivehard.core.model.Pose;
 
+import java.util.List;
+
 /**
  * Renders a procedural 3D character into a low-resolution, multi-direction sprite atlas
  * with a small CPU rasterizer (z-buffered, per-pixel lit, supersampled, 1px dark outline).
@@ -34,17 +36,10 @@ public final class SpriteBaker {
     private int[] cbuf;
     private boolean[] mbuf;
 
+    /** Character: every animation frame in every direction. */
     public SpriteSheet bake(CharacterModel model) {
         int frames = Animations.totalFrames();
-        int W = frameW * frames, H = frameH * directions;
-        int[] atlas = new int[W * H];
-        sw = frameW * supersample;
-        sh = frameH * supersample;
-        zbuf = new float[sw * sh];
-        cbuf = new int[sw * sh];
-        mbuf = new boolean[sw * sh];
-        int[] frame = new int[frameW * frameH];
-
+        int[][] out = new int[frames * directions][];
         int col = 0;
         for (Animations.Anim anim : Animations.Anim.values()) {
             for (int f = 0; f < anim.frames; f++, col++) {
@@ -57,14 +52,41 @@ public final class SpriteBaker {
                 }
                 for (int d = 0; d < directions; d++) {
                     float yaw = (float) (Math.PI * 2 * d / directions);
-                    renderFrame(model, bones, yaw, frame);
-                    for (int y = 0; y < frameH; y++) {
-                        System.arraycopy(frame, y * frameW, atlas, (d * frameH + y) * W + col * frameW, frameW);
-                    }
+                    out[d * frames + col] = renderFrame(model.parts, bones, yaw);
                 }
             }
         }
-        return new SpriteSheet(atlas, frameW, frameH, frames, directions, anchorX, anchorY, pixelsPerMeter);
+        return pack(out, frames);
+    }
+
+    /**
+     * Static props: each entry of {@code variants} is one frame (a model variant or a state such
+     * as a traffic-light colour), all rendered in every direction.
+     */
+    public SpriteSheet bakeStatic(List<List<Part>> variants) {
+        int frames = variants.size();
+        int[][] out = new int[frames * directions][];
+        for (int f = 0; f < frames; f++)
+            for (int d = 0; d < directions; d++)
+                out[d * frames + f] = renderFrame(variants.get(f), null, (float) (Math.PI * 2 * d / directions));
+        return pack(out, frames);
+    }
+
+    /** Packs frames row-major into an atlas whose width is a power of two (at most 1024 when possible). */
+    private SpriteSheet pack(int[][] frameData, int frames) {
+        int total = frameData.length;
+        int maxW = Math.max(1024, Integer.highestOneBit(frameW) << 1);
+        int perRow = Math.max(1, Math.min(total, maxW / frameW));
+        int W = Integer.highestOneBit(perRow * frameW);
+        if (W < perRow * frameW) W <<= 1;
+        int rows = (total + perRow - 1) / perRow;
+        int H = rows * frameH;
+        int[] atlas = new int[W * H];
+        for (int i = 0; i < total; i++) {
+            int ox = (i % perRow) * frameW, oy = (i / perRow) * frameH;
+            for (int y = 0; y < frameH; y++) System.arraycopy(frameData[i], y * frameW, atlas, (oy + y) * W + ox, frameW);
+        }
+        return new SpriteSheet(atlas, W, H, frameW, frameH, frames, directions, perRow, anchorX, anchorY, pixelsPerMeter);
     }
 
     private static float lowestFootY(CharacterModel model, Mat4[] bones) {
@@ -81,7 +103,15 @@ public final class SpriteBaker {
         return min == Float.MAX_VALUE ? 0f : min;
     }
 
-    private void renderFrame(CharacterModel model, Mat4[] bones, float yaw, int[] out) {
+    private int[] renderFrame(List<Part> parts, Mat4[] bones, float yaw) {
+        if (zbuf == null || sw != frameW * supersample || sh != frameH * supersample) {
+            sw = frameW * supersample;
+            sh = frameH * supersample;
+            zbuf = new float[sw * sh];
+            cbuf = new int[sw * sh];
+            mbuf = new boolean[sw * sh];
+        }
+        int[] out = new int[frameW * frameH];
         java.util.Arrays.fill(zbuf, -Float.MAX_VALUE);
         java.util.Arrays.fill(mbuf, false);
 
@@ -93,8 +123,8 @@ public final class SpriteBaker {
         Mat4 yawM = Mat4.rotY(yaw);
 
         float[] wp = new float[3], wn = new float[3];
-        for (Part part : model.parts) {
-            Mat4 m = Mat4.mul(yawM, bones[part.bone]);
+        for (Part part : parts) {
+            Mat4 m = bones == null ? yawM : Mat4.mul(yawM, bones[part.bone]);
             int vc = part.vertexCount();
             float[] sx = new float[vc], sy = new float[vc], sz = new float[vc];
             float[] nx = new float[vc], ny = new float[vc], nz = new float[vc];
@@ -113,7 +143,7 @@ public final class SpriteBaker {
             int[] tris = part.tris;
             for (int t = 0; t < part.triangleCount(); t++) {
                 int a = tris[t * 3], b = tris[t * 3 + 1], c = tris[t * 3 + 2];
-                rasterTri(sx, sy, sz, nx, ny, nz, a, b, c, part.colors[t], part.shine);
+                rasterTri(sx, sy, sz, nx, ny, nz, a, b, c, part.colors[t], part.emissive ? -1f : part.shine);
             }
         }
 
@@ -137,6 +167,7 @@ public final class SpriteBaker {
             }
         }
         if (outline) addOutline(out);
+        return out;
     }
 
     private void addOutline(int[] px) {
@@ -186,7 +217,7 @@ public final class SpriteBaker {
                 float len = (float) Math.sqrt(nnx * nnx + nny * nny + nnz * nnz);
                 if (len < 1e-6f) { nnx = 0; nny = 0; nnz = 1; } else { nnx /= len; nny /= len; nnz /= len; }
                 if (nnz < 0f) { nnx = -nnx; nny = -nny; nnz = -nnz; }   // two-sided
-                cbuf[idx] = shade(br, bg, bb, nnx, nny, nnz, shine);
+                cbuf[idx] = shine < 0f ? (color & 0xFFFFFF) : shade(br, bg, bb, nnx, nny, nnz, shine);
                 mbuf[idx] = true;
             }
         }
