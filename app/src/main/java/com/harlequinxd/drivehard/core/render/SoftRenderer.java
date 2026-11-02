@@ -42,6 +42,13 @@ public final class SoftRenderer {
     private int groundR = 92, groundG = 92, groundB = 94;
     public float time;
     public float subdivDist = 18f;
+    /**
+     * Sprites are single upright quads; seen from above or below their depth varies from top to
+     * bottom, which bends affine-mapped textures along the diagonal. Billboards are tessellated
+     * adaptively until the estimated affine error drops under this many screen pixels.
+     */
+    public float spriteErrorPx = 0.75f;
+    private boolean spriteMode;
 
     // ordering table + primitive pool
     private final int[] head = new int[LAYERS * BUCKETS];
@@ -262,7 +269,9 @@ public final class SoftRenderer {
         // leans back into walls when the camera looks down, which would sort it behind them.
         float mx = x - ex, my = y + (bottom + top) * 0.5f - ey, mz = z - ez;
         depthOverride = mx * fx + my * fy + mz * fz + bias;
-        submit(p, wuv, wl, 4, texId, L_OBJECT, MODE_ALPHA, 0f, false);
+        spriteMode = true;
+        submit(p, wuv, wl, 4, texId, L_OBJECT, MODE_ALPHA, 0f, true);
+        spriteMode = false;
         depthOverride = Float.NaN;
     }
 
@@ -360,9 +369,21 @@ public final class SoftRenderer {
             if (e > maxEdge) maxEdge = e;
         }
         maxEdge = (float) Math.sqrt(maxEdge);
-        float limit = Math.max(1.6f, minZ * 0.3f);
-        if (level >= MAX_LEVEL || minZ > subdivDist || maxEdge <= limit) {
-            emit(q, 4, zsum * 0.25f + bias, texId, layer, mode);
+        boolean stop;
+        if (spriteMode) {
+            // screen-space affine error estimate: projected size times relative depth spread
+            float maxZ = -Float.MAX_VALUE;
+            for (int k = 0; k < 4; k++) maxZ = Math.max(maxZ, q[k * VA + 2]);
+            float zn = Math.max(minZ, near);
+            float sizePx = maxEdge * focal / zn;
+            float err = sizePx * (maxZ - minZ) / (maxZ + zn);
+            stop = level >= MAX_LEVEL || err <= spriteErrorPx;
+        } else {
+            float limit = Math.max(1.6f, minZ * 0.3f);
+            stop = level >= MAX_LEVEL || minZ > subdivDist || maxEdge <= limit;
+        }
+        if (stop) {
+            emit(q, 4, Float.isNaN(depthOverride) ? zsum * 0.25f + bias : depthOverride, texId, layer, mode);
             return;
         }
         // 3x3 grid of points: corners 0..3 = (0,0) (1,0) (1,1) (0,1) in quad param space
