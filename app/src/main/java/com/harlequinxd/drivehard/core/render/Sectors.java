@@ -49,10 +49,12 @@ public final class Sectors {
         }
 
         public float area() {
-            float s = 0f;
+            // relative to the first point: world coordinates are large, products would lose precision
+            double s = 0.0, ox = poly[0], oz = poly[1];
             int n = poly.length / 2;
-            for (int i = 0, j = n - 1; i < n; j = i++) s += poly[j * 2] * poly[i * 2 + 1] - poly[i * 2] * poly[j * 2 + 1];
-            return Math.abs(s) * 0.5f;
+            for (int i = 0, j = n - 1; i < n; j = i++)
+                s += (poly[j * 2] - ox) * (poly[i * 2 + 1] - oz) - (poly[i * 2] - ox) * (poly[j * 2 + 1] - oz);
+            return (float) Math.abs(s) * 0.5f;
         }
     }
 

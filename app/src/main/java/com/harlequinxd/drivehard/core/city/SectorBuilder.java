@@ -208,11 +208,13 @@ final class SectorBuilder {
 
     private static float[] grow(float[] o, int m) { return m + 2 > o.length ? java.util.Arrays.copyOf(o, o.length * 2) : o; }
 
+    /** Polygon area, relative to its first point (world coordinates are tens of km: products would lose all precision). */
     private static float area(float[] p) {
-        float s = 0f;
+        double s = 0.0, ox = p[0], oz = p[1];
         int n = p.length / 2;
-        for (int i = 0, j = n - 1; i < n; j = i++) s += p[j * 2] * p[i * 2 + 1] - p[i * 2] * p[j * 2 + 1];
-        return Math.abs(s) * 0.5f;
+        for (int i = 0, j = n - 1; i < n; j = i++)
+            s += (p[j * 2] - ox) * (p[i * 2 + 1] - oz) - (p[i * 2] - ox) * (p[j * 2 + 1] - oz);
+        return (float) Math.abs(s) * 0.5f;
     }
 
     /** Drops repeated points; null for slivers. */
