@@ -35,7 +35,14 @@ public final class GameView extends SurfaceView implements SurfaceHolder.Callbac
     private volatile Game game;
     private volatile String loading = "Starting";
     private Thread loop;
-    private static final long FRAME_NS = 1_000_000_000L / 60;
+    /**
+     * Frame pacing. The game runs at 30 fps (like the PS2 Driver games): a software renderer at
+     * 60 fps keeps every core busy all the time and the phone heats up. When the phone reports
+     * it is getting hot, the cap drops to 24 and then 20 fps and fewer render threads are used.
+     */
+    private final Thermal thermal;
+    private int fpsCap = 30;
+    private int renderThreads = -1;
     private volatile boolean running;
     private int surfW, surfH;
     private volatile boolean sizeChanged;
@@ -57,6 +64,7 @@ public final class GameView extends SurfaceView implements SurfaceHolder.Callbac
         setFocusable(true);
         controls = new TouchControls(context.getResources().getDisplayMetrics().density);
         mapView = new MapOverlay(context.getResources().getDisplayMetrics().density);
+        thermal = new Thermal(context);
         blit.setFilterBitmap(false);
         blit.setAntiAlias(false);
         blit.setDither(false);
@@ -145,10 +153,13 @@ public final class GameView extends SurfaceView implements SurfaceHolder.Callbac
                 sizeChanged = false;
                 int lw = Math.max(2, Math.round(LOW_H * (float) surfW / surfH)) & ~1;
                 g.setResolution(lw, LOW_H);
+                renderThreads = -1;
                 frame = Bitmap.createBitmap(lw, LOW_H, Bitmap.Config.ARGB_8888);
                 dst.set(0, 0, surfW, surfH);
             }
             long now = System.nanoTime();
+            pace(g);
+            long frameNs = 1_000_000_000L / fpsCap;
             float dt = Math.min(0.05f, (now - last) / 1e9f);
             last = now;
 
@@ -164,7 +175,7 @@ public final class GameView extends SurfaceView implements SurfaceHolder.Callbac
                     }
                 }
                 last = System.nanoTime();
-                long target = now + FRAME_NS;
+                long target = now + 1_000_000_000L / 20;      // the map needs no more than 20 fps
                 for (long wait; (wait = target - System.nanoTime()) > 0; ) java.util.concurrent.locks.LockSupport.parkNanos(wait);
                 continue;
             }
@@ -191,8 +202,8 @@ public final class GameView extends SurfaceView implements SurfaceHolder.Callbac
                 getHolder().unlockCanvasAndPost(c);
             }
 
-            // cap at 60 fps: no point rendering faster than the game needs (saves battery and heat)
-            long target = now + FRAME_NS;
+            // frame cap: sleep out the rest of the frame (saves battery and heat)
+            long target = now + frameNs;
             for (long wait; (wait = target - System.nanoTime()) > 0; ) java.util.concurrent.locks.LockSupport.parkNanos(wait);
 
             fpsFrames++;
@@ -203,6 +214,24 @@ public final class GameView extends SurfaceView implements SurfaceHolder.Callbac
                 msAcc = 0;
                 fpsStart = now;
             }
+        }
+    }
+
+    /** Picks the frame cap and render thread count for how hot the phone is. */
+    private void pace(Game g) {
+        int level = thermal.level();
+        int cores = Runtime.getRuntime().availableProcessors();
+        int cap, threads;
+        switch (level) {
+            case 0: cap = 30; threads = Math.min(3, Math.max(1, cores - 1)); break;
+            case 1: cap = 30; threads = Math.min(2, Math.max(1, cores - 1)); break;
+            case 2: cap = 24; threads = Math.min(2, Math.max(1, cores - 1)); break;
+            default: cap = 20; threads = 1; break;
+        }
+        fpsCap = cap;
+        if (threads != renderThreads) {
+            renderThreads = threads;
+            g.renderer.setThreads(threads);
         }
     }
 
@@ -247,8 +276,8 @@ public final class GameView extends SurfaceView implements SurfaceHolder.Callbac
         // stats
         text.setTextSize(12 * d);
         text.setTextAlign(Paint.Align.LEFT);
-        c.drawText(String.format(Locale.US, "DRIVE HARD  %.0f fps  %.1f ms  %dx%d  %d tris  %s",
-                fps, frameMs, g.renderer.W, g.renderer.H, g.renderer.statPrims, g.mode.name()),
+        c.drawText(String.format(Locale.US, "DRIVE HARD  %.0f/%d fps%s  %.1f ms  %dx%d  %d tris  %s",
+                fps, fpsCap, thermal.level() > 0 ? " (hot " + thermal.level() + ")" : "", frameMs, g.renderer.W, g.renderer.H, g.renderer.statPrims, g.mode.name()),
                 10 * d, 18 * d, text);
     }
 

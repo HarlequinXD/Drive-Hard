@@ -15,6 +15,11 @@ public final class MainActivity extends Activity {
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
                 | WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        // ask for clocks the phone can hold without overheating rather than short bursts at full speed
+        if (android.os.Build.VERSION.SDK_INT >= 24) {
+            android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
+            if (pm != null && pm.isSustainedPerformanceModeSupported()) getWindow().setSustainedPerformanceMode(true);
+        }
         view = new GameView(this);
         setContentView(view);
         hideSystemUi();

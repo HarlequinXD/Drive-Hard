@@ -28,7 +28,7 @@ software renderer, no engine.
   depth buffer that polygons and sprites test and write, so hills hide things and nothing
   mis-sorts; a draw-layer ordering table still settles coplanar ties (shadows, decals).
   15-bit dithered colour, fog, near-plane clipping, draw distances, multi-threaded column
-  (ground) and band (polygons) rendering. The game loop is capped at 60 fps.
+  (ground) and band (polygons) rendering. The game runs at 30 fps (a software renderer at 60 fps overheats phones); when Android reports the phone heating up (thermal status / headroom) it drops to 24 then 20 fps with fewer render threads, and it asks for sustained-performance clocks.
 - **Culling:** per-chunk and per-batch frustum culling, BSP/bounding-box culling of wall rays,
   per-polygon backface/distance culling, per-sprite frustum culling, and terrain occlusion
   culling (buildings and sprites hidden behind hills are skipped via heightfield ray tests).
