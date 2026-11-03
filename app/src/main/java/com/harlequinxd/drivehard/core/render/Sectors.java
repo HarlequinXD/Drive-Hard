@@ -78,6 +78,8 @@ public final class Sectors {
         public int[][] tex;
         /** The ground storey is shopfronts: lit at night. */
         public boolean litGround;
+        /** FULL tiles are facades with painted windows that light up at night. */
+        public boolean glowFacade = true;
         public float winW = 1.4f, winH = 1.2f, sill = 0.95f, doorW = 0.95f, doorH = 2.15f;
 
         public Tiles(int floors) {

@@ -213,6 +213,8 @@ final class BuildingGen {
         for (int s = 0; s < 4; s++) {
             int tex = street[s] ? fTex : (s == N || s == S ? bTex : side);
             t[s] = facade(len(s, x0, z0, x1, z1), groundH, floors - 1, floorH, tex, shops[s] ? -1 : tex, shopSet);
+            Kind k = street[s] ? front : (s == N || s == S ? back : Kind.BLANK);
+            t[s].glowFacade = k != Kind.BLANK && k != Kind.WAREHOUSE;     // only facades with windows light up
             if (street[s] && signs > 0 && floors > 1) verticalSigns(s, x0, z0, x1, z1, base + groundH + 0.6f, top, signs);
         }
         rooftop(x0, z0, x1, z1, top);
@@ -334,6 +336,7 @@ final class BuildingGen {
         for (int s = 0; s < 4; s++) {
             t[s] = facade(len(s, x0, z0, x1, z1), 0f, 1, 3.3f, wall, wall, null);
             t[s].mat = t[s].matUp = wall;
+            t[s].glowFacade = false;                      // timber boards, no windows
         }
         gableRoof(x0, z0, x1, z1, base, top, 0.55f, lib.metal, faces(x0, z0, x1, z1, t), SectorBuilder.plain(wall, lib.concrete));
         ch.boxes.add(new Box(x0, footMin, z0, x1, top + 1f, z1));
@@ -367,6 +370,7 @@ final class BuildingGen {
         for (int s = 0; s < 4; s++) {
             t[s] = facade(len(s, x0, z0, x1, z1), 0f, 1, 3.2f, wall, wall, null);
             t[s].mat = t[s].matUp = wall;
+            t[s].glowFacade = false;
         }
         int roofTex = lib.houseRoof[lib.houseRoof.length - 1];
         for (int i = 0; i < lib.houseRoofKind.length; i++)
@@ -408,6 +412,7 @@ final class BuildingGen {
         for (int s = 0; s < 4; s++) {
             float l = len(s, x0, z0, x1, z1);
             t[s] = street[s] ? single(3.6f, lib.koban[r.nextInt(2)], 1, 3.6f, blank, l) : facade(l, 0f, 1, 3.6f, blank, blank, null);
+            t[s].glowFacade = false;
         }
         gableRoof(x0, z0, x1, z1, base, top, 0.45f, lib.roofs[2], faces(x0, z0, x1, z1, t), SectorBuilder.plain(lib.concrete, lib.concrete));
         ch.boxes.add(new Box(x0, footMin, z0, x1, top + 1f, z1));

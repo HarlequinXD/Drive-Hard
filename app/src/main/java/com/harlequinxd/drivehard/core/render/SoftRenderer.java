@@ -614,7 +614,11 @@ public final class SoftRenderer {
                 int c = sampleClamp(tl.tex[st][cidx], fu / tw, 1f - fy / sh);
                 if (seed == 0) return c;
                 if (st == 0 && tl.litGround) return 0xFE000000 | (c & 0xFFFFFF);   // shops stay open
-                return lit(c, st, cidx, seed);
+                if (!tl.glowFacade) return c;
+                // facade tiles: the glass of the painted windows (blue-ish or dark) glows
+                int r = (c >> 16) & 255, g = (c >> 8) & 255, b = c & 255;
+                int l = (r * 3 + g * 6 + b) / 10;
+                return b > r + 10 || l < 80 ? glow(c, st, cidx, seed) : c;
             }
             case Sectors.WINDOW: case Sectors.SMALL: case Sectors.DOOR: case Sectors.GARDEN: {
                 float ow, oy0, oy1;
@@ -625,11 +629,17 @@ public final class SoftRenderer {
                 oy1 = Math.min(oy1, sh - 0.05f);
                 float ou0 = (tw - ow) * 0.5f;
                 if (fu >= ou0 && fu < ou0 + ow && fy >= oy0 && fy < oy1) {
-                    int c = sampleClamp(tl.tex[st][cidx], (fu - ou0) / ow, 1f - (fy - oy0) / (oy1 - oy0));
+                    int tid = tl.tex[st][cidx];
+                    Texture T = textures[tid];
+                    float su = (fu - ou0) / ow, sv = 1f - (fy - oy0) / (oy1 - oy0);
+                    int idx = (Math.max(0, Math.min(T.hMax, (int) (sv * T.h))) << T.wShift) | Math.max(0, Math.min(T.w - 1, (int) (su * T.w)));
+                    int c = T.px[idx];
                     // set into the wall: a darker reveal round the opening
                     float edge = Math.min(Math.min(fu - ou0, ou0 + ow - fu), Math.min(fy - oy0, oy1 - fy));
                     if (edge < 0.07f) return Img2.darken(c);
-                    return seed != 0 && kind != Sectors.DOOR ? lit(c, st, cidx, seed) : c;
+                    // at night the panes (not the frames or glazing bars) of lit rooms glow
+                    if (seed != 0 && kind != Sectors.DOOR && glassMask(tid)[idx] != 0) return glow(c, st, cidx, seed);
+                    return c;
                 }
                 return sampleWrap(plain, u / tl.matScale, -y / tl.matScale);
             }
@@ -638,18 +648,60 @@ public final class SoftRenderer {
         }
     }
 
-    /** A window texel at night: glass of a lit room glows warm (marked 0xFE: no scene light). */
-    private int lit(int c, int st, int col, int seed) {
+    /** A pane texel at night: if this room is lit it glows warm (marked 0xFE: no scene light). */
+    private int glow(int c, int st, int col, int seed) {
         int h = com.harlequinxd.drivehard.core.tex.Noise.hash(col, st, seed) & 255;
         if (h >= litShare) return c;
         int r = (c >> 16) & 255, g = (c >> 8) & 255, b = c & 255;
         int l = (r * 3 + g * 6 + b) / 10;
-        boolean glass = b > r + 10 || l < 80;
-        if (!glass) return c;
-        float k = 0.55f + l / 255f * 0.6f;
+        float k = 0.78f + l / 255f * 0.3f;
         boolean cool = (h & 7) == 0;                       // a few rooms lit by a television
-        int lr = (int) ((cool ? 170 : 255) * k), lg = (int) ((cool ? 200 : 215) * k), lb = (int) ((cool ? 255 : 140) * k);
+        int lr = (int) ((cool ? 170 : 255) * k), lg = (int) ((cool ? 200 : 214) * k), lb = (int) ((cool ? 255 : 138) * k);
         return 0xFE000000 | (Math.min(255, lr) << 16) | (Math.min(255, lg) << 8) | Math.min(255, lb);
+    }
+
+    private volatile byte[][] glass = new byte[0][];
+
+    /**
+     * Which texels of a window texture are panes: the dominant colour of its middle (glass,
+     * frosted glass, shoji paper), as opposed to frames and glazing bars. Built once per texture.
+     */
+    private byte[] glassMask(int tid) {
+        byte[][] gm = glass;
+        if (tid < gm.length && gm[tid] != null) return gm[tid];
+        Texture t = textures[tid];
+        int w = t.w, h = Math.min(t.h, t.hMax + 1);
+        // most common colour (4-bit per channel bins) in the central area
+        int[] count = new int[4096];
+        for (int y = h / 6; y < h - h / 6; y++)
+            for (int x = w / 6; x < w - w / 6; x++) {
+                int c = t.px[(y << t.wShift) | x];
+                count[((c >> 12) & 0xF00) | ((c >> 8) & 0xF0) | ((c >> 4) & 0xF)]++;
+            }
+        int best = 0;
+        for (int i = 1; i < 4096; i++) if (count[i] > count[best]) best = i;
+        int br = ((best >> 8) << 4) + 8, bg = (((best >> 4) & 15) << 4) + 8, bb = ((best & 15) << 4) + 8;
+        // average of the pane colour, then everything close to it
+        long sr = 0, sg = 0, sb = 0, n = 0;
+        for (int i = 0; i < w * h; i++) {
+            int c = t.px[i];
+            int r = (c >> 16) & 255, g = (c >> 8) & 255, b = c & 255;
+            if (Math.abs(r - br) + Math.abs(g - bg) + Math.abs(b - bb) < 60) { sr += r; sg += g; sb += b; n++; }
+        }
+        if (n > 0) { br = (int) (sr / n); bg = (int) (sg / n); bb = (int) (sb / n); }
+        byte[] m = new byte[t.px.length];
+        for (int i = 0; i < w * h; i++) {
+            int c = t.px[i];
+            int r = (c >> 16) & 255, g = (c >> 8) & 255, b = c & 255;
+            if ((c >>> 24) > 128 && Math.abs(r - br) + Math.abs(g - bg) + Math.abs(b - bb) < 90) m[i] = 1;
+        }
+        synchronized (this) {
+            byte[][] cur = glass;
+            if (cur.length <= tid) cur = java.util.Arrays.copyOf(cur, Math.max(tid + 1, textures.length));
+            cur[tid] = m;
+            glass = cur;
+        }
+        return m;
     }
 
     /** Tiny colour helpers for the wall tiles. */
