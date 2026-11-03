@@ -14,12 +14,18 @@ public abstract class World {
     /** Walkable ground height without boxes (terrain, sidewalks). */
     public float surface(float x, float z) { return 0f; }
 
+    /**
+     * Ground height under something whose feet are at {@code y}: where surfaces are stacked
+     * (a bridge over a road) the one at or just below {@code y}, so you can pass under bridges.
+     */
+    public float surface(float x, float z, float y) { return surface(x, z); }
+
     /** True where the player may not go (open sea). */
     public boolean blocked(float x, float z) { return false; }
 
     /** Highest walkable surface under a circle whose feet are at {@code y} (with step tolerance). */
     public float groundHeight(float x, float z, float radius, float y, float stepUp) {
-        float h = surface(x, z);
+        float h = surface(x, z, y + stepUp);
         for (Box b : near(x, z)) {
             if (b.maxY > y + stepUp) continue;
             if (b.maxY <= h) continue;

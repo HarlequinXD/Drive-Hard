@@ -81,7 +81,7 @@ public final class Vehicle {
             if (world.blocked(x, z)) { x = ox; z = oz; impact(1f); break; }
             if (collide(world, self)) break;
         }
-        y = world.surface(x, z);
+        y = world.surface(x, z, y + 0.6f);
     }
 
     private final float[] push = new float[3];

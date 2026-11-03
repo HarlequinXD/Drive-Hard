@@ -149,6 +149,13 @@ public final class City extends World {
     }
 
     @Override
+    public float surface(float x, float z, float y) {
+        float b = roads.bridgeHeight(x, z);
+        if (!Float.isNaN(b) && y > b - 2f) return b;               // on (or stepping onto) the deck
+        return terrain.height(x, z) + (isRaised(x, z) ? CURB : 0f);  // under it: the road below
+    }
+
+    @Override
     public boolean blocked(float x, float z) {
         return terrain.height(x, z) < -0.5f;
     }

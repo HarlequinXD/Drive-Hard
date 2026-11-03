@@ -221,6 +221,10 @@ public final class SoftRenderer {
     /** Per-thread tile cache. */
     private static final class TileCache {
         final Sectors.Hits hits = new Sectors.Hits();
+        final Sectors.SlabHits slabs = new Sectors.SlabHits();
+        /** Rows of the current column already drawn by a slab (cov[y] == stamp). */
+        int[] cov = new int[0];
+        int stamp;
         Ground.Tile t;
         int cx = Integer.MIN_VALUE, cz = Integer.MIN_VALUE;
         float x0, z0;
@@ -438,22 +442,32 @@ public final class SoftRenderer {
         int h = H;
         int[] sk = sky;
         Sectors.Hits hits = tc.hits;
+        Sectors.SlabHits sh = tc.slabs;
+        if (tc.cov.length < h) tc.cov = new int[h];
+        int[] cov = tc.cov;
         for (int x = colA; x < colB; x++) {
             float xs = (x + 0.5f - cx) / focal;
             float dx = fx + rx * xs, dz = fz + rz * xs;
             int base = x * h;
             hits.n = 0;
-            for (int k = 0; k < snapSecN; k++) snapSec[k].cast(ex, ez, dx, dz, far, hits);
+            sh.n = 0;
+            for (int k = 0; k < snapSecN; k++) {
+                snapSec[k].cast(ex, ez, dx, dz, far, hits);
+                snapSec[k].castSlabs(ex, ez, dx, dz, far, sh);
+            }
             if (hits.n > 1) hits.sort(dx, dz);
-            int ei = 0;
+            int stamp = ++tc.stamp;
+            int ei = 0, si = 0;
             Sectors.Sector cur = eyeSector;
             int ybuf = h;
             float d = 0.3f, dPrev = 0f, sPrev = 0f;
             boolean first = true;
             while (true) {
                 boolean event = ei < hits.n && hits.t[ei] <= d;
-                if (!event && d > far) break;
-                float t = event ? hits.t[ei] : d;
+                boolean slabEv = si < sh.n && sh.tin[si] <= d && (!event || sh.tin[si] <= hits.t[ei]);
+                if (slabEv) event = false;
+                if (!event && !slabEv && d > far) break;
+                float t = slabEv ? sh.tin[si] : (event ? hits.t[ei] : d);
                 float wx = ex + dx * t, wz = ez + dz * t;
                 float gh = cur == null ? groundHeight(tc, wx, wz) : cur.y(wx, wz);
                 float sc = hy - (gh - ey) * focal / t;
@@ -462,6 +476,12 @@ public final class SoftRenderer {
                 first = false;
                 dPrev = t;
                 sPrev = sc;
+                if (slabEv) {
+                    // a bridge deck, parapet or pier: drawn where rows meet it, the ground goes on beneath
+                    slab(x, base, ybuf, sh.s[si], t, sh.tout[si], dx, dz, cov, stamp);
+                    si++;
+                    continue;
+                }
                 if (!event) {
                     // the height map is bilinear in 8 m cells and pixels are interpolated between
                     // samples, so samples can spread out: ~1 m near, ~3% of the distance far away
@@ -478,7 +498,7 @@ public final class SoftRenderer {
                 else continue;
                 float nh = next == null ? groundHeight(tc, wx, wz) : next.y(wx, wz);
                 if (enter && nh > gh + 1e-3f) {
-                    ybuf = wallSpan(x, base, ybuf, hy - (nh - ey) * focal / t, t, w, u);
+                    ybuf = wallSpan(x, base, ybuf, hy - (nh - ey) * focal / t, t, w, u, cov, stamp);
                     if (ybuf == 0) break;
                 }
                 cur = next;
@@ -486,16 +506,87 @@ public final class SoftRenderer {
             }
             if (env == null) {
                 for (int y = 0; y < ybuf; y++) {
+                    if (cov[y] == stamp) continue;
                     colZ[base + y] = 0f;
                     colFb[base + y] = sk[y * 4 + (x & 3)];
                 }
             } else if (ybuf > 0) {
                 float hl2 = dx * dx + dz * dz, az = (float) Math.atan2(dx, dz);
                 for (int y = 0; y < ybuf; y++) {
+                    if (cov[y] == stamp) continue;
                     colZ[base + y] = 0f;
                     colFb[base + y] = skyPixel(x, y, dx, dz, hl2, az);
                 }
             }
+        }
+    }
+
+    /**
+     * Draws a slab met by the column's ray between tIn and tOut. For each row still open above
+     * the drawn ground, the row's ray (rising or falling at a fixed rate per metre of depth) hits
+     * the slab's side at tIn if it is between bottom and top there, else its top (coming down
+     * from above) or its underside (coming up from below) somewhere before tOut, or nothing.
+     * Rows it covers are marked so the ground and buildings behind (and beneath) skip them.
+     */
+    private void slab(int x, int base, int ybuf, Sectors.Slab sl, float tIn, float tOut, float dx, float dz, int[] cov, int stamp) {
+        if (ybuf <= 0 || tOut <= tIn) return;
+        float xi = ex + dx * tIn, zi = ez + dz * tIn, xo = ex + dx * tOut, zo = ez + dz * tOut;
+        float topI = sl.top(xi, zi), botI = sl.bot(xi, zi), topO = sl.top(xo, zo), botO = sl.bot(xo, zo);
+        // rows the slab can cover
+        float a1 = hy - (topI - ey) * focal / tIn, a2 = hy - (botI - ey) * focal / tIn;
+        float b1 = hy - (topO - ey) * focal / tOut, b2 = hy - (botO - ey) * focal / tOut;
+        int y0 = Math.max(0, (int) Math.floor(Math.min(Math.min(a1, a2), Math.min(b1, b2))));
+        int y1 = Math.min(ybuf - 1, (int) Math.ceil(Math.max(Math.max(a1, a2), Math.max(b1, b2))));
+        if (y0 > y1) return;
+        float fogK = 1f / (fogEnd - fogStart), fs = fogStart;
+        Texture tt = textures[sl.topTex], ts = textures[sl.sideTex], tb = textures[sl.botTex];
+        int lt = (int) (sl.lightTop * 256f), ls = (int) (sl.lightSide * 256f), lb = (int) (sl.lightBot * 256f);
+        float[] cz = colZ;
+        int[] cf = colFb;
+        for (int y = y0; y <= y1; y++) {
+            if (cov[y] == stamp) continue;
+            float k = (hy - (y + 0.5f)) / focal;          // ray height change per metre of depth
+            float hI = ey + k * tIn, hO = ey + k * tOut;
+            float th;
+            int face;                                      // 0 side, 1 top, 2 underside
+            if (hI <= topI && hI >= botI) { th = tIn; face = 0; }
+            else if (hI > topI) {
+                float fI = hI - topI, fO = hO - topO;
+                if (fO > 0f) continue;
+                th = tIn + (tOut - tIn) * fI / (fI - fO);
+                face = 1;
+            } else {
+                float gI = botI - hI, gO = botO - hO;
+                if (gO > 0f) continue;
+                th = tIn + (tOut - tIn) * gI / (gI - gO);
+                face = 2;
+            }
+            float px = ex + dx * th, pz = ez + dz * th, py = ey + k * th;
+            int c, lv;
+            if (face == 1) {
+                float rx0 = px - sl.ox, rz0 = pz - sl.oz;
+                float u = (rx0 * sl.ux + rz0 * sl.uz) / sl.us, v = (rx0 * sl.vx + rz0 * sl.vz) / sl.vs + sl.vOff;
+                int tu = sl.clampU ? Math.max(0, Math.min(tt.w - 1, (int) (u * tt.w))) : ((int) Math.floor(u * tt.w) & tt.wMask);
+                int tv = (int) Math.floor(v * tt.h) & tt.hMask;
+                if (tv > tt.hMax) tv %= tt.h;
+                c = tt.px[(tv << tt.wShift) | tu];
+                lv = lt;
+            } else if (face == 0) {
+                int tu = (int) Math.floor((px + pz) * 0.5f * ts.w) & ts.wMask, tv = (int) Math.floor(-py * 0.5f * ts.h) & ts.hMask;
+                if (tv > ts.hMax) tv %= ts.h;
+                c = ts.px[(tv << ts.wShift) | tu];
+                lv = ls;
+            } else {
+                int tu = (int) Math.floor(px * 0.5f * tb.w) & tb.wMask, tv = (int) Math.floor(pz * 0.5f * tb.h) & tb.hMask;
+                if (tv > tb.hMax) tv %= tb.h;
+                c = tb.px[(tv << tb.wShift) | tu];
+                lv = lb;
+            }
+            int fv = th <= fs ? 0 : (int) Math.min(256f, (th - fs) * fogK * 256f);
+            int k2 = base + y;
+            cf[k2] = shade(c, lv, fv, fogR, fogG, fogB, BAYER[((y & 3) << 2) | (x & 3)] >> 1);
+            cz[k2] = (1f / th) * (face == 1 ? 0.97f : 0.995f);
+            cov[y] = stamp;
         }
     }
 
@@ -523,7 +614,10 @@ public final class SoftRenderer {
         float lo = Math.min(invP, invC), hi = Math.max(invP, invC);
         int mip = mipFor(1f / hi);          // one mip level per span (the nearer end)
         Texture rt = sec == null ? null : textures[sec.tex];
+        int[] cov = tc.cov;
+        int stamp = tc.stamp;
         for (int y = ybuf - 1; y >= ys; y--, iz += diz) {
+            if (cov[y] == stamp) continue;               // under a bridge deck already drawn
             float izc = iz < lo ? lo : (iz > hi ? hi : iz);
             float dr = 1f / izc;
             float px = ex + dx * dr, pz = ez + dz * dr;
@@ -553,7 +647,7 @@ public final class SoftRenderer {
      * A wall seen face on: rows from the top of the wall down to what is already drawn, at depth t.
      * Each row's height picks the storey and the tile (plain wall, window, door, shopfront).
      */
-    private int wallSpan(int x, int base, int ybuf, float sTop, float t, Sectors.Wall w, float u) {
+    private int wallSpan(int x, int base, int ybuf, float sTop, float t, Sectors.Wall w, float u, int[] cov, int stamp) {
         int ys = (int) Math.ceil(sTop - 0.5f);
         if (ys < 0) ys = 0;
         if (ys >= ybuf) return ybuf;
@@ -566,6 +660,7 @@ public final class SoftRenderer {
         Sectors.Sector sec = w.front;
         int seed = nightLights ? Float.floatToIntBits(w.x0 * 3.1f + w.z0 * 1.7f + w.uOff) : 0;
         for (int y = ybuf - 1; y >= ys; y--) {
+            if (cov[y] == stamp) continue;
             float wy = ey + (hy - (y + 0.5f)) * k;        // world height of this row on the wall
             int c = wallTexel(tl, sec.base, u + w.uOff, wy, tl.len > 0f ? tl.len : w.len, seed);
             int q = base + y;

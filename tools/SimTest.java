@@ -171,7 +171,7 @@ public class SimTest {
                     still.put(car, st);
                     worstStill = Math.max(worstStill, st);
                     sp += car.speed; ns2++;
-                    if (!carTurning(car) && Math.abs(car.y - c.surface(car.x, car.z)) > 1.0f) offRoad++;
+                    if (!carTurning(car) && Math.abs(car.y - c.surface(car.x, car.z, car.y + 0.5f)) > 1.0f) offRoad++;
                 }
             }
             System.out.printf("%s traffic: %d cars, avg %.1f m/s, %d junction movements, longest wait %.0f s, off-road samples %d%n",

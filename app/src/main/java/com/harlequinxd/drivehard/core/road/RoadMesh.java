@@ -1,5 +1,7 @@
 package com.harlequinxd.drivehard.core.road;
 
+import com.harlequinxd.drivehard.core.render.Sectors;
+
 import com.harlequinxd.drivehard.core.city.Chunk;
 import com.harlequinxd.drivehard.core.city.GeoBuilder;
 import com.harlequinxd.drivehard.core.city.Terrain;
@@ -201,32 +203,17 @@ public final class RoadMesh {
         boolean gore = cls == RoadClass.RAMP && rampOverlap();
         if (city) return;        // city streets are painted flat into the ground map
         if (b - a > 0.05f && bridge) {
-            // only bridge decks are real road surfaces; everywhere else the road is painted on the ground
+            // bridge decks are slabs in the sector renderer (no polygons): one per lane band,
+            // with the road below passing underneath
             float vBase = (float) Math.floor(s0 / 64f) * 64f;
             float laneBase = (float) Math.floor(s0 / 320f) * 320f;
-            float step = city ? 8f : 3.4f;
-            float[][] bands = bands(cls);
-            // split the lane range around the two mouths
-            float la = Math.max(a, trimA + ma), lb = Math.min(b, e.len - trimB - mb);
-            if (ma > 0f && a < e.clearA + ma) mouthStrip(gb, a, Math.min(b, e.clearA + ma), true, hw, cls);
-            if (mb > 0f && b > e.len - e.clearB - mb) mouthStrip(gb, Math.max(a, e.len - e.clearB - mb), b, false, hw, cls);
-            if (lb - la > 0.05f) {
-                int nsub = Math.max(1, (int) Math.ceil((lb - la) / step));
-                for (int k = 0; k < nsub; k++) {
-                    float sa = la + (lb - la) * k / nsub, sb = la + (lb - la) * (k + 1) / nsub;
-                    for (float[] bd : bands) {
-                        int tex = gore ? -1 : (int) bd[2];
-                        if (bd[3] > 0f) {
-                            if (tex < 0) strip(gb, sa, sb, -bd[1], bd[1], 0.04f, lib.asphalt, ROAD_BIAS, 0, 0.5f, vBase);
-                            else laneStrip(gb, sa, sb, -bd[1], bd[1], tex, laneBase);
-                            continue;
-                        }
-                        for (int side = -1; side <= 1; side += 2) {
-                            float oc = bd[0] * side, ok = bd[1] * side;
-                            if (tex < 0) strip(gb, sa, sb, Math.min(oc, ok), Math.max(oc, ok), 0.04f, lib.asphalt, ROAD_BIAS, 0, 0.5f, vBase);
-                            else laneStrip(gb, sa, sb, oc, ok, tex, laneBase);
-                        }
-                    }
+            for (float[] bd : bands(cls)) {
+                int tex = gore ? -1 : (int) bd[2];
+                if (bd[3] > 0f) { deckSlab(ch, a, b, -bd[1], bd[1], tex, laneBase, vBase); continue; }
+                for (int side = -1; side <= 1; side += 2) {
+                    float oc = bd[0] * side, ok = bd[1] * side;
+                    if (tex < 0) deckSlab(ch, a, b, Math.min(oc, ok), Math.max(oc, ok), -1, laneBase, vBase);
+                    else deckSlab(ch, a, b, oc, ok, tex, laneBase, vBase);
                 }
             }
         }
@@ -487,25 +474,78 @@ public final class RoadMesh {
 
     // ------------------------------------------------------------------ bridges
 
+    /** Deck thickness under the road surface. */
+    private static final float DECK = 1.3f;
+
+    /**
+     * One band of a bridge deck as a slab: offsets o0..o1 across the road from a to b, its top
+     * the road surface (lane texture across the band, or plain asphalt), 1.3 m of concrete below.
+     */
+    private void deckSlab(Chunk ch, float a, float b, float o0, float o1, int laneTex, float laneBase, float vBase) {
+        at(a, o0, 0.04f, 0);
+        at(a, o1, 0.04f, 1);
+        at(b, o1, 0.04f, 2);
+        at(b, o0, 0.04f, 3);
+        Sectors.Slab sl = slab(0f, -DECK);
+        float ax = p[0], az = p[2];
+        float uxr = p[3] - p[0], uzr = p[5] - p[2], ul = (float) Math.sqrt(uxr * uxr + uzr * uzr);
+        float vxr = p[9] - p[0], vzr = p[11] - p[2], vl = (float) Math.sqrt(vxr * vxr + vzr * vzr);
+        sl.ox = ax; sl.oz = az;
+        if (ul > 1e-4f) { sl.ux = uxr / ul; sl.uz = uzr / ul; }
+        if (vl > 1e-4f) { sl.vx = vxr / vl; sl.vz = vzr / vl; }
+        if (laneTex >= 0) {
+            sl.topTex = laneTex;
+            sl.us = Math.max(0.05f, ul);
+            sl.clampU = true;
+            sl.vs = 20f;
+            sl.vOff = (a - laneBase) / 20f;
+        } else {
+            sl.topTex = lib.asphalt;
+            sl.us = 2f; sl.vs = 2f;
+            sl.vOff = (a - vBase) * 0.5f;
+        }
+        ch.sectors.slabs.add(sl);
+    }
+
+    /** Slab over the quad in p[0..11] (corners 0..3), top lifted by topLift, bottom at drop below the corners. */
+    private Sectors.Slab slab(float topLift, float drop) {
+        Sectors.Slab sl = new Sectors.Slab(new float[]{p[0], p[2], p[3], p[5], p[6], p[8], p[9], p[11]});
+        float[] t = Sectors.Slab.plane(p[0], p[1] + topLift, p[2], p[3], p[4] + topLift, p[5], p[6], p[7] + topLift, p[8]);
+        float[] u = Sectors.Slab.plane(p[0], p[1] + drop, p[2], p[3], p[4] + drop, p[5], p[6], p[7] + drop, p[8]);
+        sl.ta = t[0]; sl.tb = t[1]; sl.tc = t[2];
+        sl.ba = u[0]; sl.bb = u[1]; sl.bc = u[2];
+        sl.topTex = lib.concrete; sl.sideTex = lib.concrete; sl.botTex = lib.concrete;
+        sl.lightTop = GeoBuilder.sunLight(0, 1, 0);
+        sl.lightSide = 0.8f;
+        sl.lightBot = 0.5f;
+        return sl;
+    }
+
+    /** Parapets along both edges and piers down to the ground, all slabs. */
     private void bridgePiece(Chunk ch, GeoBuilder gb, float a, float b, float hw) {
-        wallStrip(gb, a, b, hw + 0.05f, -1.3f, 1.0f, lib.concrete, 1f, 0);
-        wallStrip(gb, a, b, -hw - 0.05f, -1.3f, 1.0f, lib.concrete, 1f, 0);
-        at(a, -hw, -1.3f, 0);
-        at(a, hw, -1.3f, 1);
-        at(b, hw, -1.3f, 2);
-        at(b, -hw, -1.3f, 3);
-        uv[0] = 0; uv[1] = 0; uv[2] = hw; uv[3] = 0; uv[4] = hw; uv[5] = (b - a) / 2f; uv[6] = 0; uv[7] = (b - a) / 2f;
-        l[0] = l[1] = l[2] = l[3] = 0.55f;
-        gb.quad(p, uv, l, lib.concrete, L_OBJECT, 0, 0f, true);
+        for (int side = -1; side <= 1; side += 2) {
+            float o0 = side * hw, o1 = side * (hw + 0.3f);
+            at(a, Math.min(o0, o1), 0f, 0);
+            at(a, Math.max(o0, o1), 0f, 1);
+            at(b, Math.max(o0, o1), 0f, 2);
+            at(b, Math.min(o0, o1), 0f, 3);
+            Sectors.Slab sl = slab(1.0f, -DECK);
+            sl.us = sl.vs = 1f;
+            ch.sectors.slabs.add(sl);
+        }
         float first = (float) Math.ceil(a / 18f) * 18f;
         for (float s = first; s < b; s += 18f) {
             e.point(s, tmp);
-            float px = tmp[0], pz = tmp[1], top = tmp[2] - 1.3f;
+            float px = tmp[0], pz = tmp[1], top = tmp[2] - DECK;
             if (net.motorwayClearance(px, pz, 6f) < 3f) continue;
             float g = terrain.height(px, pz);
             if (top - g < 1f) continue;
             float r = 0.8f;
-            gb.box(px - r, g - 0.5f, pz - r, px + r, top, pz + r, lib.concrete, -1, 0.5f, 0.5f, L_OBJECT, 0f, 0);
+            Sectors.Slab pier = new Sectors.Slab(new float[]{px - r, pz - r, px + r, pz - r, px + r, pz + r, px - r, pz + r});
+            pier.ta = top; pier.ba = g - 0.5f;
+            pier.topTex = pier.sideTex = pier.botTex = lib.concrete;
+            pier.lightSide = 0.75f;
+            ch.sectors.slabs.add(pier);
             ch.boxes.add(new Box(px - r, g - 1f, pz - r, px + r, top, pz + r));
         }
     }

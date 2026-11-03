@@ -121,6 +121,109 @@ public final class Sectors {
         }
     }
 
+    /**
+     * A slab: a solid between two planes over a convex footprint, standing free of the ground
+     * (bridge decks, parapets, piers). Unlike a sector it has an underside, so the ground and
+     * roads pass underneath; the column renderer draws its top, sides and underside where a
+     * screen row's ray first meets it, and keeps marching the ground beneath it.
+     */
+    public static final class Slab {
+        public final float[] poly;
+        final float[] enx, enz, ed;
+        /** Top plane y = ta + tb x + tc z, bottom plane y = ba + bb x + bc z. */
+        public float ta, tb, tc, ba, bb, bc;
+        public int topTex, sideTex, botTex;
+        /** Top texture: u = dot(p - o, U) / us, v = dot(p - o, V) / vs + vOff; clampU for lane textures. */
+        public float ox, oz, ux = 1f, uz, vx, vz = 1f, us = 2f, vs = 2f, vOff;
+        public boolean clampU;
+        public float lightTop = 1f, lightSide = 0.8f, lightBot = 0.5f;
+        public float minX, minZ, maxX, maxZ;
+
+        public Slab(float[] poly) {
+            this.poly = poly;
+            int n = poly.length / 2;
+            enx = new float[n]; enz = new float[n]; ed = new float[n];
+            float cx = 0f, cz = 0f;
+            minX = minZ = Float.MAX_VALUE; maxX = maxZ = -Float.MAX_VALUE;
+            for (int i = 0; i < n; i++) {
+                cx += poly[i * 2]; cz += poly[i * 2 + 1];
+                minX = Math.min(minX, poly[i * 2]); maxX = Math.max(maxX, poly[i * 2]);
+                minZ = Math.min(minZ, poly[i * 2 + 1]); maxZ = Math.max(maxZ, poly[i * 2 + 1]);
+            }
+            cx /= n; cz /= n;
+            for (int i = 0; i < n; i++) {
+                int j = (i + 1) % n;
+                float dx = poly[j * 2] - poly[i * 2], dz = poly[j * 2 + 1] - poly[i * 2 + 1];
+                float l = (float) Math.sqrt(dx * dx + dz * dz);
+                float nx = l > 1e-6f ? dz / l : 0f, nz = l > 1e-6f ? -dx / l : 0f;
+                // relative to the centre (world coordinates are large)
+                if (nx * (poly[i * 2] - cx) + nz * (poly[i * 2 + 1] - cz) < 0f) { nx = -nx; nz = -nz; }
+                enx[i] = nx; enz[i] = nz;
+                ed[i] = nx * (poly[i * 2] - cx) + nz * (poly[i * 2 + 1] - cz);
+            }
+            this.cx = cx; this.cz = cz;
+        }
+
+        final float cx, cz;
+
+        public float top(float x, float z) { return ta + tb * x + tc * z; }
+        public float bot(float x, float z) { return ba + bb * x + bc * z; }
+
+        /** Plane through three points (x, y, z): {a, b, c} with y = a + b x + c z (relative maths). */
+        public static float[] plane(float x0, float y0, float z0, float x1, float y1, float z1, float x2, float y2, float z2) {
+            double ax = x1 - x0, ay = y1 - y0, az = z1 - z0, bx = x2 - x0, by = y2 - y0, bz = z2 - z0;
+            double nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
+            if (Math.abs(ny) < 1e-9) return new float[]{y0, 0f, 0f};
+            double b = -nx / ny, c = -nz / ny;
+            return new float[]{(float) (y0 - b * x0 - c * z0), (float) b, (float) c};
+        }
+
+        /** Ray (ox,oz) + t (dx,dz) through the footprint: {tIn, tOut} into out, false if it misses. */
+        boolean clip(float ox, float oz, float dx, float dz, float tMax, float[] out) {
+            float t0 = 0f, t1 = tMax;
+            float rx = ox - cx, rz = oz - cz;
+            for (int i = 0; i < enx.length; i++) {
+                float num = ed[i] - (enx[i] * rx + enz[i] * rz), den = enx[i] * dx + enz[i] * dz;
+                if (Math.abs(den) < 1e-9f) { if (num < 0f) return false; continue; }
+                float t = num / den;
+                if (den < 0f) { if (t > t0) t0 = t; } else { if (t < t1) t1 = t; }
+                if (t0 > t1) return false;
+            }
+            out[0] = t0; out[1] = t1;
+            return true;
+        }
+    }
+
+    /** Slab crossings of one ray, sorted by entry. */
+    public static final class SlabHits {
+        public int n;
+        public float[] tin = new float[16], tout = new float[16];
+        public Slab[] s = new Slab[16];
+        private final float[] tmp = new float[2];
+
+        void add(float a, float b, Slab sl) {
+            if (n == tin.length) {
+                tin = java.util.Arrays.copyOf(tin, n * 2); tout = java.util.Arrays.copyOf(tout, n * 2);
+                s = java.util.Arrays.copyOf(s, n * 2);
+            }
+            int i = n++;
+            while (i > 0 && tin[i - 1] > a) { tin[i] = tin[i - 1]; tout[i] = tout[i - 1]; s[i] = s[i - 1]; i--; }
+            tin[i] = a; tout[i] = b; s[i] = sl;
+        }
+    }
+
+    public final List<Slab> slabs = new ArrayList<>();
+    private float sMinX = Float.MAX_VALUE, sMinZ = Float.MAX_VALUE, sMaxX = -Float.MAX_VALUE, sMaxZ = -Float.MAX_VALUE;
+
+    /** Adds every slab the ray passes over or under, nearest entry first. */
+    public void castSlabs(float ox, float oz, float dx, float dz, float tMax, SlabHits out) {
+        if (slabs.isEmpty() || !boxHit(sMinX, sMinZ, sMaxX, sMaxZ, ox, oz, dx, dz, tMax)) return;
+        for (Slab sl : slabs) {
+            if (!boxHit(sl.minX, sl.minZ, sl.maxX, sl.maxZ, ox, oz, dx, dz, tMax)) continue;
+            if (sl.clip(ox, oz, dx, dz, tMax, out.tmp)) out.add(Math.max(0.3f, out.tmp[0]), out.tmp[1], sl);
+        }
+    }
+
     /** A piece of a wall after BSP splitting (u0: distance of its start along the wall). */
     static final class Seg {
         final Wall w;
@@ -141,7 +244,7 @@ public final class Sectors {
     Node root;
     public float minX = Float.MAX_VALUE, minZ = Float.MAX_VALUE, maxX = -Float.MAX_VALUE, maxZ = -Float.MAX_VALUE;
 
-    public boolean isEmpty() { return walls.isEmpty(); }
+    public boolean isEmpty() { return walls.isEmpty() && slabs.isEmpty(); }
 
     /** Builds the BSP tree (call once all walls are in). */
     public void build() {
@@ -152,6 +255,12 @@ public final class Sectors {
             minZ = Math.min(minZ, Math.min(w.z0, w.z1)); maxZ = Math.max(maxZ, Math.max(w.z0, w.z1));
         }
         root = segs.isEmpty() ? null : node(segs, 0);
+        for (Slab sl : slabs) {
+            sMinX = Math.min(sMinX, sl.minX); sMaxX = Math.max(sMaxX, sl.maxX);
+            sMinZ = Math.min(sMinZ, sl.minZ); sMaxZ = Math.max(sMaxZ, sl.maxZ);
+        }
+        minX = Math.min(minX, sMinX); maxX = Math.max(maxX, sMaxX);
+        minZ = Math.min(minZ, sMinZ); maxZ = Math.max(maxZ, sMaxZ);
     }
 
     private static Node node(List<Seg> segs, int depth) {

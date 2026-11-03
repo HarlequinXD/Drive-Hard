@@ -24,7 +24,12 @@ software renderer, no engine.
   keeps a **BSP tree** over its walls; every screen column's ray walks the trees front to back
   as it marches the Mode 7 ground, so walls and roofs are drawn in the same pass as the
   terrain and stand on it (walls run down to the actual ground, foundation below the floor).
-  Bridges, barriers, signs and small props are whole polygons with **perspective-correct**
+  **Bridges are slabs** in the same renderer: solids between two planes with an underside
+  (deck bands with their lane markings, parapets, piers), so the road below runs underneath and
+  cars and people pass under them (stacked surfaces: you stay on the level you are on).
+  Roads sit in **cuttings and on embankments with steep sides** (rock cuts and built-up fills)
+  instead of rolling over hills, and embankments end in abutments at bridges.
+  Barriers, signs and small props are whole polygons with **perspective-correct**
   texturing; trees, cars and people are true **sprites**, scaled rectangle blits (with the
   camera level, an upright billboard is always parallel to the screen). The ground fills a
   depth buffer that polygons and sprites test and write, so hills hide things and nothing

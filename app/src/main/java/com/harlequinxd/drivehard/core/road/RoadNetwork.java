@@ -1127,7 +1127,7 @@ public final class RoadNetwork {
             }
             if (over == null) continue;
             float sc = project(over, m.x, m.z);
-            float flat = m.under.cls.halfWidth() + 14f, ramp = 230f;
+            float flat = m.under.cls.halfWidth() + 14f, ramp = 150f;
             for (int i = 0; i < over.count(); i++) {
                 float d = Math.abs(over.s[i] - sc);
                 float w = d < flat ? 1f : 1f - smooth01((d - flat) / ramp);
@@ -1773,14 +1773,22 @@ public final class RoadNetwork {
             float vx = e.x[i + 1] - e.x[i], vz = e.z[i + 1] - e.z[i];
             float l2 = vx * vx + vz * vz;
             float t = l2 > 0f ? ((x - e.x[i]) * vx + (z - e.z[i]) * vz) / l2 : 0f;
+            // an embankment ends in a vertical abutment where its bridge begins: no fill under the deck
+            if (t > 1f && i + 1 < e.bridge.length && e.bridge[i + 1]) continue;
+            if (t < 0f && i > 0 && e.bridge[i - 1]) continue;
             t = Math.max(0f, Math.min(1f, t));
             float qx = e.x[i] + vx * t - x, qz = e.z[i] + vz * t - z;
             float d = (float) Math.sqrt(qx * qx + qz * qz);
             float hw = e.cls.halfWidth() + 0.6f;
             if (d > hw + 50f) continue;
             float yr = e.y[i] + (e.y[i + 1] - e.y[i]) * t;
-            float bank = Math.max(5f, Math.min(48f, 5f + Math.abs(nat - yr) * 1.5f));
-            float w = d <= hw ? 1f : 1f - smooth01((d - hw) / bank);
+            // cuttings and embankments have steep sides (rock cuts, built-up fills), not gentle hills:
+            // a 1.5 m shoulder, then about 60 degrees down to (or up from) the natural ground
+            float dh = Math.abs(nat - yr);
+            float shoulder = 1.5f, bank = Math.max(1.5f, Math.min(24f, dh * 0.6f));
+            if (d > hw + shoulder + bank + 0.5f) continue;
+            float u = (d - hw - shoulder) / bank;
+            float w = u <= 0f ? 1f : 1f - smooth01(Math.min(1f, u));
             // strongest influence wins; on the road itself the nearest piece decides the height
             if (w > bestW + 1e-4f || (w >= bestW - 1e-4f && d < bestD)) { bestW = w; bestY = yr - 0.03f; bestD = d; }
         }
