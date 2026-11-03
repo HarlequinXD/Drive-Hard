@@ -25,7 +25,7 @@ public class FloraPreview {
                 float k = 12f / f.ppm;
                 int fw = Math.round(s.frameW * k), fh = Math.round(s.frameH * k);
                 if (x + fw > W) { x = 4; y += rowH + 4; rowH = 0; }
-                int fx = s.frameX(1, v), fy = s.frameY(1, v);
+                int fx = s.frameX(0, v), fy = s.frameY(0, v);
                 for (int j = 0; j < fh; j++) for (int i = 0; i < fw; i++) {
                     int c = s.pixels[(fy + (int) (j / k)) * s.width + fx + (int) (i / k)];
                     if ((c >>> 24) != 0 && y + j < H) img.setRGB(x + i, y + j, c & 0xFFFFFF);
