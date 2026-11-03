@@ -122,6 +122,8 @@ public final class SoftRenderer {
     }
 
     /** Fills the background with a dithered sky gradient matching the fog colour at the horizon. */
+    private final int[] sky = new int[4 * 4096];
+
     public void drawSky() {
         for (int y = 0; y < H; y++) {
             float elev = (float) Math.atan((hy - (y + 0.5f)) / focal);
@@ -138,6 +140,9 @@ public final class SoftRenderer {
             int dy = (y & 3) << 2;
             int c0 = q(r, g, b, BAYER[dy] >> 1), c1 = q(r, g, b, BAYER[dy + 1] >> 1);
             int c2 = q(r, g, b, BAYER[dy + 2] >> 1), c3 = q(r, g, b, BAYER[dy + 3] >> 1);
+            sky[y * 4] = c0; sky[y * 4 + 1] = c1; sky[y * 4 + 2] = c2; sky[y * 4 + 3] = c3;
+            // with a ground map, the sky is filled per column above the ground instead (no overdraw)
+            if (ground != null) continue;
             for (int x = 0; x < W; x += 4) {
                 fb[row + x] = c0;
                 if (x + 1 < W) fb[row + x + 1] = c1;
@@ -164,7 +169,10 @@ public final class SoftRenderer {
      */
     private final float[] zbuf;
     private final float[] mipD = new float[Ground.MIPS];
+    private Ground.Tile[] snap = new Ground.Tile[0];
+    private int snapX, snapZ, snapN;
     private final java.util.List<java.util.concurrent.Callable<Void>> columnBands = new java.util.ArrayList<>();
+    private final java.util.List<java.util.concurrent.Callable<Void>> transposeBands = new java.util.ArrayList<>();
     private final java.util.List<TileCache> tileCaches = new java.util.ArrayList<>();
     private final TileCache soloCache = new TileCache();
 
@@ -174,14 +182,16 @@ public final class SoftRenderer {
         int cx = Integer.MIN_VALUE, cz = Integer.MIN_VALUE;
         float x0, z0;
 
-        boolean at(Ground.Source src, float x, float z) {
+        boolean at(SoftRenderer r, float x, float z) {
+            if (x >= x0 && z >= z0 && x < x0 + Ground.TILE && z < z0 + Ground.TILE && cx != Integer.MIN_VALUE) return t != null;
             float fxx = x * (1f / Ground.TILE), fzz = z * (1f / Ground.TILE);
             int tx = (int) fxx, tz = (int) fzz;
             if (fxx < tx) tx--;
             if (fzz < tz) tz--;
             if (tx != cx || tz != cz) {
                 cx = tx; cz = tz;
-                t = src.tile(tx, tz);
+                int i = tx - r.snapX, j = tz - r.snapZ;
+                t = i >= 0 && j >= 0 && i < r.snapN && j < r.snapN ? r.snap[j * r.snapN + i] : null;
                 x0 = tx * Ground.TILE; z0 = tz * Ground.TILE;
             }
             return t != null;
@@ -197,14 +207,24 @@ public final class SoftRenderer {
     public void drawGround() {
         if (ground == null) { Arrays.fill(zbuf, 0f); return; }
         for (int k = 0; k < Ground.MIPS; k++) mipD[k] = Ground.TEXEL * focal * (1 << k) * 1.4f;
+        // snapshot of the tiles in view range: per-pixel lookups index an array, no shared map
+        int reach = (int) Math.ceil(far / Ground.TILE) + 1;
+        snapN = reach * 2 + 1;
+        if (snap.length < snapN * snapN) snap = new Ground.Tile[snapN * snapN];
+        snapX = (int) Math.floor(ex / Ground.TILE) - reach;
+        snapZ = (int) Math.floor(ez / Ground.TILE) - reach;
+        for (int j = 0; j < snapN; j++)
+            for (int i = 0; i < snapN; i++) snap[j * snapN + i] = ground.tile(snapX + i, snapZ + j);
         // tiles stream in and out between frames
         for (TileCache tc : tileCaches) { tc.cx = Integer.MIN_VALUE; tc.t = null; }
         soloCache.cx = Integer.MIN_VALUE;
         soloCache.t = null;
-        if (pool == null) groundColumns(0, W, soloCache);
+        if (colFb.length != W * H) { colFb = new int[W * H]; colZ = new float[W * H]; }
+        if (pool == null) { groundColumns(0, W, soloCache); transposeGround(0, H); }
         else {
             try {
                 pool.invokeAll(columnBands);
+                pool.invokeAll(transposeBands);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
@@ -212,7 +232,7 @@ public final class SoftRenderer {
     }
 
     private float groundHeight(TileCache tc, float x, float z) {
-        if (!tc.at(ground, x, z)) return ground.height(x, z);
+        if (!tc.at(this, x, z)) return ground.height(x, z);
         float gx = (x - tc.x0) / Ground.HCELL, gz = (z - tc.z0) / Ground.HCELL;
         int ix = (int) gx, iz = (int) gz;
         if (ix > Ground.HCELLS - 1) ix = Ground.HCELLS - 1;
@@ -225,60 +245,93 @@ public final class SoftRenderer {
         return top + (bot - top) * tz;
     }
 
-    private int groundColor(TileCache tc, float x, float z, float d) {
-        if (!tc.at(ground, x, z)) return ground.color(x, z);
+    /** 15-bit colour (r5 g5 b5) of the ground map at (x, z), mip chosen by view depth d. */
+    private int mipFor(float d) {
         int k = 0;
-        while (k < Ground.MIPS - 1 && d > mipD[k + 1]) k++;
+        if (d > mipD[1]) { k = 1; while (k < Ground.MIPS - 1 && d > mipD[k + 1]) k++; }
+        return k;
+    }
+
+    private int groundColor(TileCache tc, float x, float z, int k) {
+        if (!tc.at(this, x, z)) {
+            int c = ground.color(x, z);
+            return ((c >> 19) & 31) << 10 | ((c >> 11) & 31) << 5 | ((c >> 3) & 31);
+        }
         int n = Ground.RES >> k;
         float sc = n / Ground.TILE;
         int px = (int) ((x - tc.x0) * sc), pz = (int) ((z - tc.z0) * sc);
         if (px >= n) px = n - 1; else if (px < 0) px = 0;
         if (pz >= n) pz = n - 1; else if (pz < 0) pz = 0;
-        int c = tc.t.mips[k][pz * n + px];
-        int r = (c >> 10) & 31, g = (c >> 5) & 31, b = c & 31;
-        return ((r << 3 | r >> 2) << 16) | ((g << 3 | g >> 2) << 8) | (b << 3 | b >> 2);
+        return tc.t.mips[k][(((pz >> 3) * (n >> 3) + (px >> 3)) << 6) | ((pz & 7) << 3) | (px & 7)];
     }
+
+    /** 15-bit colour to the framebuffer's ARGB (exactly what the dithered path produces without fog). */
+    private static final int[] RGB555 = new int[32768];
+    static {
+        for (int c = 0; c < 32768; c++) {
+            int r = (c >> 10) & 31, g = (c >> 5) & 31, b = c & 31;
+            RGB555[c] = 0xFF000000 | ((r << 3 | r >> 2) << 16) | ((g << 3 | g >> 2) << 8) | (b << 3 | b >> 2);
+        }
+    }
+
+    /** Column-major scratch (x * H + y): each column is written contiguously, then transposed. */
+    private int[] colFb = new int[0];
+    private float[] colZ = new float[0];
 
     private void groundColumns(int colA, int colB, TileCache tc) {
         float fogK = 1f / (fogEnd - fogStart);
         int fr = fogR, fg = fogG, fbb = fogB;
-        float[] thr = zbuf;
-        int[] out = fb;
+        int h = H;
+        float[] cz = colZ;
+        int[] cf = colFb;
+        int[] sk = sky;
+        float fs = fogStart;
         for (int x = colA; x < colB; x++) {
             float xs = (x + 0.5f - cx) / focal;
             float dx = fx + rx * xs, dz = fz + rz * xs;
-            int ybuf = H;
+            int base = x * h;
+            int ybuf = h;
             float d = 0.3f, dPrev = 0f, sPrev = 0f;
             boolean first = true;
             while (d <= far) {
                 float wx = ex + dx * d, wz = ez + dz * d;
-                float h = groundHeight(tc, wx, wz);
-                float s = hy - (h - ey) * focal / d;
+                float gh = groundHeight(tc, wx, wz);
+                float s = hy - (gh - ey) * focal / d;
                 int ys = (int) Math.ceil(s - 0.5f);
                 if (ys < 0) ys = 0;
                 if (ys < ybuf) {
+                    // 1/depth is linear down the screen between the two samples
                     float invC = 1f / d, invP = first ? invC : 1f / dPrev, span = s - sPrev;
-                    for (int y = ybuf - 1; y >= ys; y--) {
-                        float t = first || span > -1e-3f ? 1f : ((y + 0.5f) - sPrev) / span;
-                        if (t < 0f) t = 0f; else if (t > 1f) t = 1f;
-                        float dr = 1f / (invP + (invC - invP) * t);
-                        int c = groundColor(tc, ex + dx * dr, ez + dz * dr, dr);
-                        int r = (c >> 16) & 255, g = (c >> 8) & 255, b = c & 255;
-                        float f = (dr - fogStart) * fogK;
-                        if (f > 0f) {
+                    float iz, diz;
+                    if (first || span > -1e-3f) { iz = invC; diz = 0f; }
+                    else {
+                        diz = -(invC - invP) / span;                  // per row upwards
+                        iz = invP + (invC - invP) * (((ybuf - 1) + 0.5f - sPrev) / span);
+                    }
+                    float lo = Math.min(invP, invC), hi = Math.max(invP, invC);
+                    int mip = mipFor(1f / hi);          // one mip level per span (the nearer end)
+                    for (int y = ybuf - 1; y >= ys; y--, iz += diz) {
+                        float izc = iz < lo ? lo : (iz > hi ? hi : iz);
+                        float dr = 1f / izc;
+                        int c = groundColor(tc, ex + dx * dr, ez + dz * dr, mip);
+                        int k = base + y;
+                        if (dr <= fs) cf[k] = RGB555[c];          // the map is already 15-bit: no shading needed
+                        else {
+                            int r = (c >> 10) & 31, g = (c >> 5) & 31, b = c & 31;
+                            r = r << 3 | r >> 2; g = g << 3 | g >> 2; b = b << 3 | b >> 2;
+                            float f = (dr - fs) * fogK;
                             int fv = f >= 1f ? 256 : (int) (f * 256f);
                             r += ((fr - r) * fv) >> 8;
                             g += ((fg - g) * fv) >> 8;
                             b += ((fbb - b) * fv) >> 8;
+                            int db = BAYER[((y & 3) << 2) | (x & 3)] >> 1;
+                            r = (r + db) >> 3; if (r > 31) r = 31;
+                            g = (g + db) >> 3; if (g > 31) g = 31;
+                            b = (b + db) >> 3; if (b > 31) b = 31;
+                            cf[k] = 0xFF000000 | (((r << 3) | (r >> 2)) << 16) | (((g << 3) | (g >> 2)) << 8) | ((b << 3) | (b >> 2));
                         }
-                        int db = BAYER[((y & 3) << 2) | (x & 3)] >> 1;
-                        r = (r + db) >> 3; if (r > 31) r = 31;
-                        g = (g + db) >> 3; if (g > 31) g = 31;
-                        b = (b + db) >> 3; if (b > 31) b = 31;
-                        int k = y * W + x;
-                        out[k] = 0xFF000000 | (((r << 3) | (r >> 2)) << 16) | (((g << 3) | (g >> 2)) << 8) | ((b << 3) | (b >> 2));
-                        // polygons farther than this (with slack for things standing on it) are hidden
-                        thr[k] = 1f / (dr * 1.04f + 0.4f);
+                        // polygons farther than this (6% slack for things standing on it) are hidden
+                        cz[k] = izc * 0.94f;
                     }
                     ybuf = ys;
                     if (ybuf == 0) break;
@@ -286,9 +339,34 @@ public final class SoftRenderer {
                 first = false;
                 dPrev = d;
                 sPrev = s;
-                d += Math.max(0.3f, d * 0.022f);
+                // the height map is bilinear in 8 m cells and pixels are interpolated between
+                // samples, so samples can spread out: ~1 m near, ~3% of the distance far away
+                d += Math.max(0.9f, d * 0.03f);
             }
-            for (int y = 0; y < ybuf; y++) thr[y * W + x] = 0f;
+            for (int y = 0; y < ybuf; y++) {
+                cz[base + y] = 0f;
+                cf[base + y] = sk[y * 4 + (x & 3)];
+            }
+        }
+    }
+
+    /** Copies the column-major ground into the framebuffer and depth buffer, in cache-sized blocks. */
+    private void transposeGround(int y0, int y1) {
+        int w = W, h = H;
+        int[] cf = colFb, out = fb;
+        float[] cz = colZ, zb = zbuf;
+        for (int by = y0; by < y1; by += 16) {
+            int ey2 = Math.min(y1, by + 16);
+            for (int bx = 0; bx < w; bx += 16) {
+                int ex2 = Math.min(w, bx + 16);
+                for (int y = by; y < ey2; y++) {
+                    int row = y * w;
+                    for (int x = bx; x < ex2; x++) {
+                        out[row + x] = cf[x * h + y];
+                        zb[row + x] = cz[x * h + y];
+                    }
+                }
+            }
         }
     }
 
@@ -305,6 +383,7 @@ public final class SoftRenderer {
         pool = null;
         bands.clear();
         columnBands.clear();
+        transposeBands.clear();
         tileCaches.clear();
         tileCaches.add(soloCache);
         if (threads <= 1) return;
@@ -318,6 +397,7 @@ public final class SoftRenderer {
         for (int i = 0; i < nb; i++) {
             final int y0 = H * i / nb, y1 = H * (i + 1) / nb;
             bands.add(() -> { drawBand(y0, y1); return null; });
+            transposeBands.add(() -> { transposeGround(y0, y1); return null; });
             final int x0 = W * i / nb, x1 = W * (i + 1) / nb;
             final TileCache tc = new TileCache();
             tileCaches.add(tc);

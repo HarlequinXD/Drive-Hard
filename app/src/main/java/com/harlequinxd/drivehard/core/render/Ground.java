@@ -18,7 +18,8 @@ public final class Ground {
         public final int cx, cz;
         /**
          * mips[k] is (RES >> k)^2 texels in 15-bit RGB (the screen's colour depth, half the memory
-         * of ARGB), row-major, z down.
+         * of ARGB), z down, stored in 8x8 blocks (see {@link #index}) so that walking the map in
+         * any direction stays in cache.
          */
         public final short[][] mips = new short[MIPS][];
         /** (HCELLS+1)^2 heights at the 8 m grid points (shared with the neighbouring tiles). */
@@ -46,12 +47,19 @@ public final class Ground {
             }
         }
 
+        /** Position of texel (px, pz) in a mip of n x n texels. */
+        public static int index(int px, int pz, int n) {
+            return (((pz >> 3) * (n >> 3) + (px >> 3)) << 6) | ((pz & 7) << 3) | (px & 7);
+        }
+
         private static short[] pack(int[] c) {
             short[] out = new short[c.length];
+            int n = (int) Math.sqrt(c.length);
             for (int i = 0; i < c.length; i++) {
                 int v = c[i];
+                int o = index(i % n, i / n, n);
                 int r = Math.min(31, (((v >> 16) & 255) + 4) >> 3), g = Math.min(31, (((v >> 8) & 255) + 4) >> 3), b = Math.min(31, ((v & 255) + 4) >> 3);
-                out[i] = (short) ((r << 10) | (g << 5) | b);
+                out[o] = (short) ((r << 10) | (g << 5) | b);
             }
             return out;
         }

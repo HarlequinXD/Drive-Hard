@@ -34,6 +34,7 @@ public final class GameView extends SurfaceView implements SurfaceHolder.Callbac
     private volatile Game game;
     private volatile String loading = "Starting";
     private Thread loop;
+    private static final long FRAME_NS = 1_000_000_000L / 60;
     private volatile boolean running;
     private int surfW, surfH;
     private volatile boolean sizeChanged;
@@ -157,6 +158,10 @@ public final class GameView extends SurfaceView implements SurfaceHolder.Callbac
             } finally {
                 getHolder().unlockCanvasAndPost(c);
             }
+
+            // cap at 60 fps: no point rendering faster than the game needs (saves battery and heat)
+            long target = now + FRAME_NS;
+            for (long wait; (wait = target - System.nanoTime()) > 0; ) java.util.concurrent.locks.LockSupport.parkNanos(wait);
 
             fpsFrames++;
             if (now - fpsStart > 500_000_000L) {

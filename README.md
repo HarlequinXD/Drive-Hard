@@ -18,7 +18,7 @@ software renderer, no engine.
   depth buffer that polygons and sprites test and write, so hills hide things and nothing
   mis-sorts; a draw-layer ordering table still settles coplanar ties (shadows, decals).
   15-bit dithered colour, fog, near-plane clipping, draw distances, multi-threaded column
-  (ground) and band (polygons) rendering.
+  (ground) and band (polygons) rendering. The game loop is capped at 60 fps.
 - **Culling:** per-chunk and per-batch (each building is its own batch) frustum culling,
   per-polygon backface/distance culling, per-sprite frustum culling, and terrain occlusion
   culling (buildings and sprites hidden behind hills are skipped via heightfield ray tests).
