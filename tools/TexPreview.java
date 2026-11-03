@@ -25,7 +25,7 @@ public class TexPreview {
         for (int i = 0; i < 12; i++) misc[n++] = lib.signs[i];
         for (int v : lib.vending) misc[n++] = v;
         for (int v : lib.roofs) misc[n++] = v;
-        misc[n++] = lib.track; misc[n++] = lib.platform; misc[n++] = lib.blockWall; misc[n++] = lib.trainSideA; misc[n++] = lib.trainFrontA;
+        misc[n++] = lib.blockWall;
         misc[n++] = lib.stationSigns[0]; misc[n++] = lib.koban[0]; misc[n++] = lib.fireDoors[0];
         sheet(lib, java.util.Arrays.copyOf(misc, n), 10, new File(out, "tex_misc.png"));
         for (int i = 0; i < 10; i++) System.out.println(lib.shopNames.get(i * 7));
