@@ -16,7 +16,7 @@ public final class ChunkManager {
     private final ConcurrentHashMap<Long, Chunk> loaded = new ConcurrentHashMap<>();
     private final Object lock = new Object();
     private final List<long[]> wanted = new ArrayList<>();   // {key, distance^2}
-    private Thread worker;
+    private final List<Thread> workers = new ArrayList<>();
     private volatile boolean running;
     public float loadRadius = 200f, unloadRadius = 280f;
     public volatile int generatedTotal, unloadedTotal;
@@ -33,19 +33,24 @@ public final class ChunkManager {
 
     public Chunk get(int cx, int cz) { return loaded.get(key(cx, cz)); }
 
+    /** Chunks are generated on several cores at once (painting the ground map is the costly part). */
     public void start() {
-        if (worker != null) return;
+        if (!workers.isEmpty()) return;
         running = true;
-        worker = new Thread(this::work, "chunk-streamer");
-        worker.setDaemon(true);
-        worker.setPriority(Thread.NORM_PRIORITY - 1);
-        worker.start();
+        int n = Math.max(1, Math.min(3, Runtime.getRuntime().availableProcessors() / 2));
+        for (int i = 0; i < n; i++) {
+            Thread t = new Thread(this::work, "chunk-streamer-" + i);
+            t.setDaemon(true);
+            t.setPriority(Thread.NORM_PRIORITY - 1);
+            t.start();
+            workers.add(t);
+        }
     }
 
     public void stop() {
         running = false;
         synchronized (lock) { lock.notifyAll(); }
-        worker = null;
+        workers.clear();
     }
 
     /** Generates a chunk immediately on the calling thread if it is missing. */
@@ -104,7 +109,7 @@ public final class ChunkManager {
         update(fx, fz);
         List<long[]> copy;
         synchronized (lock) { copy = new ArrayList<>(wanted); wanted.clear(); }
-        for (long[] w : copy) ensure((int) (w[0] >> 32), (int) w[0]);
+        copy.parallelStream().forEach(w -> ensure((int) (w[0] >> 32), (int) w[0]));
     }
 
     private void work() {

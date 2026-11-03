@@ -52,12 +52,21 @@ final class GroundPainter {
     /** Box-filtered copies of library textures at the map's texel size (no moire). */
     private static final java.util.concurrent.ConcurrentHashMap<Long, Texture> FILTERED = new java.util.concurrent.ConcurrentHashMap<>();
 
+    private static final int RECENT = 8;
+    private final int[] recentId = {-1, -1, -1, -1, -1, -1, -1, -1};
+    private final float[] recentU = new float[RECENT], recentV = new float[RECENT];
+    private final Texture[] recentT = new Texture[RECENT];
+    private int recentNext;
+
     /** Colour of library texture {@code id} tiled every {@code m} metres, at world (x, z), filtered to the texel size. */
     private int world(int id, float m, float x, float z) {
         return world(id, m, m, x, z, 0f, 0f);
     }
 
     private int world(int id, float mu, float mv, float x, float z, float ox, float oz) {
+        // a few recently used filtered textures, checked without hashing (this runs per texel)
+        for (int k = 0; k < RECENT; k++)
+            if (recentId[k] == id && recentU[k] == mu && recentV[k] == mv) return sample(recentT[k], (x - ox) / mu, (z - oz) / mv);
         long key = ((long) id << 32) | (Float.floatToIntBits(mu) * 31L + Float.floatToIntBits(mv)) & 0xFFFFFFFFL;
         Texture f = FILTERED.get(key);
         if (f == null) {
@@ -80,6 +89,8 @@ final class GroundPainter {
             f = new Texture(w, h, px);
             FILTERED.put(key, f);
         }
+        int slot = recentNext++ & (RECENT - 1);
+        recentId[slot] = id; recentU[slot] = mu; recentV[slot] = mv; recentT[slot] = f;
         return sample(f, (x - ox) / mu, (z - oz) / mv);
     }
 
@@ -107,6 +118,17 @@ final class GroundPainter {
         tz = tz * tz * (3 - 2 * tz);
         float a = Noise.rnd(ix, iz, s), b = Noise.rnd(ix + 1, iz, s), c = Noise.rnd(ix, iz + 1, s), d = Noise.rnd(ix + 1, iz + 1, s);
         float top = a + (b - a) * tx, bot = c + (d - c) * tx;
+        return top + (bot - top) * tz;
+    }
+
+    private static final int JS = 8;
+
+    private static float bilerpN(float[] g, float gx, float gz) {
+        int n = RES / JS + 1;
+        int ix = Math.min(n - 2, (int) gx), iz = Math.min(n - 2, (int) gz);
+        float tx = gx - ix, tz = gz - iz;
+        int o = iz * n + ix;
+        float top = g[o] + (g[o + 1] - g[o]) * tx, bot = g[o + n] + (g[o + n + 1] - g[o + n]) * tx;
         return top + (bot - top) * tz;
     }
 
@@ -141,6 +163,15 @@ final class GroundPainter {
         int[] out = new int[RES * RES];
         // ---- ground layer: irregular borders between cell types, softened where two types meet
         Texture asphalt = tex(lib.asphalt), water = tex(lib.water), sand = tex(lib.sand);
+        // border jitter on a coarse lattice (smooth noise doesn't need evaluating per texel)
+        int jn = RES / JS + 1;
+        float[] jitX = new float[jn * jn], jitZ = new float[jn * jn];
+        for (int j = 0; j < jn; j++)
+            for (int i = 0; i < jn; i++) {
+                float x = x0 + i * JS * TEXEL, z = z0 + j * JS * TEXEL;
+                jitX[j * jn + i] = (vn(x / 3.1f, z / 3.1f, 31) - 0.5f) * 6f;
+                jitZ[j * jn + i] = (vn(x / 3.1f, z / 3.1f, 32) - 0.5f) * 6f;
+            }
         for (int py = 0; py < RES; py++) {
             float z = z0 + (py + 0.5f) * TEXEL;
             for (int px = 0; px < RES; px++) {
@@ -157,7 +188,8 @@ final class GroundPainter {
                     if (x > city.cityX0 && x < city.cityX1 && z > city.cityZ0 && z < city.cityZ1)
                         c = world(lib.asphalt, 2f, x, z);      // city: streets (blocks stand on it)
                     else {
-                        float jx = (vn(x / 3.1f, z / 3.1f, 31) - 0.5f) * 6f, jz = (vn(x / 3.1f, z / 3.1f, 32) - 0.5f) * 6f;
+                        float gx = px * (1f / JS), gz = py * (1f / JS);
+                        float jx = bilerpN(jitX, gx, gz), jz = bilerpN(jitZ, gx, gz);
                         Surface a = cell(grid, x + jx - x0, z + jz - z0);
                         if (a == null || a.tex < 0) a = b;
                         c = groundColor(a, x, z);

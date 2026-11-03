@@ -7,7 +7,7 @@ software renderer, no engine.
 ## Current state
 - **Mode 7 ground + 3D models and sprites (no OpenGL).** CPU renderer into a ~240p
   framebuffer, scaled up with nearest-neighbour. The ground is not geometry: the island is a
-  flat, top-down **painted map** (streamed in 64 m tiles at 25 cm per texel, with mipmaps) plus
+  flat, top-down **painted map** (streamed in 64 m tiles at 12.5 cm per texel (512x512, 15-bit colour, with mipmaps)) plus
   a height map, projected **Mode 7 style**, one screen column at a time (a height-mapped Mode 7,
   like voxel-space engines), so hills rise out of the map and hide what lies behind them. The
   camera never really pitches; it shifts the horizon (a y-shear), so vertical lines stay

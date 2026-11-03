@@ -9,25 +9,29 @@ package com.harlequinxd.drivehard.core.render;
 public final class Ground {
     /** Tile edge in metres, texels per tile edge at mip 0, height samples per tile edge (cells + 1). */
     public static final float TILE = 64f;
-    public static final int RES = 256, HCELLS = 8;
+    public static final int RES = 512, HCELLS = 8;
     public static final float TEXEL = TILE / RES, HCELL = TILE / HCELLS;
-    public static final int MIPS = 6;
+    public static final int MIPS = 7;
 
     /** One painted tile: colour mips (lighting baked in) and its corner heights. */
     public static final class Tile {
         public final int cx, cz;
-        /** mips[k] is (RES >> k)^2 ARGB texels, row-major, z down. */
-        public final int[][] mips = new int[MIPS][];
+        /**
+         * mips[k] is (RES >> k)^2 texels in 15-bit RGB (the screen's colour depth, half the memory
+         * of ARGB), row-major, z down.
+         */
+        public final short[][] mips = new short[MIPS][];
         /** (HCELLS+1)^2 heights at the 8 m grid points (shared with the neighbouring tiles). */
         public final float[] h = new float[(HCELLS + 1) * (HCELLS + 1)];
 
         public Tile(int cx, int cz, int[] base) {
             this.cx = cx;
             this.cz = cz;
-            mips[0] = base;
+            int[] src = base;
+            mips[0] = pack(src);
             for (int k = 1; k < MIPS; k++) {
                 int n = RES >> k, m = n << 1;
-                int[] src = mips[k - 1], dst = new int[n * n];
+                int[] dst = new int[n * n];
                 for (int y = 0; y < n; y++)
                     for (int x = 0; x < n; x++) {
                         int a = src[(y * 2) * m + x * 2], b = src[(y * 2) * m + x * 2 + 1];
@@ -35,10 +39,21 @@ public final class Ground {
                         int r = (((a >> 16) & 255) + ((b >> 16) & 255) + ((c >> 16) & 255) + ((d >> 16) & 255) + 2) >> 2;
                         int g = (((a >> 8) & 255) + ((b >> 8) & 255) + ((c >> 8) & 255) + ((d >> 8) & 255) + 2) >> 2;
                         int bl = ((a & 255) + (b & 255) + (c & 255) + (d & 255) + 2) >> 2;
-                        dst[y * n + x] = 0xFF000000 | (r << 16) | (g << 8) | bl;
+                        dst[y * n + x] = (r << 16) | (g << 8) | bl;
                     }
-                mips[k] = dst;
+                mips[k] = pack(dst);
+                src = dst;
             }
+        }
+
+        private static short[] pack(int[] c) {
+            short[] out = new short[c.length];
+            for (int i = 0; i < c.length; i++) {
+                int v = c[i];
+                int r = Math.min(31, (((v >> 16) & 255) + 4) >> 3), g = Math.min(31, (((v >> 8) & 255) + 4) >> 3), b = Math.min(31, ((v & 255) + 4) >> 3);
+                out[i] = (short) ((r << 10) | (g << 5) | b);
+            }
+            return out;
         }
     }
 

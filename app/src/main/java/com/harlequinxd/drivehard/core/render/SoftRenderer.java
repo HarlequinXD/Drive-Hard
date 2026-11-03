@@ -234,7 +234,9 @@ public final class SoftRenderer {
         int px = (int) ((x - tc.x0) * sc), pz = (int) ((z - tc.z0) * sc);
         if (px >= n) px = n - 1; else if (px < 0) px = 0;
         if (pz >= n) pz = n - 1; else if (pz < 0) pz = 0;
-        return tc.t.mips[k][pz * n + px];
+        int c = tc.t.mips[k][pz * n + px];
+        int r = (c >> 10) & 31, g = (c >> 5) & 31, b = c & 31;
+        return ((r << 3 | r >> 2) << 16) | ((g << 3 | g >> 2) << 8) | (b << 3 | b >> 2);
     }
 
     private void groundColumns(int colA, int colB, TileCache tc) {
