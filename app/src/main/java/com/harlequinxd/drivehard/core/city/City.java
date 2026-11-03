@@ -239,6 +239,10 @@ public final class City extends World {
                 Chunk c = chunks.get(cx, cz);
                 return c == null ? null : c.ground;
             }
+            @Override public com.harlequinxd.drivehard.core.render.Sectors sectors(int cx, int cz) {
+                Chunk c = chunks.get(cx, cz);
+                return c == null ? null : c.sectors;
+            }
             @Override public float height(float x, float z) { return Math.max(-0.05f, terrain.height(x, z)); }
             @Override public int color(float x, float z) { return GroundPainter.farColor(terrain, x, z); }
         };

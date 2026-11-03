@@ -2,6 +2,7 @@ package com.harlequinxd.drivehard.core.city;
 
 import com.harlequinxd.drivehard.core.game.Box;
 import com.harlequinxd.drivehard.core.render.Geo;
+import com.harlequinxd.drivehard.core.render.Sectors;
 import com.harlequinxd.drivehard.core.tex.JpTextures.Kind;
 import com.harlequinxd.drivehard.core.tex.TextureLibrary;
 
@@ -13,7 +14,9 @@ import static com.harlequinxd.drivehard.core.render.SoftRenderer.L_OBJECT;
  * Builds Japanese buildings inside a footprint: office towers, department stores, multi-tenant
  * bar buildings (with vertical signboards), apartment mansions, shophouses, convenience stores,
  * pachinko parlours, detached houses with tiled gable roofs, small apartments, fire stations,
- * police boxes and warehouses.
+ * police boxes and warehouses. Buildings are sectors (see {@link SectorBuilder}): facades are
+ * walls tiled per storey with facade, shopfront and lobby tiles, roofs are flat decks inside a
+ * parapet or pitched sectors; only signs, masts and similar props are polygons.
  */
 final class BuildingGen {
     static final int N = 0, S = 1, W = 2, E = 3;
@@ -80,13 +83,13 @@ final class BuildingGen {
         float h00 = t.height(x0, z0) + c, h10 = t.height(x1, z0) + c, h01 = t.height(x0, z1) + c, h11 = t.height(x1, z1) + c;
         float base = Math.max(Math.max(h00, h10), Math.max(h01, h11));
         footMin = Math.min(Math.min(h00, h10), Math.min(h01, h11)) - c - 0.3f;
-        int tex = lib.concrete;
-        gb.wallSloped(x1, z0, x0, z0, h10 - 0.1f, h00 - 0.1f, base, base, tex, 0, (x1 - x0) * 0.5f, 0, 0.5f, L_OBJECT, 0f, 0.8f, 0);
-        gb.wallSloped(x0, z1, x1, z1, h01 - 0.1f, h11 - 0.1f, base, base, tex, 0, (x1 - x0) * 0.5f, 0, 0.5f, L_OBJECT, 0f, 0.8f, 0);
-        gb.wallSloped(x0, z0, x0, z1, h00 - 0.1f, h01 - 0.1f, base, base, tex, 0, (z1 - z0) * 0.5f, 0, 0.5f, L_OBJECT, 0f, 0.8f, 0);
-        gb.wallSloped(x1, z1, x1, z0, h11 - 0.1f, h10 - 0.1f, base, base, tex, 0, (z1 - z0) * 0.5f, 0, 0.5f, L_OBJECT, 0f, 0.8f, 0);
+        sb = new SectorBuilder(ch.sectors);
+        sb.world();
         return base;
     }
+
+    /** Sector builder of the building being built (world frame). */
+    private SectorBuilder sb;
 
     static float[] edge(int side, float x0, float z0, float x1, float z1) {
         switch (side) {
@@ -95,6 +98,101 @@ final class BuildingGen {
             case W: return new float[]{x0, z0, x0, z1};
             default: return new float[]{x1, z1, x1, z0};
         }
+    }
+
+    // ------------------------------------------------------------------ tiles
+
+    /**
+     * Tiles of a facade: the ground storey (shopfronts, a lobby, or the facade) if groundH &gt; 0,
+     * then {@code storeys} storeys of facade tiles 2 m wide; above the top storey plain concrete
+     * (the parapet), the foundation below the base. {@code ground}: a texture, -1 shops, -2 lobby.
+     */
+    private Sectors.Tiles facade(float len, float groundH, int storeys, float floorH, int tex, int ground, int[] shopSet) {
+        boolean hasGround = groundH > 0f;
+        int floors = Math.max(0, storeys) + (hasGround ? 1 : 0);
+        Sectors.Tiles t = new Sectors.Tiles(floors);
+        t.mat = t.matUp = lib.concrete;
+        t.found = lib.concrete;
+        t.groundH = hasGround ? groundH : floorH;
+        t.storeyH = floorH;
+        int cols = Math.max(1, Math.round(len / 2f));
+        for (int f = 0; f < floors; f++) t.storey(f, cols, Sectors.FULL, tex);
+        if (hasGround) {
+            if (ground == -1 || ground == -2) {
+                int units = Math.max(1, Math.round(len / 5.5f));
+                t.storey(0, units, Sectors.FULL, 0);
+                for (int u = 0; u < units; u++)
+                    t.tex[0][u] = ground == -2 ? (u == units / 2 ? lib.lobbies[r.nextInt(lib.lobbies.length)] : lib.facades(Kind.GLASS)[0])
+                            : shopSet[r.nextInt(shopSet.length)];
+            } else t.storey(0, cols, Sectors.FULL, ground);
+        }
+        return t;
+    }
+
+    /** One tile filling the ground storey (fire station doors, police box front), facade above. */
+    private Sectors.Tiles single(float groundH, int ground, int floors, float floorH, int tex, float len) {
+        Sectors.Tiles t = new Sectors.Tiles(floors);
+        t.mat = t.matUp = lib.concrete;
+        t.found = lib.concrete;
+        t.groundH = groundH;
+        t.storeyH = floorH;
+        t.storey(0, 1, Sectors.FULL, ground);
+        for (int f = 1; f < floors; f++) t.storey(f, Math.max(1, Math.round(len / 2f)), Sectors.FULL, tex);
+        return t;
+    }
+
+    private SectorBuilder.Face[] faces(float x0, float z0, float x1, float z1, Sectors.Tiles[] t) {
+        SectorBuilder.Face[] f = new SectorBuilder.Face[4];
+        for (int s = 0; s < 4; s++) {
+            float[] e = edge(s, x0, z0, x1, z1);
+            f[s] = sb.face(e[0], e[1], e[2], e[3], t[s]);
+        }
+        return f;
+    }
+
+    private static float len(int s, float x0, float z0, float x1, float z1) {
+        return s == N || s == S ? x1 - x0 : z1 - z0;
+    }
+
+    /** Flat roof: a deck at {@code top} inside a parapet ring {@code parapet} high (none if 0). */
+    private void flatRoof(float x0, float z0, float x1, float z1, float base, float top, float parapet, int roofTex,
+                          SectorBuilder.Face[] f) {
+        Sectors.Tiles cap = SectorBuilder.plain(lib.concrete, lib.concrete);
+        if (parapet <= 0f) {
+            sb.piece(new float[]{x0, z0, x1, z0, x1, z1, x0, z1}, top, 0f, 0f, base, roofTex, 2f, -1f, f, cap);
+        } else {
+            float t = 0.3f, h = top + parapet;
+            sb.piece(new float[]{x0 + t, z0 + t, x1 - t, z0 + t, x1 - t, z1 - t, x0 + t, z1 - t}, top, 0f, 0f, base, roofTex, 2f, -1f, f, cap);
+            sb.piece(new float[]{x0, z0, x1, z0, x1, z0 + t, x0, z0 + t}, h, 0f, 0f, base, lib.concrete, 2f, -1f, f, cap);
+            sb.piece(new float[]{x0, z1 - t, x1, z1 - t, x1, z1, x0, z1}, h, 0f, 0f, base, lib.concrete, 2f, -1f, f, cap);
+            sb.piece(new float[]{x0, z0 + t, x0 + t, z0 + t, x0 + t, z1 - t, x0, z1 - t}, h, 0f, 0f, base, lib.concrete, 2f, -1f, f, cap);
+            sb.piece(new float[]{x1 - t, z0 + t, x1, z0 + t, x1, z1 - t, x1 - t, z1 - t}, h, 0f, 0f, base, lib.concrete, 2f, -1f, f, cap);
+        }
+        sb.taken(x0, z0, x1, z1);
+    }
+
+    /** Pitched roof with gable ends, ridge along the longer side: two sloped sectors. */
+    private void gableRoof(float x0, float z0, float x1, float z1, float base, float top, float pitch, int roofTex,
+                           SectorBuilder.Face[] f, Sectors.Tiles inner) {
+        if (x1 - x0 >= z1 - z0) {
+            float zc = (z0 + z1) * 0.5f;
+            sb.piece(new float[]{x0, z0, x1, z0, x1, zc, x0, zc}, top - pitch * z0, 0f, pitch, base, roofTex, 2f, -1f, f, inner);
+            sb.piece(new float[]{x0, zc, x1, zc, x1, z1, x0, z1}, top + pitch * z1, 0f, -pitch, base, roofTex, 2f, -1f, f, inner);
+        } else {
+            float xc = (x0 + x1) * 0.5f;
+            sb.piece(new float[]{x0, z0, xc, z0, xc, z1, x0, z1}, top - pitch * x0, pitch, 0f, base, roofTex, 2f, -1f, f, inner);
+            sb.piece(new float[]{xc, z0, x1, z0, x1, z1, xc, z1}, top + pitch * x1, -pitch, 0f, base, roofTex, 2f, -1f, f, inner);
+        }
+        sb.taken(x0, z0, x1, z1);
+    }
+
+    /** A plain box standing on whatever is below it (roof plant, stair housings, tanks). */
+    private void plantBox(float x0, float z0, float x1, float z1, float y0, float y1, int side, int top) {
+        Sectors.Tiles t = SectorBuilder.plain(side, side);
+        t.matScale = 1.5f;
+        SectorBuilder.Face[] f = faces(x0, z0, x1, z1, new Sectors.Tiles[]{t, t, t, t});
+        sb.piece(new float[]{x0, z0, x1, z0, x1, z1, x0, z1}, y1, 0f, 0f, y0, top, 2f, -1f, f, t);
+        sb.taken(x0, z0, x1, z1);
     }
 
     // ------------------------------------------------------------------ generic box building
@@ -110,14 +208,14 @@ final class BuildingGen {
         float groundH = anyShop ? City.SHOP_H : floorH;
         float top = base + groundH + (floors - 1) * floorH;
         float parapet = 0.8f;
+        Sectors.Tiles[] t = new Sectors.Tiles[4];
         for (int s = 0; s < 4; s++) {
             int tex = street[s] ? fTex : (s == N || s == S ? bTex : side);
-            int ground = shops[s] ? -1 : tex;
-            facadeSide(edge(s, x0, z0, x1, z1), base, groundH, top, floorH, tex, ground, parapet, shopSet);
+            t[s] = facade(len(s, x0, z0, x1, z1), groundH, floors - 1, floorH, tex, shops[s] ? -1 : tex, shopSet);
             if (street[s] && signs > 0 && floors > 1) verticalSigns(s, x0, z0, x1, z1, base + groundH + 0.6f, top, signs);
         }
-        roof(x0, z0, x1, z1, top, parapet, r.nextBoolean() ? lib.roofMembrane : lib.concrete);
         rooftop(x0, z0, x1, z1, top);
+        flatRoof(x0, z0, x1, z1, base, top, parapet, r.nextBoolean() ? lib.roofMembrane : lib.concrete, faces(x0, z0, x1, z1, t));
         if (bigSign) rooftopSign(x0, z0, x1, z1, top + parapet, street);
         ch.boxes.add(new Box(x0, footMin, z0, x1, top + parapet, z1));
     }
@@ -126,89 +224,44 @@ final class BuildingGen {
         int pod = pick(Kind.OFFICE_GRID);
         int podFloors = 2 + r.nextInt(3);
         float podTop = base + City.SHOP_H + (podFloors - 1) * City.FLOOR_H;
-        for (int s = 0; s < 4; s++) {
-            int ground = shops[s] ? -1 : (street[s] ? -2 : pod);
-            facadeSide(edge(s, x0, z0, x1, z1), base, City.SHOP_H, podTop, City.FLOOR_H, pod, ground, 0.9f, shopSet);
-        }
-        roof(x0, z0, x1, z1, podTop, 0.9f, lib.roofGravel);
         float in = 3f + r.nextInt(3);
         float tx0 = x0 + in, tz0 = z0 + in, tx1 = x1 - in, tz1 = z1 - in;
-        ch.boxes.add(new Box(x0, footMin, z0, x1, podTop + 0.9f, z1));
-        if (tx1 - tx0 < 10f || tz1 - tz0 < 10f) return;
-        int tower = pick(r.nextBoolean() ? Kind.GLASS : Kind.OFFICE_GRID);
-        int floors = 12 + r.nextInt(28);
-        float top = podTop + floors * 3.6f;
+        if (tx1 - tx0 >= 10f && tz1 - tz0 >= 10f) {
+            // the tower first: the podium roof is cut round it
+            int tower = pick(r.nextBoolean() ? Kind.GLASS : Kind.OFFICE_GRID);
+            int floors = 12 + r.nextInt(28);
+            float top = podTop + floors * 3.6f;
+            Sectors.Tiles[] t = new Sectors.Tiles[4];
+            for (int s = 0; s < 4; s++) t[s] = facade(len(s, tx0, tz0, tx1, tz1), 0f, floors, 3.6f, tower, tower, shopSet);
+            rooftop(tx0, tz0, tx1, tz1, top);
+            flatRoof(tx0, tz0, tx1, tz1, podTop, top, 1.2f, lib.roofMembrane, faces(tx0, tz0, tx1, tz1, t));
+            // aviation light mast
+            gb.box((tx0 + tx1) * 0.5f - 0.15f, top, (tz0 + tz1) * 0.5f - 0.15f, (tx0 + tx1) * 0.5f + 0.15f, top + 6f,
+                    (tz0 + tz1) * 0.5f + 0.15f, lib.pole, -1, 1f, 1f, L_OBJECT, -0.2f, Geo.FLAG_DETAIL);
+            ch.boxes.add(new Box(tx0, footMin, tz0, tx1, top + 1.2f, tz1));
+        }
+        Sectors.Tiles[] t = new Sectors.Tiles[4];
         for (int s = 0; s < 4; s++)
-            facadeSide(edge(s, tx0, tz0, tx1, tz1), podTop, 0f, top, 3.6f, tower, tower, 1.2f, shopSet);
-        roof(tx0, tz0, tx1, tz1, top, 1.2f, lib.roofMembrane);
-        rooftop(tx0, tz0, tx1, tz1, top);
-        // helipad-style red/white aviation light mast
-        gb.box((tx0 + tx1) * 0.5f - 0.15f, top, (tz0 + tz1) * 0.5f - 0.15f, (tx0 + tx1) * 0.5f + 0.15f, top + 6f,
-                (tz0 + tz1) * 0.5f + 0.15f, lib.pole, -1, 1f, 1f, L_OBJECT, -0.2f, Geo.FLAG_DETAIL);
-        ch.boxes.add(new Box(tx0, footMin, tz0, tx1, top + 1.2f, tz1));
+            t[s] = facade(len(s, x0, z0, x1, z1), City.SHOP_H, podFloors - 1, City.FLOOR_H, pod, shops[s] ? -1 : (street[s] ? -2 : pod), shopSet);
+        flatRoof(x0, z0, x1, z1, base, podTop, 0.9f, lib.roofGravel, faces(x0, z0, x1, z1, t));
+        ch.boxes.add(new Box(x0, footMin, z0, x1, podTop + 0.9f, z1));
     }
 
-    private void facadeSide(float[] ab, float base, float groundH, float top, float floorH, int tex, int ground,
-                            float parapet, int[] shopSet) {
-        float ax = ab[0], az = ab[1], bx = ab[2], bz = ab[3];
-        float dx = bx - ax, dz = bz - az, len = (float) Math.sqrt(dx * dx + dz * dz);
-        float g1 = base + groundH;
-        if (groundH > 0f) {
-            if (ground == -1 || ground == -2) {
-                int units = Math.max(1, Math.round(len / 5.5f));
-                for (int u = 0; u < units; u++) {
-                    float s0 = u / (float) units, s1 = (u + 1) / (float) units;
-                    int t;
-                    if (ground == -2) t = u == units / 2 ? lib.lobbies[r.nextInt(lib.lobbies.length)] : lib.facades(Kind.GLASS)[0];
-                    else t = shopSet[r.nextInt(shopSet.length)];
-                    gb.wall(ax + dx * s0, az + dz * s0, ax + dx * s1, az + dz * s1, base, g1, t, 0f, 1f, 0f, 1f, L_OBJECT, 0f, 0.8f);
-                }
-            } else {
-                gb.wallGrid(ax, az, bx, bz, base, g1, ground, 0.5f, 1f / floorH, 8f, groundH, L_OBJECT, 0f, true);
-            }
-        }
-        if (top > g1 + 0.01f)
-            gb.wallGrid(ax, az, bx, bz, g1, top, tex, 0.5f, 1f / floorH, 8f, floorH * 4f, L_OBJECT, 0f, groundH <= 0f);
-        if (parapet > 0f) {
-            int cols = Math.max(1, (int) Math.ceil(len / 8f));
-            for (int c = 0; c < cols; c++) {
-                float s0 = c / (float) cols, s1 = (c + 1) / (float) cols;
-                gb.wall(ax + dx * s0, az + dz * s0, ax + dx * s1, az + dz * s1, top, top + parapet, tex,
-                        len * s0 * 0.5f, len * s1 * 0.5f, 0.955f, 0.995f, L_OBJECT, 0f, 1f);
-            }
-        }
-    }
-
-    private void roof(float x0, float z0, float x1, float z1, float top, float parapet, int roofTex) {
-        float l = GeoBuilder.sunLight(0, 1, 0) * 0.95f;
-        for (float z = z0; z < z1 - 1e-3f; z += 12f)
-            for (float x = x0; x < x1 - 1e-3f; x += 12f)
-                gb.floor(x, z, Math.min(x1, x + 12f), Math.min(z1, z + 12f), top, roofTex, 2f, 2f, L_OBJECT, l, 3f);
-        if (parapet <= 0f) return;
-        float[][] inner = {{x0, z0, x1, z0}, {x1, z1, x0, z1}, {x0, z1, x0, z0}, {x1, z0, x1, z1}};
-        for (float[] e : inner) {
-            float dx = e[2] - e[0], dz = e[3] - e[1], len = (float) Math.sqrt(dx * dx + dz * dz);
-            int cols = Math.max(1, (int) Math.ceil(len / 8f));
-            for (int c = 0; c < cols; c++) {
-                float s0 = c / (float) cols, s1 = (c + 1) / (float) cols;
-                gb.wall(e[0] + dx * s0, e[1] + dz * s0, e[0] + dx * s1, e[1] + dz * s1, top, top + parapet, lib.concrete,
-                        len * s0 * 0.5f, len * s1 * 0.5f, 0f, parapet * 0.5f, L_OBJECT, 1.5f, 0.8f);
-            }
-        }
-    }
-
+    /** Roof plant: a/c units, and on larger roofs a stair housing with a water tank on it. */
     private void rooftop(float x0, float z0, float x1, float z1, float top) {
         float w = x1 - x0, d = z1 - z0;
+        boolean housing = w > 8f && d > 8f && r.nextBoolean();
+        float hx = x0 + w * 0.5f - 1.5f, hz = z0 + d * 0.5f - 1.5f;
+        if (housing) {
+            if (r.nextBoolean()) plantBox(hx + 0.5f, hz + 0.5f, hx + 2.5f, hz + 2.5f, top + 3f, top + 4.6f, lib.metal, lib.metal);
+            plantBox(hx, hz, hx + 3f, hz + 3f, top, top + 3f, lib.concrete, lib.roofTar);
+        }
         int n = 1 + r.nextInt(3);
         for (int i = 0; i < n; i++) {
             float ax = x0 + 1.2f + r.nextFloat() * Math.max(0.1f, w - 4f), az = z0 + 1.2f + r.nextFloat() * Math.max(0.1f, d - 3f);
-            gb.box(ax, top, az, ax + 1.6f, top + 1.1f, az + 1f, lib.metal, lib.metal, 0.5f, 0.5f, L_OBJECT, -0.3f, Geo.FLAG_DETAIL);
-        }
-        if (w > 8f && d > 8f && r.nextBoolean()) {     // stair / elevator housing + water tank
-            float ax = x0 + w * 0.5f - 1.5f, az = z0 + d * 0.5f - 1.5f;
-            gb.box(ax, top, az, ax + 3f, top + 3f, az + 3f, lib.concrete, lib.roofTar, 0.5f, 0.5f, L_OBJECT, -0.3f, Geo.FLAG_DETAIL);
-            if (r.nextBoolean())
-                gb.box(ax + 0.5f, top + 3f, az + 0.5f, ax + 2.5f, top + 4.6f, az + 2.5f, lib.metal, lib.metal, 0.5f, 0.5f, L_OBJECT, -0.4f, Geo.FLAG_DETAIL);
+            if (ax + 1.6f > x1 - 0.5f || az + 1f > z1 - 0.5f) continue;
+            if (housing && ax < hx + 3.2f && ax + 1.6f > hx - 0.2f && az < hz + 3.2f && az + 1f > hz - 0.2f) continue;
+            plantBox(ax, az, ax + 1.6f, az + 1f, top, top + 1.1f, lib.metal, lib.metal);
         }
     }
 
@@ -272,145 +325,25 @@ final class BuildingGen {
         return base + 0.15f;
     }
 
-    private void house(float x0, float z0, float x1, float z1, float base, boolean[] street) {
-        boolean wood = r.nextInt(5) == 0;
-        int wall = pick(wood ? Kind.HOUSE_WOOD : Kind.HOUSE);
-        boolean modern = !wood && r.nextInt(4) == 0;
-        float floorH = 2.8f;
-        int floors = modern && r.nextBoolean() ? 3 : 2;
-        float top = base + floors * floorH;
-        for (int s = 0; s < 4; s++)
-            gb.wallGrid(edge(s, x0, z0, x1, z1)[0], edge(s, x0, z0, x1, z1)[1], edge(s, x0, z0, x1, z1)[2],
-                    edge(s, x0, z0, x1, z1)[3], base, top, wall, 0.5f, 1f / floorH, 8f, floorH * 2f, L_OBJECT, 0f, true);
-        // front door on a street side
-        for (int s = 0; s < 4; s++) {
-            if (!street[s]) continue;
-            float[] e = edge(s, x0, z0, x1, z1);
-            float dx = e[2] - e[0], dz = e[3] - e[1];
-            float t0 = 0.15f, t1 = 0.3f;
-            float nx = -dz, nz = dx, nl = (float) Math.sqrt(nx * nx + nz * nz);
-            nx = nx / nl * 0.02f; nz = nz / nl * 0.02f;
-            gb.wall(e[0] + dx * t0 + nx, e[1] + dz * t0 + nz, e[0] + dx * t1 + nx, e[1] + dz * t1 + nz, base, base + 2.1f,
-                    lib.facades(Kind.CORRIDOR)[r.nextInt(lib.facades(Kind.CORRIDOR).length)], 0.2f, 0.62f, 0.17f, 0.69f, L_OBJECT, -0.05f, 1f);
-            break;
-        }
-        if (modern) {
-            roof(x0, z0, x1, z1, top, 0.4f, lib.roofMembrane);
-            ch.boxes.add(new Box(x0, footMin, z0, x1, top + 0.4f, z1));
-        } else {
-            int roofTex = lib.roofs[r.nextInt(lib.roofs.length)];
-            gable(x0, z0, x1, z1, top, wall, roofTex);
-            ch.boxes.add(new Box(x0, footMin, z0, x1, top + 1.2f, z1));
-        }
-    }
-
-    /** Old farmhouse: one or two storeys of timber or plaster under a big tiled roof. */
-    private void farmhouse(float x0, float z0, float x1, float z1, float base, boolean[] street) {
-        boolean wood = r.nextBoolean();
-        int wall = pick(wood ? Kind.HOUSE_WOOD : Kind.HOUSE);
-        float floorH = 2.9f;
-        int floors = r.nextInt(3) == 0 ? 1 : 2;
-        float top = base + floors * floorH;
-        for (int s = 0; s < 4; s++) {
-            float[] e = edge(s, x0, z0, x1, z1);
-            gb.wallGrid(e[0], e[1], e[2], e[3], base, top, wall, 0.5f, 1f / floorH, 8f, floorH * 2f, L_OBJECT, 0f, true);
-        }
-        for (int s = 0; s < 4; s++) {
-            if (!street[s]) continue;
-            float[] e = edge(s, x0, z0, x1, z1);
-            float dx = e[2] - e[0], dz = e[3] - e[1];
-            float nx = -dz, nz = dx, nl = (float) Math.sqrt(nx * nx + nz * nz);
-            nx = nx / nl * 0.02f; nz = nz / nl * 0.02f;
-            gb.wall(e[0] + dx * 0.4f + nx, e[1] + dz * 0.4f + nz, e[0] + dx * 0.6f + nx, e[1] + dz * 0.6f + nz, base, base + 2.2f,
-                    lib.facades(Kind.CORRIDOR)[r.nextInt(lib.facades(Kind.CORRIDOR).length)], 0.2f, 0.62f, 0.17f, 0.69f, L_OBJECT, -0.05f, 1f);
-            break;
-        }
-        int roofTex = lib.roofs[r.nextInt(2)];
-        gable(x0, z0, x1, z1, top, wall, roofTex);
-        ch.boxes.add(new Box(x0, footMin, z0, x1, top + 1.2f, z1));
-    }
-
     /** Timber barn / tool shed with a corrugated metal roof. */
     private void shed(float x0, float z0, float x1, float z1, float base) {
         int wall = pick(Kind.HOUSE_WOOD);
         float top = base + 3.3f;
+        Sectors.Tiles[] t = new Sectors.Tiles[4];
         for (int s = 0; s < 4; s++) {
-            float[] e = edge(s, x0, z0, x1, z1);
-            gb.wallGrid(e[0], e[1], e[2], e[3], base, top, wall, 0.5f, 1f / 2.9f, 8f, 6f, L_OBJECT, 0f, true);
+            t[s] = facade(len(s, x0, z0, x1, z1), 0f, 1, 3.3f, wall, wall, null);
+            t[s].mat = t[s].matUp = wall;
         }
-        gable(x0, z0, x1, z1, top, wall, lib.metal);
+        gableRoof(x0, z0, x1, z1, base, top, 0.55f, lib.metal, faces(x0, z0, x1, z1, t), SectorBuilder.plain(wall, lib.concrete));
         ch.boxes.add(new Box(x0, footMin, z0, x1, top + 1f, z1));
     }
 
     /** Vinyl greenhouse: low milky walls under a pitched plastic roof. */
     private void greenhouse(float x0, float z0, float x1, float z1, float base) {
         float top = base + 1.9f;
-        for (int s = 0; s < 4; s++) {
-            float[] e = edge(s, x0, z0, x1, z1);
-            float len = (float) Math.hypot(e[2] - e[0], e[3] - e[1]);
-            gb.wall(e[0], e[1], e[2], e[3], base, top, lib.vinyl, 0f, len / 2f, 0f, 1f, L_OBJECT, 0f, 0.9f);
-        }
-        gable(x0, z0, x1, z1, top, lib.vinyl, lib.vinyl);
+        Sectors.Tiles v = SectorBuilder.plain(lib.vinyl, lib.concrete);
+        gableRoof(x0, z0, x1, z1, base, top, 0.55f, lib.vinyl, faces(x0, z0, x1, z1, new Sectors.Tiles[]{v, v, v, v}), v);
         ch.boxes.add(new Box(x0, footMin, z0, x1, top + 1f, z1));
-    }
-
-    /** Pitched roof of kawara tiles with gable ends; ridge along the longer side. */
-    private void gable(float x0, float z0, float x1, float z1, float top, int wallTex, int roofTex) {
-        float ov = 0.45f;
-        boolean ridgeX = (x1 - x0) >= (z1 - z0);
-        float half = ridgeX ? (z1 - z0) * 0.5f : (x1 - x0) * 0.5f;
-        float rh = half * 0.55f, slope = rh / half;
-        float ye = top - ov * slope, yr = top + rh;
-        float[] p = new float[12], t = new float[8], l = new float[4];
-        float slopeLen = (float) Math.sqrt((half + ov) * (half + ov) + (rh + ov * slope) * (rh + ov * slope));
-        if (ridgeX) {
-            float zc = (z0 + z1) * 0.5f, xa = x0 - ov, xb = x1 + ov;
-            quad(p, xb, ye, z0 - ov, xa, ye, z0 - ov, xa, yr, zc, xb, yr, zc);            // north slope
-            uvs(t, (xb - xa) * 0.5f, slopeLen * 0.5f);
-            light(l, 0, 0.75f, -0.6f);
-            gb.quad(p, t, l, roofTex, L_OBJECT, 0, -0.2f, false);
-            quad(p, xa, ye, z1 + ov, xb, ye, z1 + ov, xb, yr, zc, xa, yr, zc);            // south slope
-            light(l, 0, 0.75f, 0.6f);
-            gb.quad(p, t, l, roofTex, L_OBJECT, 0, -0.2f, false);
-            gableEnd(x0, z0, x0, z1, top, x0, yr, zc, wallTex);
-            gableEnd(x1, z1, x1, z0, top, x1, yr, zc, wallTex);
-        } else {
-            float xc = (x0 + x1) * 0.5f, za = z0 - ov, zb = z1 + ov;
-            quad(p, x0 - ov, ye, za, x0 - ov, ye, zb, xc, yr, zb, xc, yr, za);           // west slope
-            uvs(t, (zb - za) * 0.5f, slopeLen * 0.5f);
-            light(l, -0.6f, 0.75f, 0);
-            gb.quad(p, t, l, roofTex, L_OBJECT, 0, -0.2f, false);
-            quad(p, x1 + ov, ye, zb, x1 + ov, ye, za, xc, yr, za, xc, yr, zb);           // east slope
-            light(l, 0.6f, 0.75f, 0);
-            gb.quad(p, t, l, roofTex, L_OBJECT, 0, -0.2f, false);
-            gableEnd(x1, z0, x0, z0, top, xc, yr, z0, wallTex);
-            gableEnd(x0, z1, x1, z1, top, xc, yr, z1, wallTex);
-        }
-    }
-
-    private static void quad(float[] p, float ax, float ay, float az, float bx, float by, float bz,
-                             float cx, float cy, float cz, float dx, float dy, float dz) {
-        p[0] = ax; p[1] = ay; p[2] = az; p[3] = bx; p[4] = by; p[5] = bz;
-        p[6] = cx; p[7] = cy; p[8] = cz; p[9] = dx; p[10] = dy; p[11] = dz;
-    }
-
-    private static void uvs(float[] t, float u, float v) {
-        t[0] = 0; t[1] = v; t[2] = u; t[3] = v; t[4] = u; t[5] = 0; t[6] = 0; t[7] = 0;
-    }
-
-    private static void light(float[] l, float nx, float ny, float nz) {
-        float len = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
-        l[0] = l[1] = l[2] = l[3] = GeoBuilder.sunLight(nx / len, ny / len, nz / len);
-    }
-
-    /** Triangle closing the roof at one end; A->B along the wall top (outward winding), apex at the ridge. */
-    private void gableEnd(float ax, float az, float bx, float bz, float y, float px, float py, float pz, int tex) {
-        float[] p = {ax, y, az, bx, y, bz, px, py, pz};
-        float len = (float) Math.hypot(bx - ax, bz - az);
-        float[] t = {0, 0.4f, len * 0.5f, 0.4f, len * 0.25f, 0.4f - (py - y) / 2.8f};
-        float nx = -(bz - az), nz = bx - ax, nl = (float) Math.sqrt(nx * nx + nz * nz);
-        float lt = GeoBuilder.sunLight(nx / nl, 0, nz / nl);
-        gb.quad3(p, t, new float[]{lt, lt, lt}, tex, L_OBJECT);
     }
 
     // ------------------------------------------------------------------ civic
@@ -418,58 +351,64 @@ final class BuildingGen {
     /** Three storeys of classrooms with long window bands all round, flat roof. */
     private void school(float x0, float z0, float x1, float z1, float base) {
         float top = base + 3 * 3.6f;
-        for (int s = 0; s < 4; s++)
-            facadeSide(edge(s, x0, z0, x1, z1), base, 0f, top, 3.6f, lib.schoolWall, lib.schoolWall, 0.8f, null);
-        roof(x0, z0, x1, z1, top, 0.8f, lib.concrete);
+        Sectors.Tiles[] t = new Sectors.Tiles[4];
+        for (int s = 0; s < 4; s++) t[s] = facade(len(s, x0, z0, x1, z1), 0f, 3, 3.6f, lib.schoolWall, lib.schoolWall, null);
         rooftop(x0, z0, x1, z1, top);
+        flatRoof(x0, z0, x1, z1, base, top, 0.8f, lib.concrete, faces(x0, z0, x1, z1, t));
         ch.boxes.add(new Box(x0, footMin, z0, x1, top + 0.8f, z1));
     }
 
-    /** Shrine hall: dark timber on a raised floor under a deep copper or tiled roof. */
+    /** Shrine hall: dark timber on a raised stone floor under a deep copper or tiled roof. */
     private void shrineHall(float x0, float z0, float x1, float z1, float base) {
         int wall = pick(Kind.HOUSE_WOOD);
-        gb.box(x0 - 0.6f, base - 0.4f, z0 - 0.6f, x1 + 0.6f, base + 0.6f, z1 + 0.6f, lib.concrete, lib.planter, 0.5f, 0.5f, L_OBJECT, 0f, 0);
         float floor = base + 0.6f, top = floor + 3.2f;
+        Sectors.Tiles[] t = new Sectors.Tiles[4];
         for (int s = 0; s < 4; s++) {
-            float[] e = edge(s, x0, z0, x1, z1);
-            gb.wallGrid(e[0], e[1], e[2], e[3], floor, top, wall, 0.5f, 1f / 3.2f, 8f, 3.2f, L_OBJECT, 0f, true);
+            t[s] = facade(len(s, x0, z0, x1, z1), 0f, 1, 3.2f, wall, wall, null);
+            t[s].mat = t[s].matUp = wall;
         }
         int roofTex = lib.houseRoof[lib.houseRoof.length - 1];
         for (int i = 0; i < lib.houseRoofKind.length; i++)
             if (lib.houseRoofKind[i] == com.harlequinxd.drivehard.core.tex.HouseTextures.Roof.KAWARA && r.nextBoolean()) { roofTex = lib.houseRoof[i]; break; }
-        gable(x0 - 0.3f, z0 - 0.3f, x1 + 0.3f, z1 + 0.3f, top, wall, roofTex);
-        ch.boxes.add(new Box(x0 - 0.6f, footMin, z0 - 0.6f, x1 + 0.6f, top + 2f, z1 + 0.6f));
+        gableRoof(x0, z0, x1, z1, floor, top, 0.6f, roofTex, faces(x0, z0, x1, z1, t), SectorBuilder.plain(wall, lib.concrete));
+        // the platform round it
+        Sectors.Tiles pl = SectorBuilder.plain(lib.concrete, lib.concrete);
+        float px0 = x0 - 0.8f, pz0 = z0 - 0.8f, px1 = x1 + 0.8f, pz1 = z1 + 0.8f;
+        sb.piece(new float[]{px0, pz0, px1, pz0, px1, pz1, px0, pz1}, floor, 0f, 0f, base - 0.4f, lib.planter, 2f, -1f,
+                faces(px0, pz0, px1, pz1, new Sectors.Tiles[]{pl, pl, pl, pl}), pl);
+        sb.taken(px0, pz0, px1, pz1);
+        ch.boxes.add(new Box(px0, footMin, pz0, px1, top + 2f, pz1));
     }
 
     private void fireStation(float x0, float z0, float x1, float z1, float base, boolean[] street) {
         int fac = pick(Kind.FIRE);
         float groundH = 5f, top = base + groundH + 2 * 3.4f;
+        // hose-drying tower with a red top, standing on the roof
+        float tx = x1 - 3.4f, tz = z0 + 0.5f;
+        plantBox(tx - 0.2f, tz - 0.2f, tx + 3.2f, tz + 3.2f, top + 9f, top + 10.5f, lib.paintRed, lib.paintRed);
+        Sectors.Tiles tw = facade(3f, 0f, 3, 3.4f, fac, fac, null);
+        sb.piece(new float[]{tx, tz, tx + 3f, tz, tx + 3f, tz + 3f, tx, tz + 3f}, top + 9f, 0f, 0f, top, lib.concrete, 2f, -1f,
+                faces(tx, tz, tx + 3f, tz + 3f, new Sectors.Tiles[]{tw, tw, tw, tw}), tw);
+        sb.taken(tx, tz, tx + 3f, tz + 3f);
+        Sectors.Tiles[] t = new Sectors.Tiles[4];
         for (int s = 0; s < 4; s++) {
-            float[] e = edge(s, x0, z0, x1, z1);
-            if (street[s] && (s == N || s == S)) {
-                gb.wall(e[0], e[1], e[2], e[3], base, base + groundH, lib.fireDoors[r.nextInt(2)], 0f, 1f, 0f, 1f, L_OBJECT, 0f, 0.85f);
-                gb.wallGrid(e[0], e[1], e[2], e[3], base + groundH, top, fac, 0.5f, 1f / 3.4f, 8f, 6.8f, L_OBJECT, 0f, false);
-            } else {
-                gb.wallGrid(e[0], e[1], e[2], e[3], base, top, fac, 0.5f, 1f / 3.4f, 8f, 6.8f, L_OBJECT, 0f, true);
-            }
+            float l = len(s, x0, z0, x1, z1);
+            t[s] = street[s] && (s == N || s == S) ? single(groundH, lib.fireDoors[r.nextInt(2)], 3, 3.4f, fac, l)
+                    : facade(l, groundH, 2, 3.4f, fac, fac, null);
         }
-        roof(x0, z0, x1, z1, top, 0.8f, lib.concrete);
-        // hose-drying tower with red top
-        float tx = x1 - 3.2f, tz = z0 + 0.2f;
-        gb.box(tx, top, tz, tx + 3f, top + 9f, tz + 3f, fac, lib.concrete, 0.5f, 1f / 3.4f, L_OBJECT, -0.3f, 0);
-        gb.box(tx - 0.2f, top + 9f, tz - 0.2f, tx + 3.2f, top + 10.5f, tz + 3.2f, lib.paintRed, lib.paintRed, 1f, 1f, L_OBJECT, -0.4f, 0);
+        flatRoof(x0, z0, x1, z1, base, top, 0.8f, lib.concrete, faces(x0, z0, x1, z1, t));
         ch.boxes.add(new Box(x0, footMin, z0, x1, top + 0.8f, z1));
     }
 
     private void koban(float x0, float z0, float x1, float z1, float base, boolean[] street) {
         float top = base + 3.6f;
+        int blank = pick(Kind.BLANK);
+        Sectors.Tiles[] t = new Sectors.Tiles[4];
         for (int s = 0; s < 4; s++) {
-            float[] e = edge(s, x0, z0, x1, z1);
-            int tex = street[s] ? lib.koban[r.nextInt(2)] : pick(Kind.BLANK);
-            if (street[s]) gb.wall(e[0], e[1], e[2], e[3], base, top, tex, 0f, 1f, 0f, 1f, L_OBJECT, 0f, 0.9f);
-            else gb.wallGrid(e[0], e[1], e[2], e[3], base, top, tex, 0.5f, 1f / 3.6f, 8f, 3.6f, L_OBJECT, 0f, true);
+            float l = len(s, x0, z0, x1, z1);
+            t[s] = street[s] ? single(3.6f, lib.koban[r.nextInt(2)], 1, 3.6f, blank, l) : facade(l, 0f, 1, 3.6f, blank, blank, null);
         }
-        gable(x0, z0, x1, z1, top, pick(Kind.BLANK), lib.roofs[2]);
+        gableRoof(x0, z0, x1, z1, base, top, 0.45f, lib.roofs[2], faces(x0, z0, x1, z1, t), SectorBuilder.plain(lib.concrete, lib.concrete));
         ch.boxes.add(new Box(x0, footMin, z0, x1, top + 1f, z1));
     }
 }

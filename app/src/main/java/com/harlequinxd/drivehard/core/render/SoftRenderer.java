@@ -169,6 +169,9 @@ public final class SoftRenderer {
     private final float[] zbuf;
     private final float[] mipD = new float[Ground.MIPS];
     private Ground.Tile[] snap = new Ground.Tile[0];
+    private Sectors[] snapSec = new Sectors[0];
+    private int snapSecN;
+    private Sectors.Sector eyeSector;
     private int snapX, snapZ, snapN;
     private final java.util.List<java.util.concurrent.Callable<Void>> columnBands = new java.util.ArrayList<>();
     private final java.util.List<java.util.concurrent.Callable<Void>> transposeBands = new java.util.ArrayList<>();
@@ -177,6 +180,7 @@ public final class SoftRenderer {
 
     /** Per-thread tile cache. */
     private static final class TileCache {
+        final Sectors.Hits hits = new Sectors.Hits();
         Ground.Tile t;
         int cx = Integer.MIN_VALUE, cz = Integer.MIN_VALUE;
         float x0, z0;
@@ -214,6 +218,20 @@ public final class SoftRenderer {
         snapZ = (int) Math.floor(ez / Ground.TILE) - reach;
         for (int j = 0; j < snapN; j++)
             for (int i = 0; i < snapN; i++) snap[j * snapN + i] = ground.tile(snapX + i, snapZ + j);
+        // buildings: the sector maps of the chunks in range, and the sector the eye is in (if any)
+        snapSecN = 0;
+        eyeSector = null;
+        if (snapSec.length < snapN * snapN) snapSec = new Sectors[snapN * snapN];
+        for (int j = 0; j < snapN; j++)
+            for (int i = 0; i < snapN; i++) {
+                Sectors sc = ground.sectors(snapX + i, snapZ + j);
+                if (sc == null || sc.isEmpty()) continue;
+                snapSec[snapSecN++] = sc;
+                if (ex >= sc.minX && ex <= sc.maxX && ez >= sc.minZ && ez <= sc.maxZ) {
+                    Sectors.Sector e = sc.find(ex, ez);
+                    if (e != null && (eyeSector == null || e.area() < eyeSector.area())) eyeSector = e;
+                }
+            }
         // tiles stream in and out between frames
         for (TileCache tc : tileCaches) { tc.cx = Integer.MIN_VALUE; tc.t = null; }
         soloCache.cx = Integer.MIN_VALUE;
@@ -277,75 +295,207 @@ public final class SoftRenderer {
     private int[] colFb = new int[0];
     private float[] colZ = new float[0];
 
+    /**
+     * One screen column at a time, front to back: the ray through the column is marched over the
+     * ground map, and the walls it crosses (from the sector BSP trees, nearest first) split the
+     * march. Inside a sector the surface is the sector's floor plane (a roof); where the ray
+     * enters a higher sector the wall between is drawn, tile by tile. Rows already covered by
+     * something nearer are skipped, so hills and buildings hide what lies behind them.
+     */
     private void groundColumns(int colA, int colB, TileCache tc) {
-        float fogK = 1f / (fogEnd - fogStart);
-        int fr = fogR, fg = fogG, fbb = fogB;
         int h = H;
-        float[] cz = colZ;
-        int[] cf = colFb;
         int[] sk = sky;
-        float fs = fogStart;
+        Sectors.Hits hits = tc.hits;
         for (int x = colA; x < colB; x++) {
             float xs = (x + 0.5f - cx) / focal;
             float dx = fx + rx * xs, dz = fz + rz * xs;
             int base = x * h;
+            hits.n = 0;
+            for (int k = 0; k < snapSecN; k++) snapSec[k].cast(ex, ez, dx, dz, far, hits);
+            if (hits.n > 1) hits.sort(dx, dz);
+            int ei = 0;
+            Sectors.Sector cur = eyeSector;
             int ybuf = h;
             float d = 0.3f, dPrev = 0f, sPrev = 0f;
             boolean first = true;
-            while (d <= far) {
-                float wx = ex + dx * d, wz = ez + dz * d;
-                float gh = groundHeight(tc, wx, wz);
-                float s = hy - (gh - ey) * focal / d;
-                int ys = (int) Math.ceil(s - 0.5f);
-                if (ys < 0) ys = 0;
-                if (ys < ybuf) {
-                    // 1/depth is linear down the screen between the two samples
-                    float invC = 1f / d, invP = first ? invC : 1f / dPrev, span = s - sPrev;
-                    float iz, diz;
-                    if (first || span > -1e-3f) { iz = invC; diz = 0f; }
-                    else {
-                        diz = -(invC - invP) / span;                  // per row upwards
-                        iz = invP + (invC - invP) * (((ybuf - 1) + 0.5f - sPrev) / span);
-                    }
-                    float lo = Math.min(invP, invC), hi = Math.max(invP, invC);
-                    int mip = mipFor(1f / hi);          // one mip level per span (the nearer end)
-                    for (int y = ybuf - 1; y >= ys; y--, iz += diz) {
-                        float izc = iz < lo ? lo : (iz > hi ? hi : iz);
-                        float dr = 1f / izc;
-                        int c = groundColor(tc, ex + dx * dr, ez + dz * dr, mip);
-                        int k = base + y;
-                        if (dr <= fs) cf[k] = RGB555[c];          // the map is already 15-bit: no shading needed
-                        else {
-                            int r = (c >> 10) & 31, g = (c >> 5) & 31, b = c & 31;
-                            r = r << 3 | r >> 2; g = g << 3 | g >> 2; b = b << 3 | b >> 2;
-                            float f = (dr - fs) * fogK;
-                            int fv = f >= 1f ? 256 : (int) (f * 256f);
-                            r += ((fr - r) * fv) >> 8;
-                            g += ((fg - g) * fv) >> 8;
-                            b += ((fbb - b) * fv) >> 8;
-                            int db = BAYER[((y & 3) << 2) | (x & 3)] >> 1;
-                            r = (r + db) >> 3; if (r > 31) r = 31;
-                            g = (g + db) >> 3; if (g > 31) g = 31;
-                            b = (b + db) >> 3; if (b > 31) b = 31;
-                            cf[k] = 0xFF000000 | (((r << 3) | (r >> 2)) << 16) | (((g << 3) | (g >> 2)) << 8) | ((b << 3) | (b >> 2));
-                        }
-                        // polygons farther than this (6% slack for things standing on it) are hidden
-                        cz[k] = izc * 0.94f;
-                    }
-                    ybuf = ys;
+            while (true) {
+                boolean event = ei < hits.n && hits.t[ei] <= d;
+                if (!event && d > far) break;
+                float t = event ? hits.t[ei] : d;
+                float wx = ex + dx * t, wz = ez + dz * t;
+                float gh = cur == null ? groundHeight(tc, wx, wz) : cur.y(wx, wz);
+                float sc = hy - (gh - ey) * focal / t;
+                ybuf = surfaceSpan(tc, x, base, ybuf, first, dPrev, sPrev, t, sc, dx, dz, cur);
+                if (ybuf == 0) break;
+                first = false;
+                dPrev = t;
+                sPrev = sc;
+                if (!event) {
+                    // the height map is bilinear in 8 m cells and pixels are interpolated between
+                    // samples, so samples can spread out: ~1 m near, ~3% of the distance far away
+                    d += Math.max(0.9f, d * 0.03f);
+                    continue;
+                }
+                Sectors.Wall w = hits.w[ei];
+                float u = hits.u[ei];
+                ei++;
+                boolean enter = w.nx * dx + w.nz * dz < 0f;
+                Sectors.Sector next;
+                if (enter) next = w.front;
+                else if (cur == w.front) next = w.back;
+                else continue;
+                float nh = next == null ? groundHeight(tc, wx, wz) : next.y(wx, wz);
+                if (enter && nh > gh + 1e-3f) {
+                    ybuf = wallSpan(x, base, ybuf, hy - (nh - ey) * focal / t, t, w, u);
                     if (ybuf == 0) break;
                 }
-                first = false;
-                dPrev = d;
-                sPrev = s;
-                // the height map is bilinear in 8 m cells and pixels are interpolated between
-                // samples, so samples can spread out: ~1 m near, ~3% of the distance far away
-                d += Math.max(0.9f, d * 0.03f);
+                cur = next;
+                sPrev = hy - (nh - ey) * focal / t;
             }
             for (int y = 0; y < ybuf; y++) {
-                cz[base + y] = 0f;
-                cf[base + y] = sk[y * 4 + (x & 3)];
+                colZ[base + y] = 0f;
+                colFb[base + y] = sk[y * 4 + (x & 3)];
             }
+        }
+    }
+
+    /**
+     * Fills the rows between the last sample (dPrev, sPrev) and this one (d, s) with the ground map
+     * or the sector's roof; returns the new top of the drawn part of the column.
+     */
+    private int surfaceSpan(TileCache tc, int x, int base, int ybuf, boolean first, float dPrev, float sPrev,
+                            float d, float s, float dx, float dz, Sectors.Sector sec) {
+        int ys = (int) Math.ceil(s - 0.5f);
+        if (ys < 0) ys = 0;
+        if (ys >= ybuf) return ybuf;
+        float fogK = 1f / (fogEnd - fogStart), fs = fogStart;
+        int fr = fogR, fg = fogG, fbb = fogB;
+        float[] cz = colZ;
+        int[] cf = colFb;
+        // 1/depth is linear down the screen between the two samples
+        float invC = 1f / d, invP = first ? invC : 1f / dPrev, span = s - sPrev;
+        float iz, diz;
+        if (first || span > -1e-3f) { iz = invC; diz = 0f; }
+        else {
+            diz = -(invC - invP) / span;                  // per row upwards
+            iz = invP + (invC - invP) * (((ybuf - 1) + 0.5f - sPrev) / span);
+        }
+        float lo = Math.min(invP, invC), hi = Math.max(invP, invC);
+        int mip = mipFor(1f / hi);          // one mip level per span (the nearer end)
+        Texture rt = sec == null ? null : textures[sec.tex];
+        for (int y = ybuf - 1; y >= ys; y--, iz += diz) {
+            float izc = iz < lo ? lo : (iz > hi ? hi : iz);
+            float dr = 1f / izc;
+            float px = ex + dx * dr, pz = ez + dz * dr;
+            int k = base + y;
+            if (sec == null) {
+                int c = groundColor(tc, px, pz, mip);
+                if (dr <= fs) cf[k] = RGB555[c];          // the map is already 15-bit: no shading needed
+                else {
+                    int r = (c >> 10) & 31, g = (c >> 5) & 31, b = c & 31;
+                    r = r << 3 | r >> 2; g = g << 3 | g >> 2; b = b << 3 | b >> 2;
+                    int fv = (int) Math.min(256f, (dr - fs) * fogK * 256f);
+                    cf[k] = shade(0xFF000000 | (r << 16) | (g << 8) | b, 256, fv, fr, fg, fbb, BAYER[((y & 3) << 2) | (x & 3)] >> 1);
+                }
+            } else {
+                // roof covering, tiles lined up with the slope
+                float u = (px * sec.ux + pz * sec.uz) / sec.us, v = (px * sec.vx + pz * sec.vz) / sec.vs;
+                int tu = (int) Math.floor(u * rt.w) & rt.wMask, tv = (int) Math.floor(v * rt.h) & rt.hMask;
+                int c = rt.px[(tv << rt.wShift) | tu];
+                int fv = dr <= fs ? 0 : (int) Math.min(256f, (dr - fs) * fogK * 256f);
+                cf[k] = shade(c, (int) (sec.light * 256f), fv, fr, fg, fbb, BAYER[((y & 3) << 2) | (x & 3)] >> 1);
+            }
+            // polygons farther than this (6% slack for things standing on it) are hidden
+            cz[k] = izc * 0.94f;
+        }
+        return ys;
+    }
+
+    /**
+     * A wall seen face on: rows from the top of the wall down to what is already drawn, at depth t.
+     * Each row's height picks the storey and the tile (plain wall, window, door, shopfront).
+     */
+    private int wallSpan(int x, int base, int ybuf, float sTop, float t, Sectors.Wall w, float u) {
+        int ys = (int) Math.ceil(sTop - 0.5f);
+        if (ys < 0) ys = 0;
+        if (ys >= ybuf) return ybuf;
+        float fogK = 1f / (fogEnd - fogStart);
+        int fv = t <= fogStart ? 0 : (int) Math.min(256f, (t - fogStart) * fogK * 256f);
+        int lv = (int) (w.light * 256f);
+        float k = t / focal;
+        float izw = 1f / t * 0.995f;
+        Sectors.Tiles tl = w.tiles;
+        Sectors.Sector sec = w.front;
+        for (int y = ybuf - 1; y >= ys; y--) {
+            float wy = ey + (hy - (y + 0.5f)) * k;        // world height of this row on the wall
+            int c = wallTexel(tl, sec.base, u + w.uOff, wy, tl.len > 0f ? tl.len : w.len);
+            int q = base + y;
+            colFb[q] = shade(c, lv, fv, fogR, fogG, fogB, BAYER[((y & 3) << 2) | (x & 3)] >> 1);
+            colZ[q] = izw;
+        }
+        return ys;
+    }
+
+    private int sampleWrap(int texId, float u, float v) {
+        Texture t = textures[texId];
+        int tu = (int) Math.floor(u * t.w) & t.wMask, tv = (int) Math.floor(v * t.h) & t.hMask;
+        if (tv > t.hMax) tv %= t.h;
+        return t.px[(tv << t.wShift) | tu];
+    }
+
+    private int sampleClamp(int texId, float u, float v) {
+        Texture t = textures[texId];
+        int tu = Math.max(0, Math.min(t.w - 1, (int) (u * t.w))), tv = Math.max(0, Math.min(t.hMax, (int) (v * t.h)));
+        return t.px[(tv << t.wShift) | tu];
+    }
+
+    /** Colour of a wall at (u along its face, height y): foundation, plain wall or the tile of its storey. */
+    private int wallTexel(Sectors.Tiles tl, float base, float u, float y, float len) {
+        float yr = y - base;
+        if (yr < 0f) return sampleWrap(tl.found, u * 0.5f, -y * 0.5f);
+        int st;
+        float fy, sh;
+        if (yr < tl.groundH) { st = 0; fy = yr; sh = tl.groundH; }
+        else {
+            st = 1 + (int) ((yr - tl.groundH) / tl.storeyH);
+            fy = yr - tl.groundH - (st - 1) * tl.storeyH;
+            sh = tl.storeyH;
+        }
+        int plain = st == 0 ? tl.mat : tl.matUp;
+        if (st >= tl.floors) return sampleWrap(plain, u / tl.matScale, -y / tl.matScale);
+        int cols = tl.cols[st];
+        float tw = len / cols;
+        int cidx = Math.min(cols - 1, Math.max(0, (int) (u / tw)));
+        byte kind = tl.kind[st][cidx];
+        float fu = u - cidx * tw;
+        switch (kind) {
+            case Sectors.FULL:
+                return sampleClamp(tl.tex[st][cidx], fu / tw, 1f - fy / sh);
+            case Sectors.WINDOW: case Sectors.SMALL: case Sectors.DOOR: case Sectors.GARDEN: {
+                float ow, oy0, oy1;
+                if (kind == Sectors.WINDOW) { ow = Math.min(tl.winW, tw - 0.5f); oy0 = tl.sill; oy1 = tl.sill + tl.winH; }
+                else if (kind == Sectors.SMALL) { ow = Math.min(0.7f, tw - 0.4f); oy0 = 1.3f; oy1 = 2.1f; }
+                else if (kind == Sectors.DOOR) { ow = Math.min(tl.doorW, tw - 0.3f); oy0 = 0f; oy1 = tl.doorH; }
+                else { ow = Math.min(1.8f, tw - 0.5f); oy0 = 0.1f; oy1 = 2.1f; }
+                oy1 = Math.min(oy1, sh - 0.05f);
+                float ou0 = (tw - ow) * 0.5f;
+                if (fu >= ou0 && fu < ou0 + ow && fy >= oy0 && fy < oy1) {
+                    int c = sampleClamp(tl.tex[st][cidx], (fu - ou0) / ow, 1f - (fy - oy0) / (oy1 - oy0));
+                    // set into the wall: a darker reveal round the opening
+                    float edge = Math.min(Math.min(fu - ou0, ou0 + ow - fu), Math.min(fy - oy0, oy1 - fy));
+                    return edge < 0.07f ? Img2.darken(c) : c;
+                }
+                return sampleWrap(plain, u / tl.matScale, -y / tl.matScale);
+            }
+            default:
+                return sampleWrap(plain, u / tl.matScale, -y / tl.matScale);
+        }
+    }
+
+    /** Tiny colour helpers for the wall tiles. */
+    private static final class Img2 {
+        static int darken(int c) {
+            return 0xFF000000 | ((((c >> 16) & 255) * 5 >> 3) << 16) | ((((c >> 8) & 255) * 5 >> 3) << 8) | ((c & 255) * 5 >> 3);
         }
     }
 

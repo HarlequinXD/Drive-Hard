@@ -72,5 +72,8 @@ public final class Ground {
         float height(float x, float z);
         /** Flat colour where no tile is loaded. */
         int color(float x, float z);
+
+        /** The buildings (sector map) of a chunk, or null. */
+        Sectors sectors(int cx, int cz);
     }
 }

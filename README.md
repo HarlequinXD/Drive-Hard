@@ -11,15 +11,25 @@ software renderer, no engine.
   a height map, projected **Mode 7 style**, one screen column at a time (a height-mapped Mode 7,
   like voxel-space engines), so hills rise out of the map and hide what lies behind them. The
   camera never really pitches; it shifts the horizon (a y-shear), so vertical lines stay
-  vertical and the ground projects exactly under the models standing on it. Buildings,
-  bridges, barriers and props are whole polygons (no subdivision) with **perspective-correct**
+  vertical and the ground projects exactly under the models standing on it.
+- **Buildings are a BSP sector ray caster, not geometry.** Like Doom/Build maps, every
+  building is a set of **sectors** (convex footprints whose floor is a plane, raised from the
+  ground up: flat decks or sloped roof planes) bounded by **linedefs** (walls). Generators
+  build a 2D blueprint: masses with storeys, walls tiled per storey with **wall, window,
+  door, shopfront and facade tiles**, roofs made of sloped sectors (two for a gable, four for
+  a hip, a hipped skirt with a gable wall above for irimoya, one for a mono-pitch, a deck in a
+  parapet ring for flat roofs), roof plant and towers as smaller sectors on top. Each chunk
+  keeps a **BSP tree** over its walls; every screen column's ray walks the trees front to back
+  as it marches the Mode 7 ground, so walls and roofs are drawn in the same pass as the
+  terrain and stand on it (walls run down to the actual ground, foundation below the floor).
+  Bridges, barriers, signs and small props are whole polygons with **perspective-correct**
   texturing; trees, cars and people are true **sprites**, scaled rectangle blits (with the
   camera level, an upright billboard is always parallel to the screen). The ground fills a
   depth buffer that polygons and sprites test and write, so hills hide things and nothing
   mis-sorts; a draw-layer ordering table still settles coplanar ties (shadows, decals).
   15-bit dithered colour, fog, near-plane clipping, draw distances, multi-threaded column
   (ground) and band (polygons) rendering. The game loop is capped at 60 fps.
-- **Culling:** per-chunk and per-batch (each building is its own batch) frustum culling,
+- **Culling:** per-chunk and per-batch frustum culling, BSP/bounding-box culling of wall rays,
   per-polygon backface/distance culling, per-sprite frustum culling, and terrain occlusion
   culling (buildings and sprites hidden behind hills are skipped via heightfield ray tests).
 - **Streaming island.** A ~100 km long island (seed 20261103) generated the way real
@@ -128,9 +138,11 @@ software renderer, no engine.
 app/src/main/java/com/harlequinxd/drivehard/
   core/        pure Java (no Android) — runs on desktop too
     Game.java  world + player + camera + renderer
-    render/    SoftRenderer (Mode 7 ground, perspective-correct polygons, sprite blits), Ground (map tiles), Geo, Texture
+    render/    SoftRenderer (Mode 7 ground + sector ray casting, perspective-correct polygons, sprite blits),
+               Sectors (sectors, tiled walls, BSP tree, ray queries), Ground (map tiles), Geo, Texture
     city/      City (layout + chunk generator), Terrain, ChunkManager (streaming), Chunk,
                BuildingGen, HouseGen (procedural houses), TownGen (town-centre buildings),
+               SectorBuilder (building blueprints to sectors: masses, roof pieces, wall tiles),
                Railway (viaduct, stations, trains), Countryside (fields, farms, town lots), GroundPainter (paints the map tiles), GeoBuilder, TrafficLights
     road/      RoadNetwork (spline road graph, terrain shaping, spatial index), RoadEdge,
                RoadNode, RoadClass, Town + PlaceNames (named towns and regions), RoadMesh (bridge decks, barriers, poles)
