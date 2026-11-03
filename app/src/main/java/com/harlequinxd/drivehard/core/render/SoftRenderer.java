@@ -3,24 +3,19 @@ package com.harlequinxd.drivehard.core.render;
 import java.util.Arrays;
 
 /**
- * PS1-style software renderer.
+ * Software renderer: a Mode 7 ground map ({@link #drawGround()}), whole polygons with
+ * perspective-correct texturing, and sprites drawn as scaled rectangle blits.
  *
  * <ul>
- * <li>No z-buffer. Polygons are sorted with a PlayStation-style <b>ordering table</b>: every
- *   primitive is linked into a depth bucket (average view depth + per-polygon bias) inside a
- *   <b>draw layer</b>, then layers are drawn in order and each layer's buckets far-to-near.
- *   Layers remove the classic z-fighting cases (road markings on roads, sidewalks over roads,
- *   shadows on the ground) and the bias lets roofs sit behind parapets, sprites in front of
- *   walls, etc.</li>
- * <li>Vertices are snapped to whole pixels; textures are mapped affinely (no perspective
- *   correction) with nearest sampling; colour is reduced to 15-bit with 4x4 ordered dither.</li>
- * <li>Large polygons near the camera are subdivided (as PS1 games did) which both limits
- *   affine warping and gives the ordering table finer depth keys.</li>
+ * <li>The ground fills a per-pixel depth buffer (1/z) that polygons and sprites test and write.</li>
+ * <li>Primitives are still linked into an ordering table (draw layers, depth buckets, bias), which
+ *   decides coplanar ties: shadows over the ground, decals over walls.</li>
+ * <li>Colour is reduced to 15-bit with 4x4 ordered dither; fog by view depth.</li>
  * </ul>
  */
 public final class SoftRenderer {
     public static final int L_WATER = 0, L_GROUND = 1, L_DECAL = 2, L_RAISED = 3, L_SHADOW = 4, L_OBJECT = 5, LAYERS = 6;
-    public static final int MODE_OPAQUE = 0, MODE_ALPHA = 1, MODE_SHADOW = 2, MODE_BLEND = 3;
+    public static final int MODE_OPAQUE = 0, MODE_ALPHA = 1, MODE_SHADOW = 2, MODE_BLEND = 3, MODE_SPRITE = 4;
     private static final int BUCKETS = 4096;
     private static final float BUCKET_SCALE = 24f;     // buckets per metre (~170 m range)
     private static final int VA = 8;                    // per screen vertex: x y u v light fog coverage 1/z
@@ -48,14 +43,6 @@ public final class SoftRenderer {
     private int zenR = 58, zenG = 120, zenB = 200;
     private int groundR = 92, groundG = 92, groundB = 94;
     public float time;
-    public float subdivDist = 18f;
-    /**
-     * Sprites are single upright quads; seen from above or below their depth varies from top to
-     * bottom, which bends affine-mapped textures along the diagonal. Billboards are tessellated
-     * adaptively until the estimated affine error drops under this many screen pixels.
-     */
-    public float spriteErrorPx = 0.75f;
-    private boolean spriteMode;
     /** Current polygon sorts by its farthest vertex (see {@link Geo#FLAG_SORT_FAR}). */
     private boolean sortFar;
     /** Coverage of the polygon being submitted (blended overlays); 1 otherwise. */
@@ -78,7 +65,7 @@ public final class SoftRenderer {
         W = w;
         H = h;
         fb = new int[w * h];
-        gthr = new float[w * h];
+        zbuf = new float[w * h];
         setFov(62f);
     }
 
@@ -175,8 +162,7 @@ public final class SoftRenderer {
      * Per pixel, the inverse depth just behind the ground drawn there (0 where there is sky).
      * Polygons whose 1/z is smaller are behind a hill and are skipped: the only depth test there is.
      */
-    private final float[] gthr;
-    private boolean groundDrawn;
+    private final float[] zbuf;
     private final float[] mipD = new float[Ground.MIPS];
     private final java.util.List<java.util.concurrent.Callable<Void>> columnBands = new java.util.ArrayList<>();
     private final java.util.List<TileCache> tileCaches = new java.util.ArrayList<>();
@@ -209,8 +195,7 @@ public final class SoftRenderer {
      * the flat parts, so the map looks like a proper Mode 7 plane, and hills rise and hide).
      */
     public void drawGround() {
-        groundDrawn = false;
-        if (ground == null) return;
+        if (ground == null) { Arrays.fill(zbuf, 0f); return; }
         for (int k = 0; k < Ground.MIPS; k++) mipD[k] = Ground.TEXEL * focal * (1 << k) * 1.4f;
         // tiles stream in and out between frames
         for (TileCache tc : tileCaches) { tc.cx = Integer.MIN_VALUE; tc.t = null; }
@@ -224,7 +209,6 @@ public final class SoftRenderer {
                 Thread.currentThread().interrupt();
             }
         }
-        groundDrawn = true;
     }
 
     private float groundHeight(TileCache tc, float x, float z) {
@@ -256,7 +240,7 @@ public final class SoftRenderer {
     private void groundColumns(int colA, int colB, TileCache tc) {
         float fogK = 1f / (fogEnd - fogStart);
         int fr = fogR, fg = fogG, fbb = fogB;
-        float[] thr = gthr;
+        float[] thr = zbuf;
         int[] out = fb;
         for (int x = colA; x < colB; x++) {
             float xs = (x + 0.5f - cx) / focal;
@@ -363,7 +347,11 @@ public final class SoftRenderer {
     }
 
     private void drawBand(int y0, int y1) {
-        for (int i = 0; i < orderCount; i++) drawTri(order[i], y0, y1);
+        for (int i = 0; i < orderCount; i++) {
+            int p = order[i];
+            if (pmode[p] == MODE_SPRITE) drawSprite(p, y0, y1);
+            else drawTri(p, y0, y1);
+        }
     }
 
     // ------------------------------------------------------------------ culling helpers
@@ -432,24 +420,33 @@ public final class SoftRenderer {
      */
     public void billboard(int texId, float x, float y, float z, float left, float right, float bottom, float top,
                           float u0, float v0, float u1, float v1, float bias) {
-        float[] p = wp;
-        corner(p, 0, x, y, z, left, bottom);
-        corner(p, 1, x, y, z, right, bottom);
-        corner(p, 2, x, y, z, right, top);
-        corner(p, 3, x, y, z, left, top);
-        wuv[0] = u0; wuv[1] = v1; wuv[2] = u1; wuv[3] = v1; wuv[4] = u1; wuv[5] = v0; wuv[6] = u0; wuv[7] = v0;
-        wl[0] = wl[1] = wl[2] = wl[3] = 1f;
-        // Sort by an upright point at mid-height, not by the tilted quad: a camera-facing quad
-        // leans back into walls when the camera looks down, which would sort it behind them.
-        float mx = x - ex, my = y + (bottom + top) * 0.5f - ey, mz = z - ez;
-        depthOverride = mx * fx + my * fy + mz * fz + bias;
-        spriteMode = true;
-        submit(p, wuv, wl, 4, texId, L_OBJECT, MODE_ALPHA, 0f, true);
-        spriteMode = false;
-        depthOverride = Float.NaN;
+        float dx = x - ex, dz = z - ez;
+        float vz = dx * fx + dz * fz;
+        if (vz < near || vz > far) return;
+        float vx = dx * rx + dz * rz;
+        float k = focal / vz;
+        float sx0 = cx + (vx + left) * k, sx1 = cx + (vx + right) * k;
+        float sy0 = hy - (y + top - ey) * k, sy1 = hy - (y + bottom - ey) * k;
+        if (sx1 < 0 || sx0 > W || sy1 < 0 || sy0 > H || sx1 - sx0 < 0.5f) return;
+        if (primCount >= MAX_PRIMS) return;
+        statPolys++;
+        int p = primCount++;
+        int o = p * 3 * VA;
+        P[o] = sx0; P[o + 1] = sy0; P[o + 2] = sx1; P[o + 3] = sy1;
+        P[o + 4] = u0; P[o + 5] = v0; P[o + 6] = u1; P[o + 7] = v1;
+        float f = (vz - fogStart) / (fogEnd - fogStart);
+        P[o + 8] = f < 0f ? 0f : (f > 1f ? 1f : f);
+        P[o + 9] = 1f / vz;
+        P[o + 10] = 1f;
+        ptex[p] = texId;
+        pmode[p] = MODE_SPRITE;
+        int bucket = (int) ((vz + bias) * BUCKET_SCALE);
+        if (bucket < 0) bucket = 0;
+        if (bucket >= BUCKETS) bucket = BUCKETS - 1;
+        int hb = L_OBJECT * BUCKETS + bucket;
+        next[p] = head[hb];
+        head[hb] = p;
     }
-
-    private float depthOverride = Float.NaN;
 
     /** Upright billboard corner: rotates only about the vertical axis (no tilt toward the camera). */
     private void corner(float[] p, int k, float x, float y, float z, float sx, float sy) {
@@ -490,10 +487,6 @@ public final class SoftRenderer {
         submit(p, wuv, wl, 4, texId, layer, mode, 0f, false);
     }
 
-    // view-space scratch, one slot per subdivision level
-    private static final int MAX_LEVEL = 4;
-    private final float[][] lvl = new float[MAX_LEVEL + 1][9 * VA];
-    private final float[][] child = new float[MAX_LEVEL + 1][4 * VA];
     private final float[] vq = new float[4 * VA];
 
     /**
@@ -535,69 +528,8 @@ public final class SoftRenderer {
         }
         if ((allL | allR | allT | allB) != 0) return;
         statPolys++;
-        if (subdiv && nv == 4) {
-            System.arraycopy(vq, 0, child[0], 0, 4 * VA);
-            quadRec(0, texId, layer, mode, bias);
-        } else {
-            emit(vq, nv, !Float.isNaN(depthOverride) ? depthOverride : (sortFar ? zmax : zsum / nv) + bias, texId, layer, mode);
-        }
-    }
-
-    private void quadRec(int level, int texId, int layer, int mode, float bias) {
-        float[] q = child[level];
-        float minZ = Float.MAX_VALUE, maxEdge = 0f, zsum = 0f, zmax = -Float.MAX_VALUE;
-        for (int k = 0; k < 4; k++) {
-            float z = q[k * VA + 2];
-            zsum += z;
-            if (z > zmax) zmax = z;
-            if (z < minZ) minZ = z;
-            int n = ((k + 1) & 3) * VA;
-            float dx = q[n] - q[k * VA], dy = q[n + 1] - q[k * VA + 1], dz = q[n + 2] - q[k * VA + 2];
-            float e = dx * dx + dy * dy + dz * dz;
-            if (e > maxEdge) maxEdge = e;
-        }
-        maxEdge = (float) Math.sqrt(maxEdge);
-        boolean stop;
-        if (spriteMode) {
-            // screen-space affine error estimate: projected size times relative depth spread
-            float maxZ = -Float.MAX_VALUE;
-            for (int k = 0; k < 4; k++) maxZ = Math.max(maxZ, q[k * VA + 2]);
-            float zn = Math.max(minZ, near);
-            float sizePx = maxEdge * focal / zn;
-            float err = sizePx * (maxZ - minZ) / (maxZ + zn);
-            stop = level >= MAX_LEVEL || err <= spriteErrorPx;
-        } else {
-            float limit = Math.max(1.6f, minZ * 0.3f);
-            stop = level >= MAX_LEVEL || minZ > subdivDist || maxEdge <= limit;
-        }
-        if (stop) {
-            emit(q, 4, !Float.isNaN(depthOverride) ? depthOverride : (sortFar ? zmax : zsum * 0.25f) + bias, texId, layer, mode);
-            return;
-        }
-        // 3x3 grid of points: corners 0..3 = (0,0) (1,0) (1,1) (0,1) in quad param space
-        float[] g = lvl[level];
-        // grid index gi = j*3+i (i along edge 0->1, j along edge 0->3)
-        for (int j = 0; j <= 2; j++) {
-            float t = j * 0.5f;
-            for (int i = 0; i <= 2; i++) {
-                float s = i * 0.5f;
-                float w0 = (1 - s) * (1 - t), w1 = s * (1 - t), w2 = s * t, w3 = (1 - s) * t;
-                int o = (j * 3 + i) * VA;
-                for (int a = 0; a < VA; a++)
-                    g[o + a] = q[a] * w0 + q[VA + a] * w1 + q[2 * VA + a] * w2 + q[3 * VA + a] * w3;
-            }
-        }
-        float[] c = child[level + 1];
-        for (int cj = 0; cj < 2; cj++) {
-            for (int ci = 0; ci < 2; ci++) {
-                int g0 = cj * 3 + ci, g1 = g0 + 1, g2 = g0 + 4, g3 = g0 + 3;
-                System.arraycopy(g, g0 * VA, c, 0, VA);
-                System.arraycopy(g, g1 * VA, c, VA, VA);
-                System.arraycopy(g, g2 * VA, c, 2 * VA, VA);
-                System.arraycopy(g, g3 * VA, c, 3 * VA, VA);
-                quadRec(level + 1, texId, layer, mode, bias);
-            }
-        }
+        // whole polygons, no subdivision: texturing is perspective correct and a depth buffer sorts pixels
+        emit(vq, nv, (sortFar ? zmax : zsum / nv) + bias, texId, layer, mode);
     }
 
     private final float[] clipA = new float[10 * VA], clipB = new float[10 * VA];
@@ -666,6 +598,9 @@ public final class SoftRenderer {
 
     // ------------------------------------------------------------------ rasterizer
 
+    /** Depth test: passes unless clearly behind (coplanar ties go to the later polygon, i.e. the ordering table). */
+    private static final float DEPTH_SLACK = 1.004f;
+
     private void drawTri(int p, int bandY0, int bandY1) {
         int o = p * 3 * VA;
         float[] A = P;
@@ -690,21 +625,20 @@ public final class SoftRenderer {
         float ub = (float) Math.floor(Math.min(u0, Math.min(u1, u2)) / tex.w) * tex.w;
         float vb = (float) Math.floor(Math.min(v0, Math.min(v1, v2)) / tex.h) * tex.h;
         u0 -= ub; u1 -= ub; u2 -= ub; v0 -= vb; v1 -= vb; v2 -= vb;
+        // perspective-correct texturing: u/z, v/z and 1/z are linear on screen
+        float z0i = A[i0 + 7], z1i = A[i1 + 7], z2i = A[i2 + 7];
+        float q0 = u0 * z0i, q1 = u1 * z1i, q2 = u2 * z2i;
+        float r0 = v0 * z0i, r1 = v1 * z1i, r2 = v2 * z2i;
+        float dzdx = ((z1i - z0i) * dy2 - (z2i - z0i) * dy1) * id, dzdy = ((z2i - z0i) * dx1 - (z1i - z0i) * dx2) * id;
+        float dqdx = ((q1 - q0) * dy2 - (q2 - q0) * dy1) * id, dqdy = ((q2 - q0) * dx1 - (q1 - q0) * dx2) * id;
+        float drdx = ((r1 - r0) * dy2 - (r2 - r0) * dy1) * id, drdy = ((r2 - r0) * dx1 - (r1 - r0) * dx2) * id;
         float l0 = A[i0 + 4], l1 = A[i1 + 4], l2 = A[i2 + 4];
         float f0 = A[i0 + 5], f1 = A[i1 + 5], f2 = A[i2 + 5];
         float a0 = A[i0 + 6], a1 = A[i1 + 6], a2 = A[i2 + 6];
         float dadx = ((a1 - a0) * dy2 - (a2 - a0) * dy1) * id, dady = ((a2 - a0) * dx1 - (a1 - a0) * dx2) * id;
-        int dA = (int) (dadx * 65536f);
-        float z0i = A[i0 + 7], z1i = A[i1 + 7], z2i = A[i2 + 7];
-        float dzdx = ((z1i - z0i) * dy2 - (z2i - z0i) * dy1) * id, dzdy = ((z2i - z0i) * dx1 - (z1i - z0i) * dx2) * id;
-        float[] gt = groundDrawn ? gthr : null;
-
-        float dudx = ((u1 - u0) * dy2 - (u2 - u0) * dy1) * id, dudy = ((u2 - u0) * dx1 - (u1 - u0) * dx2) * id;
-        float dvdx = ((v1 - v0) * dy2 - (v2 - v0) * dy1) * id, dvdy = ((v2 - v0) * dx1 - (v1 - v0) * dx2) * id;
         float dldx = ((l1 - l0) * dy2 - (l2 - l0) * dy1) * id, dldy = ((l2 - l0) * dx1 - (l1 - l0) * dx2) * id;
         float dfdx = ((f1 - f0) * dy2 - (f2 - f0) * dy1) * id, dfdy = ((f2 - f0) * dx1 - (f1 - f0) * dx2) * id;
-        int dU = (int) (dudx * 65536f), dV = (int) (dvdx * 65536f);
-        int dL = (int) (dldx * 65536f), dF = (int) (dfdx * 65536f);
+        int dA = (int) (dadx * 65536f), dL = (int) (dldx * 65536f), dF = (int) (dfdx * 65536f);
 
         int yStart = (int) Math.ceil(y0 - 0.5f), yEnd = (int) Math.ceil(y2 - 0.5f);
         if (yStart < bandY0) yStart = bandY0;
@@ -713,10 +647,12 @@ public final class SoftRenderer {
         float invL = 1f / dy2;
         float invA = dy1 > 0f ? 1f / dy1 : 0f, invB = (y2 - y1) > 0f ? 1f / (y2 - y1) : 0f;
         int mode = pmode[p];
+        boolean shadow = mode == MODE_SHADOW, alpha = mode == MODE_ALPHA, blend = mode == MODE_BLEND;
         // opaque spans overlap their right neighbour by a pixel: seals T-junction hairline cracks
         int seal = mode == MODE_OPAQUE ? 1 : 0;
         int fr = fogR, fg = fogG, fbb = fogB;
         int[] out = fb;
+        float[] zb = zbuf;
         int width = W;
 
         for (int y = yStart; y < yEnd; y++) {
@@ -729,59 +665,116 @@ public final class SoftRenderer {
             if (xe > width) xe = width;
             if (xs >= xe) continue;
             float ox = xs + 0.5f - x0, oy = yc - y0;
-            int U = (int) ((u0 + dudx * ox + dudy * oy) * 65536f);
-            int V = (int) ((v0 + dvdx * ox + dvdy * oy) * 65536f);
+            float IZ = z0i + dzdx * ox + dzdy * oy;
+            float Q = q0 + dqdx * ox + dqdy * oy, R = r0 + drdx * ox + drdy * oy;
             int L = (int) ((l0 + dldx * ox + dldy * oy) * 65536f);
             int F = (int) ((f0 + dfdx * ox + dfdy * oy) * 65536f);
             int AL = (int) ((a0 + dadx * ox + dady * oy) * 65536f);
-            float IZ = z0i + dzdx * ox + dzdy * oy;
             int row = y * width;
             int db = (y & 3) << 2;
-            if (mode == MODE_SHADOW) {
-                for (int x = xs; x < xe; x++, U += dU, V += dV, IZ += dzdx) {
-                    if (gt != null && IZ < gt[row + x]) continue;    // behind a hill
-                    int ty = V >> 16;
-                    ty = ty < 0 ? 0 : (ty > hmax ? hmax : ty);
-                    int c = tp[(ty << ws) | ((U >> 16) & wm)];
-                    if ((c >>> 24) > (BAYER[db | (x & 3)] << 4) + 8) {
-                        int d = out[row + x];
-                        out[row + x] = 0xFF000000 | ((((d >> 16) & 255) * 9 >> 4) << 16)
-                                | ((((d >> 8) & 255) * 9 >> 4) << 8) | ((d & 255) * 10 >> 4);
+            float iz = IZ > 1e-6f ? IZ : 1e-6f;
+            float uA = Q / iz, vA = R / iz;
+            // exact texture coordinates every 16 pixels, linear in between
+            for (int x = xs; x < xe; ) {
+                int n = xe - x < 16 ? xe - x : 16;
+                float IZn = IZ + dzdx * n, Qn = Q + dqdx * n, Rn = R + drdx * n;
+                float izn = IZn > 1e-6f ? IZn : 1e-6f;
+                float uB = Qn / izn, vB = Rn / izn;
+                int U = (int) (uA * 65536f), V = (int) (vA * 65536f);
+                int dU = (int) ((uB - uA) / n * 65536f), dV = (int) ((vB - vA) / n * 65536f);
+                for (int e = x + n; x < e; x++, U += dU, V += dV, L += dL, F += dF, AL += dA, IZ += dzdx) {
+                    int k = row + x;
+                    if (IZ * DEPTH_SLACK < zb[k]) continue;           // hidden (by the ground or nearer polygons)
+                    if (shadow) {
+                        int ty = V >> 16;
+                        ty = ty < 0 ? 0 : (ty > hmax ? hmax : ty);
+                        int c = tp[(ty << ws) | ((U >> 16) & wm)];
+                        if ((c >>> 24) > (BAYER[db | (x & 3)] << 4) + 8) {
+                            int d = out[k];
+                            out[k] = 0xFF000000 | ((((d >> 16) & 255) * 9 >> 4) << 16)
+                                    | ((((d >> 8) & 255) * 9 >> 4) << 8) | ((d & 255) * 10 >> 4);
+                        }
+                        continue;
                     }
+                    int c;
+                    // blended overlays: ordered-dither the coverage (stipple blend)
+                    if (blend && (AL >> 12) <= BAYER[db | (x & 3)]) continue;
+                    if (alpha) {   // foliage and cut-outs: clamp v (atlases may be non power-of-two tall)
+                        int ty = V >> 16;
+                        ty = ty < 0 ? 0 : (ty > hmax ? hmax : ty);
+                        c = tp[(ty << ws) | ((U >> 16) & wm)];
+                        if ((c >>> 24) < 128) continue;
+                    } else {
+                        c = tp[(((V >> 16) & hm) << ws) | ((U >> 16) & wm)];
+                    }
+                    int lv = L >> 8, fv = F >> 8;
+                    if (lv < 0) lv = 0;
+                    if (fv < 0) fv = 0; else if (fv > 256) fv = 256;
+                    out[k] = shade(c, lv, fv, fr, fg, fbb, BAYER[db | (x & 3)] >> 1);
+                    zb[k] = IZ;
                 }
-                continue;
+                Q = Qn;
+                R = Rn;
+                uA = uB;
+                vA = vB;
             }
-            boolean alpha = mode == MODE_ALPHA, blend = mode == MODE_BLEND;
-            for (int x = xs; x < xe; x++, U += dU, V += dV, L += dL, F += dF, AL += dA, IZ += dzdx) {
-                int c;
-                if (gt != null && IZ < gt[row + x]) continue;        // behind a hill
-                // blended overlays: ordered-dither the coverage (PS1-style stipple blend)
-                if (blend && (AL >> 12) <= BAYER[db | (x & 3)]) continue;
-                if (alpha) {   // sprites/foliage: clamp v (atlases may be non power-of-two tall)
-                    int ty = V >> 16;
-                    ty = ty < 0 ? 0 : (ty > hmax ? hmax : ty);
-                    c = tp[(ty << ws) | ((U >> 16) & wm)];
-                    if ((c >>> 24) < 128) continue;
-                } else {
-                    c = tp[(((V >> 16) & hm) << ws) | ((U >> 16) & wm)];
-                }
-                int lv = L >> 8, fv = F >> 8;
-                if (lv < 0) lv = 0;
-                if (fv < 0) fv = 0; else if (fv > 256) fv = 256;
-                int r = (((c >> 16) & 255) * lv) >> 8;
-                int g = (((c >> 8) & 255) * lv) >> 8;
-                int b = ((c & 255) * lv) >> 8;
-                if (r > 255) r = 255;
-                if (g > 255) g = 255;
-                if (b > 255) b = 255;
-                r += ((fr - r) * fv) >> 8;
-                g += ((fg - g) * fv) >> 8;
-                b += ((fbb - b) * fv) >> 8;
-                int d = BAYER[db | (x & 3)] >> 1;
-                r = (r + d) >> 3; if (r > 31) r = 31;
-                g = (g + d) >> 3; if (g > 31) g = 31;
-                b = (b + d) >> 3; if (b > 31) b = 31;
-                out[row + x] = 0xFF000000 | (((r << 3) | (r >> 2)) << 16) | (((g << 3) | (g >> 2)) << 8) | ((b << 3) | (b >> 2));
+        }
+    }
+
+    /** Lights, fogs and reduces a texel to 15-bit colour with ordered dither. */
+    private static int shade(int c, int lv, int fv, int fr, int fg, int fbb, int d) {
+        int r = (((c >> 16) & 255) * lv) >> 8;
+        int g = (((c >> 8) & 255) * lv) >> 8;
+        int b = ((c & 255) * lv) >> 8;
+        if (r > 255) r = 255;
+        if (g > 255) g = 255;
+        if (b > 255) b = 255;
+        r += ((fr - r) * fv) >> 8;
+        g += ((fg - g) * fv) >> 8;
+        b += ((fbb - b) * fv) >> 8;
+        r = (r + d) >> 3; if (r > 31) r = 31;
+        g = (g + d) >> 3; if (g > 31) g = 31;
+        b = (b + d) >> 3; if (b > 31) b = 31;
+        return 0xFF000000 | (((r << 3) | (r >> 2)) << 16) | (((g << 3) | (g >> 2)) << 8) | ((b << 3) | (b >> 2));
+    }
+
+    /**
+     * Sprites are real sprites: an upright billboard facing the camera is parallel to the screen
+     * (the camera never pitches), so it is a scaled, depth-tested rectangle blit.
+     */
+    private void drawSprite(int p, int bandY0, int bandY1) {
+        int o = p * 3 * VA;
+        float[] A = P;
+        float sx0 = A[o], sy0 = A[o + 1], sx1 = A[o + 2], sy1 = A[o + 3];
+        float u0 = A[o + 4], v0 = A[o + 5], u1 = A[o + 6], v1 = A[o + 7];
+        int fv = (int) (A[o + 8] * 256f);
+        float iz = A[o + 9];
+        int lv = (int) (A[o + 10] * 256f);
+        int ya = Math.max(bandY0, (int) Math.ceil(sy0 - 0.5f)), yb = Math.min(bandY1, (int) Math.ceil(sy1 - 0.5f));
+        int xa = Math.max(0, (int) Math.ceil(sx0 - 0.5f)), xb = Math.min(W, (int) Math.ceil(sx1 - 0.5f));
+        if (ya >= yb || xa >= xb) return;
+        Texture tex = textures[ptex[p]];
+        int[] tp = tex.px;
+        int wm = tex.wMask, ws = tex.wShift, hmax = tex.hMax;
+        float du = (u1 - u0) / (sx1 - sx0), dv = (v1 - v0) / (sy1 - sy0);
+        int dU = (int) (du * 65536f);
+        int U0 = (int) ((u0 + (xa + 0.5f - sx0) * du) * 65536f);
+        float[] zb = zbuf;
+        int[] out = fb;
+        int fr = fogR, fg = fogG, fbb = fogB;
+        float test = iz * DEPTH_SLACK;
+        for (int y = ya; y < yb; y++) {
+            int ty = (int) (v0 + (y + 0.5f - sy0) * dv);
+            ty = ty < 0 ? 0 : (ty > hmax ? hmax : ty);
+            int trow = ty << ws, row = y * W, db = (y & 3) << 2;
+            int U = U0;
+            for (int x = xa; x < xb; x++, U += dU) {
+                int k = row + x;
+                if (test < zb[k]) continue;
+                int c = tp[trow | ((U >> 16) & wm)];
+                if ((c >>> 24) < 128) continue;
+                out[k] = shade(c, lv, fv, fr, fg, fbb, BAYER[db | (x & 3)] >> 1);
+                zb[k] = iz;
             }
         }
     }

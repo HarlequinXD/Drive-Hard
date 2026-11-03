@@ -5,19 +5,20 @@ generated modern Japanese island city with a PS1 low-poly look. Written in plain
 software renderer, no engine.
 
 ## Current state
-- **Mode 7 ground + PS1-style polygons (no OpenGL, no z-buffer).** CPU renderer into a ~240p
+- **Mode 7 ground + 3D models and sprites (no OpenGL).** CPU renderer into a ~240p
   framebuffer, scaled up with nearest-neighbour. The ground is not geometry: the island is a
   flat, top-down **painted map** (streamed in 64 m tiles at 25 cm per texel, with mipmaps) plus
   a height map, projected **Mode 7 style**, one screen column at a time (a height-mapped Mode 7,
   like voxel-space engines), so hills rise out of the map and hide what lies behind them. The
   camera never really pitches; it shifts the horizon (a y-shear), so vertical lines stay
-  vertical and the ground projects exactly under the 3D models standing on it. Buildings,
-  bridges, barriers, trees, cars and people are polygons and sprites, sorted with a
-  PlayStation-style **ordering table** (4096 depth buckets per layer, per-polygon bias). The
-  ground leaves a per-pixel "behind the hill" threshold, the only depth test. Vertex snapping,
-  affine texturing, 15-bit dithered colour, fog, near-plane clipping, PS1-style draw distances,
-  near-camera subdivision, crack sealing, multi-threaded column (ground) and band (polygons)
-  rendering.
+  vertical and the ground projects exactly under the models standing on it. Buildings,
+  bridges, barriers and props are whole polygons (no subdivision) with **perspective-correct**
+  texturing; trees, cars and people are true **sprites**, scaled rectangle blits (with the
+  camera level, an upright billboard is always parallel to the screen). The ground fills a
+  depth buffer that polygons and sprites test and write, so hills hide things and nothing
+  mis-sorts; a draw-layer ordering table still settles coplanar ties (shadows, decals).
+  15-bit dithered colour, fog, near-plane clipping, draw distances, multi-threaded column
+  (ground) and band (polygons) rendering.
 - **Culling:** per-chunk and per-batch (each building is its own batch) frustum culling,
   per-polygon backface/distance culling, per-sprite frustum culling, and terrain occlusion
   culling (buildings and sprites hidden behind hills are skipped via heightfield ray tests).
@@ -104,7 +105,7 @@ software renderer, no engine.
 app/src/main/java/com/harlequinxd/drivehard/
   core/        pure Java (no Android) — runs on desktop too
     Game.java  world + player + camera + renderer
-    render/    SoftRenderer (Mode 7 ground + ordering table rasteriser), Ground (map tiles), Geo, Texture
+    render/    SoftRenderer (Mode 7 ground, perspective-correct polygons, sprite blits), Ground (map tiles), Geo, Texture
     city/      City (layout + chunk generator), Terrain, ChunkManager (streaming), Chunk,
                BuildingGen, Railway (viaduct, stations, trains), Countryside (fields, farms,
                villages), GroundPainter (paints the map tiles), GeoBuilder, TrafficLights
