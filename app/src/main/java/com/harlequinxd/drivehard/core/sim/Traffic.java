@@ -47,10 +47,21 @@ public final class Traffic {
         final float[] bez = new float[8];
         float y0, y3;
         public float brake;  // 0..1 for brake lights / debug
+        /** Time not yet simulated (cars out of view are updated a few times a second). */
+        float lag;
     }
 
     public final List<Car> cars = new ArrayList<>();
-    public int target = 26;
+    /** Upper limit on the number of cars (the area's density decides below it when {@link #autoDensity}). */
+    public int target = 30;
+    /** Pick the number of cars from where the player is: busy city, quieter towns, sparse country. */
+    public boolean autoDensity;
+    /** Cars wanted for the current area. */
+    public int areaTarget = 30;
+    private float densityTimer;
+    // the camera's view (out-of-view cars are simulated at a lower rate); viewCos -2: no view known
+    private float viewX, viewZ, viewFx, viewFz, viewCos = -2f;
+    private int frame;
     public float spawnMin = 55f, spawnMax = 150f, despawn = 185f;
     /** Player-driven and parked cars that traffic must queue behind. */
     public List<Vehicle> obstacles;
@@ -75,14 +86,61 @@ public final class Traffic {
 
     // ------------------------------------------------------------------ update
 
+    /** The camera this frame: position, horizontal view direction (unit) and half field of view. */
+    public void view(float x, float z, float fx, float fz, float halfFov) {
+        viewX = x; viewZ = z; viewFx = fx; viewFz = fz;
+        viewCos = (float) Math.cos(Math.min(3f, halfFov + 0.3f));
+    }
+
+    /** True if the car might be on screen (in the view cone, or close by). */
+    private boolean inView(Car c) {
+        if (viewCos < -1.5f) return true;
+        float dx = c.x - viewX, dz = c.z - viewZ, d2 = dx * dx + dz * dz;
+        if (d2 < 30f * 30f) return true;
+        return dx * viewFx + dz * viewFz > viewCos * (float) Math.sqrt(d2);
+    }
+
     public void update(float dt, float time, float px, float pz) {
+        frame++;
+        if (autoDensity) {
+            densityTimer -= dt;
+            if (densityTimer <= 0f) { densityTimer = 1f; areaTarget = density(px, pz); }
+        }
+        int want = autoDensity ? Math.min(target, areaTarget) : target;
         for (int i = cars.size() - 1; i >= 0; i--) {
             Car c = cars.get(i);
-            float dx = c.x - px, dz = c.z - pz;
-            if (dx * dx + dz * dz > despawn * despawn) cars.remove(i);
+            float dx = c.x - px, dz = c.z - pz, d2 = dx * dx + dz * dz;
+            // far away, or out of view and more than the area needs: gone
+            if (d2 > despawn * despawn || (cars.size() > want && d2 > spawnMin * spawnMin && !inView(c))) cars.remove(i);
         }
-        for (int tries = 0; tries < 4 && cars.size() < target; tries++) spawn(px, pz);
-        for (Car c : cars) drive(c, dt, time, px, pz);
+        if (cars.size() < want) spawn(px, pz);
+        for (int i = 0; i < cars.size(); i++) {
+            Car c = cars.get(i);
+            c.lag += dt;
+            // out of view: simulate four times less often in bigger steps (no one sees the jumps)
+            if (!c.turning && !inView(c) && ((frame + i) & 3) != 0 && c.lag < 0.2f) continue;
+            float step = Math.min(c.lag, 0.2f);
+            c.lag = 0f;
+            drive(c, step, time, px, pz);
+        }
+    }
+
+    /**
+     * How many cars this area has: the city is busy, town streets less so, the freeway and
+     * highways carry a steady trickle, country roads only the odd car.
+     */
+    private int density(float px, float pz) {
+        if (px > city.cityX0 - 100f && px < city.cityX1 + 100f && pz > city.cityZ0 - 100f && pz < city.cityZ1 + 100f) return 30;
+        for (com.harlequinxd.drivehard.core.road.Town t : net.towns) {
+            if (px > t.x0 - 80f && px < t.x1 + 80f && pz > t.z0 - 80f && pz < t.z1 + 80f)
+                return t.size == com.harlequinxd.drivehard.core.road.Town.Size.TOWN ? 16 : (t.size == com.harlequinxd.drivehard.core.road.Town.Size.VILLAGE ? 10 : 6);
+        }
+        if (net.nearest(px, pz, 120f, hit)) {
+            RoadClass k = net.edges.get((int) hit[0]).cls;
+            if (k == RoadClass.FREEWAY || k == RoadClass.RAMP) return 12;
+            if (k == RoadClass.HIGHWAY) return 8;
+        }
+        return 4;
     }
 
     private void spawn(float px, float pz) {
@@ -101,6 +159,10 @@ public final class Traffic {
         e.lanePoint(s, dir, off, tmp);
         float dx = tmp[0] - px, dz = tmp[1] - pz, d = (float) Math.sqrt(dx * dx + dz * dz);
         if (d < spawnMin || d > spawnMax) return;
+        if (viewCos > -1.5f) {
+            float vx = tmp[0] - viewX, vz = tmp[1] - viewZ, vd = (float) Math.sqrt(vx * vx + vz * vz);
+            if (vd < 110f && vx * viewFx + vz * viewFz > viewCos * vd) return;   // would pop up on screen
+        }
         float gap = e.cls.city ? 14f : 32f;
         for (Car o : cars) {
             float ox = o.x - tmp[0], oz = o.z - tmp[1];

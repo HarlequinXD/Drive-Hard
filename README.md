@@ -123,6 +123,10 @@ software renderer, no engine.
   lane for left turns and exits and the inner lane for right turns, cubic curves through
   junctions; signals in the city, give-way rules at rural junctions (minor road yields to
   major, equal roads yield to the left), freeway exits and merges, turning around at dead ends.
+  Traffic density follows the area (about 30 cars in the city, 16 in a town, 10 in a village, 12
+  on the freeway, 8 on highways, 4 on country roads); cars spawn and are removed out of view,
+  and cars off screen are simulated four times less often. New car and pedestrian styles are
+  baked slowly once the sprite cache is full, to spare the CPU.
 - **Pedestrians:** **100 styles** of men and women — office workers in suits, casual wear,
   dresses, skirts, face masks, caps and sun hats. They walk the sidewalks and cross at
   crosswalks only on the walk phase.

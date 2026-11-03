@@ -31,7 +31,7 @@ import java.util.Random;
 /** Platform-independent game: streamed island, player, traffic, pedestrians, flora and the renderer. */
 public final class Game {
     public static final int GROUP_FLORA = 0, GROUP_CARS = 1, GROUP_PEDS = 2;
-    public static final int CAR_CACHE = 32, PED_CACHE = 20;
+    public static final int CAR_CACHE = 24, PED_CACHE = 16;
 
     public final TextureLibrary lib;
     public final City city;
@@ -111,6 +111,7 @@ public final class Game {
         traffic = new Traffic(city, r -> pickReady(carEntries, r));
         pedestrians = new Pedestrians(city, r -> pickReady(pedEntries, r));
         traffic.obstacles = trafficObstacles;
+        traffic.autoDensity = true;
         city.dynamic = (x, z, out) -> {
             traffic.boxesNear(x, z, out);
             for (Vehicle v : parked) {
@@ -204,9 +205,11 @@ public final class Game {
         rotateTimer -= dt;
         if (rotateTimer <= 0f) {
             rotateTimer = 1.5f;
+            boolean full = cache.readyCount(GROUP_CARS) >= CAR_CACHE && cache.readyCount(GROUP_PEDS) >= PED_CACHE;
+            if (full) rotateTimer = 8f;           // once the cache is full, new styles trickle in slowly (baking costs CPU)
             if (cache.queuedCount() < 3) {
-                if (cache.readyCount(GROUP_CARS) < CAR_CACHE || rnd.nextInt(8) == 0) requestCar();
-                if (cache.readyCount(GROUP_PEDS) < PED_CACHE || rnd.nextInt(8) == 0) requestPed();
+                if (cache.readyCount(GROUP_CARS) < CAR_CACHE || rnd.nextInt(4) == 0) requestCar();
+                if (cache.readyCount(GROUP_PEDS) < PED_CACHE || rnd.nextInt(4) == 0) requestPed();
             }
         }
         // forget evicted styles (cars/peds using them are re-requested when seen again)
@@ -215,6 +218,11 @@ public final class Game {
 
         city.chunks.update(player.x, player.z);
         city.chunks.ensureAround(player.x, player.z);
+        if (renderer != null) {
+            SoftRenderer vr = renderer;
+            float half = (float) Math.atan(vr.W * 0.5f / vr.focal());
+            traffic.view(vr.ex, vr.ez, vr.fwdX(), vr.fwdZ(), half);
+        }
         traffic.update(dt, time, player.x, player.z);
         pedestrians.update(dt, time, player.x, player.z);
         for (Vehicle v : parked) v.update(dt, 0f, 0f, 0f, city, v);
