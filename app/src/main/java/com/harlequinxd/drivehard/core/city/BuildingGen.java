@@ -205,6 +205,9 @@ final class BuildingGen {
     private void block(float x0, float z0, float x1, float z1, float base, boolean[] street, boolean[] shops, int[] shopSet,
                        Kind front, Kind back, int floors, float floorH, boolean bigSign, int signs) {
         int fTex = pick(front), bTex = pick(back), side = pick(Kind.BLANK);
+        // no pencil towers: at most 2.5 times as tall as the building is wide
+        float narrow = Math.min(x1 - x0, z1 - z0);
+        floors = Math.max(1, Math.min(floors, (int) (narrow * 2.5f / floorH)));
         boolean anyShop = shops[0] || shops[1] || shops[2] || shops[3];
         float groundH = anyShop ? City.SHOP_H : floorH;
         float top = base + groundH + (floors - 1) * floorH;

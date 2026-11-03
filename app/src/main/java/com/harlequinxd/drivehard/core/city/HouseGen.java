@@ -278,7 +278,8 @@ final class HouseGen {
     /** Footprint of the house inside the lot (local u0, v0, u1, v1) and the carport's u range (or NaN). */
     static float[] layout(Design d, float W, float D, boolean lot) {
         if (!lot) return new float[]{0f, 0f, W, D, Float.NaN, Float.NaN};
-        float w = Math.min(W - 2f, W * d.widthFrac), dd = Math.min(D - 4f, D * d.depthFrac);
+        // never thinner than a real house: at least 7 m wide and deep where the lot allows
+        float w = Math.min(W - 1.2f, Math.max(7f, W * d.widthFrac)), dd = Math.min(D - 3f, Math.max(7f, D * d.depthFrac));
         float carW = d.carport && W - w > 3.4f ? Math.min(3.2f, W - w - 0.6f) : 0f;
         float u0;
         if (carW > 0f) u0 = d.leftDoor ? W - w - 0.6f : 0.6f;
@@ -305,7 +306,13 @@ final class HouseGen {
         boolean ridgeU = d.ridgeAlongFront ? w >= dep * 0.7f : w > dep * 1.4f;
         int wingFloors = d.wingLower ? Math.max(1, d.floors - 1) : d.floors;
         RoofType wingRoof = d.roof == RoofType.FLAT ? RoofType.FLAT : (d.roof == RoofType.SHED ? RoofType.SHED : (d.roof == RoofType.IRIMOYA ? RoofType.HIP : d.roof));
-        switch (d.plan) {
+        // plans that would cut the house into slivers on a small footprint fall back to a plain block
+        Plan plan = d.plan;
+        if (plan == Plan.OFFSET && w < 12f) plan = Plan.RECT;
+        if ((plan == Plan.L_FRONT || plan == Plan.L_BACK) && (w * d.wingFrac < 4.5f || dep < 9f)) plan = Plan.RECT;
+        if (plan == Plan.UPPER_PART && w * 0.62f < 5.5f) plan = Plan.RECT;
+        if (plan == Plan.ANNEX && (Math.min(w * 0.3f, 3.6f) < 2.6f || w < 9.5f)) plan = Plan.RECT;
+        switch (plan) {
             case L_FRONT: {
                 float fd = Math.min(dep * 0.35f, 4.5f), ww = w * d.wingFrac;
                 masses.add(new Mass(u0, v0 + fd, u1, v1, d.floors, d.roof, ridgeU));
@@ -356,6 +363,13 @@ final class HouseGen {
         }
         if (d.roof == RoofType.SHED) for (Mass m : masses) if (m == masses.get(0)) m.shedHigh = d.shedBack ? 1 : 0;
         Mass main = masses.get(0);
+        // no skinny towers: a block narrower than 4.5 m is a single storey, the house itself
+        // gets one storey per 3.5 m of its narrower side at most
+        for (Mass m : masses) {
+            float narrow = Math.min(m.u1 - m.u0, m.v1 - m.v0);
+            if (m != main && narrow < 4.5f) m.floors = 1;
+            m.floors = Math.max(1, Math.min(m.floors, (int) (narrow / 3.5f)));
+        }
         for (Mass m : masses) m.top = base + m.floors * d.floorH;
         sb = new SectorBuilder(ch.sectors);
         switch (face) {
