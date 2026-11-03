@@ -127,7 +127,7 @@ public final class Traffic {
         c.x = tmp[0];
         c.z = tmp[1];
         c.yaw = (float) Math.atan2(tmp[3], tmp[4]);
-        c.y = e.cls.city ? city.terrain.height(c.x, c.z) : tmp[2] + 0.04f;
+        c.y = city.surface(c.x, c.z);
     }
 
     // ------------------------------------------------------------------ driving
@@ -382,8 +382,8 @@ public final class Traffic {
         b[2] = tmp[0] + tmp[3] * k; b[3] = tmp[1] + tmp[4] * k;
         b[4] = tmp2[0] - tmp2[3] * k; b[5] = tmp2[1] - tmp2[4] * k;
         b[6] = tmp2[0]; b[7] = tmp2[1];
-        c.y0 = e.cls.city ? city.terrain.height(tmp[0], tmp[1]) : tmp[2] + 0.04f;
-        c.y3 = ne.cls.city ? city.terrain.height(tmp2[0], tmp2[1]) : tmp2[2] + 0.04f;
+        c.y0 = city.surface(tmp[0], tmp[1]);
+        c.y3 = city.surface(tmp2[0], tmp2[1]);
         float len = 0f, lx = b[0], lz = b[1];
         for (int i = 1; i <= 8; i++) {
             float t = i / 8f;
@@ -428,9 +428,7 @@ public final class Traffic {
         float tx = 3 * u * u * (b[2] - b[0]) + 6 * u * t * (b[4] - b[2]) + 3 * t * t * (b[6] - b[4]);
         float tz = 3 * u * u * (b[3] - b[1]) + 6 * u * t * (b[5] - b[3]) + 3 * t * t * (b[7] - b[5]);
         if (tx * tx + tz * tz > 1e-6f) c.yaw = (float) Math.atan2(tx, tz);
-        float ground = city.terrain.height(c.x, c.z);
-        float lin = c.y0 + (c.y3 - c.y0) * t;
-        c.y = Math.abs(lin - ground) < 1.5f ? ground : lin;
+        c.y = city.surface(c.x, c.z);
     }
 
     /** Collision boxes for the cars near a point (axis-aligned bounds of each car). */

@@ -50,17 +50,22 @@ public final class GeoBuilder {
         return cur;
     }
 
+    /** Dry run: no geometry at all, only ground paint is recorded (see {@link #floorAreaT}). */
+    boolean dry;
+    /** Where ground areas go: {x0, z0, x1, z1, texture, uScale, vScale}; null drops them. */
+    java.util.List<float[]> paint;
+
     public void quad(float[] p, float[] uv, float[] l, int tex, int layer, int flags, float bias, boolean doubleSided) {
-        target().add(p, uv, l, tex, layer, flags, bias, doubleSided);
+        if (!dry) target().add(p, uv, l, tex, layer, flags, bias, doubleSided);
     }
 
     /** Dither-blended overlay quad (coverage per vertex), drawn over what lies beneath it. */
     public void quadBlend(float[] p, float[] uv, float[] l, float[] a, int tex, int layer, int flags, float bias) {
-        target().addBlend(p, uv, l, a, tex, layer, flags, bias);
+        if (!dry) target().addBlend(p, uv, l, a, tex, layer, flags, bias);
     }
 
     public void quad3(float[] p, float[] uv, float[] l, int tex, int layer) {
-        target().add(p, uv, l, tex, layer, Geo.FLAG_NO_SUBDIV, 0f, false);
+        if (!dry) target().add(p, uv, l, tex, layer, Geo.FLAG_NO_SUBDIV, 0f, false);
     }
 
     public float h(float x, float z) { return terrain.height(x, z); }
@@ -93,7 +98,7 @@ public final class GeoBuilder {
     }
 
     /** Smooth value noise in 0..1 with ~30 m features, for per-vertex ground tint. */
-    private static float paint(float x, float z) {
+    static float paint(float x, float z) {
         float fx = x / 31f, fz = z / 31f;
         int ix = (int) Math.floor(fx), iz = (int) Math.floor(fz);
         float tx = fx - ix, tz = fz - iz;
@@ -115,7 +120,7 @@ public final class GeoBuilder {
             l[k] = tl(xs[k], zs[k]);
             a[k] = cov[k];
         }
-        target().addBlend(p, t, l, a, tex, layer, flags, bias);
+        if (!dry) target().addBlend(p, t, l, a, tex, layer, flags, bias);
     }
 
     /** Corners: 0=(ax,bz) 1=(bx,bz) 2=(bx,az) 3=(ax,az). */
@@ -131,19 +136,16 @@ public final class GeoBuilder {
         t[4] = bx / uScale; t[5] = az / vScale;
         t[6] = ax / uScale; t[7] = az / vScale;
         l[0] = l0; l[1] = l1; l[2] = l2; l[3] = l3;
-        target().add(p, t, l, tex, layer, flags, bias, false);
+        if (!dry) target().add(p, t, l, tex, layer, flags, bias, false);
     }
 
-    /** Area split into cells following the terrain. */
+    /**
+     * Flat ground cover (sidewalks, lots, parks, car parks, paths). The ground is a painted map, so
+     * this is not geometry: the area is recorded for the ground painter.
+     */
     public void floorAreaT(float ax, float az, float bx, float bz, float off, int tex, float uScale, float vScale,
                            int layer, float cell, int flags, float bias) {
-        for (float z = az; z < bz - 1e-3f; z += cell) {
-            float zz = Math.min(bz, z + cell);
-            for (float x = ax; x < bx - 1e-3f; x += cell) {
-                float xx = Math.min(bx, x + cell);
-                floorT(x, z, xx, zz, off, tex, uScale, vScale, layer, flags, bias, false);
-            }
-        }
+        if (paint != null) paint.add(new float[]{ax, az, bx, bz, tex, uScale, vScale});
     }
 
     // ------------------------------------------------------------------ walls
@@ -173,7 +175,7 @@ public final class GeoBuilder {
         t[0] = u0; t[1] = vBot; t[2] = u1; t[3] = vBot; t[4] = u1; t[5] = vTop; t[6] = u0; t[7] = vTop;
         l[0] = l[1] = lt * ao;
         l[2] = l[3] = lt;
-        target().add(p, t, l, tex, layer, flags, bias, false);
+        if (!dry) target().add(p, t, l, tex, layer, flags, bias, false);
     }
 
     /** Flat-based wall split into columns of at most {@code maxW} m and rows of {@code rowH} m. */

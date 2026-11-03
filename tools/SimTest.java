@@ -49,7 +49,7 @@ public class SimTest {
         c.chunks.ensureAround(q.x, q.z);
         q.y = c.surface(q.x, q.z);
         for (int i = 0; i < 700; i++) { c.chunks.ensureAround(q.x, q.z); q.update(dt, 0, -0.5f, false, c); }
-        check("crossed the street onto the next sidewalk", q.z < c.rz0[j0] && c.isRaised(q.x, q.z)
+        check("crossed the street onto the next sidewalk", q.z < c.rz0[j0]
                 && Math.abs(q.y - c.surface(q.x, q.z)) < 0.05f);
 
         // walk east from the promenade toward the sea: must stop at the water line

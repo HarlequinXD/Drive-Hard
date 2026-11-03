@@ -31,7 +31,8 @@ import static com.harlequinxd.drivehard.core.render.SoftRenderer.L_WATER;
  * the middle block row; vehicles keep left.
  */
 public final class City extends World {
-    public static final float CURB = 0.15f, SIDEWALK = 4f;
+    /** Everything on the ground is painted flat: no kerbs. */
+    public static final float CURB = 0f, SIDEWALK = 4f;
     public static final float FLOOR_H = 3.4f, SHOP_H = 4.6f;
 
     final TextureLibrary lib;
@@ -77,6 +78,7 @@ public final class City extends World {
         shopsPachinko = shopSet("PACHINKO", "GAME CENTER");
         shopsUnderTrack = shopSet("IZAKAYA", "YAKITORI", "RAMEN", "SOBA", "BAR", "GYOZA", "KISSATEN", "BENTO", "SNACK");
         countryside = new Countryside(this, lib, seed);
+        streetPaint = streetPaint();
         chunks = new ChunkManager(this);
         minX = terrain.islandX0 - 9000; maxX = terrain.islandX1 + 3000; minZ = terrain.islandZ0 - 9000; maxZ = terrain.islandZ1 + 9000;
         int mj = nbz / 2;
@@ -153,6 +155,7 @@ public final class City extends World {
 
     /** Sidewalks/blocks and avenue medians sit one curb height above the road. */
     public boolean isRaised(float x, float z) {
+        if (CURB == 0f) return false;
         if (x <= cityX0 || x >= cityX1 || z <= cityZ0 || z >= cityZ1) return false;
         int bi = -1, bj = -1;
         for (int i = 0; i < nbx; i++) if (x > rx1[i] && x < rx0[i + 1]) { bi = i; break; }
@@ -226,6 +229,64 @@ public final class City extends World {
         return ch;
     }
 
+    /** The Mode 7 ground map: loaded chunks' painted tiles, flat colours beyond. */
+    public com.harlequinxd.drivehard.core.render.Ground.Source groundSource() {
+        return new com.harlequinxd.drivehard.core.render.Ground.Source() {
+            @Override public com.harlequinxd.drivehard.core.render.Ground.Tile tile(int cx, int cz) {
+                Chunk c = chunks.get(cx, cz);
+                return c == null ? null : c.ground;
+            }
+            @Override public float height(float x, float z) { return Math.max(-0.05f, terrain.height(x, z)); }
+            @Override public int color(float x, float z) { return GroundPainter.farColor(terrain, x, z); }
+        };
+    }
+
+    // ------------------------------------------------------------------ painted city ground
+
+    private final List<float[]> streetPaint;
+    private final java.util.concurrent.ConcurrentHashMap<Integer, List<float[]>> blockPaint = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** Avenue medians and the seaside promenade path. */
+    private List<float[]> streetPaint() {
+        List<float[]> out = new ArrayList<>();
+        GeoBuilder gb = new GeoBuilder(terrain, new Chunk(0, 0));
+        gb.dry = true;
+        gb.paint = out;
+        Chunk dummy = new Chunk(0, 0);
+        for (int i = 0; i <= nbx; i++)
+            for (int j = 0; j < nbz; j++) roadSegment(dummy, gb, true, rx0[i], rx1[i], rz1[j], rz0[j + 1], avenueX[i]);
+        for (int j = 0; j <= nbz; j++)
+            for (int i = 0; i < nbx; i++) roadSegment(dummy, gb, false, rz0[j], rz1[j], rx1[i], rx0[i + 1], avenueZ[j]);
+        out.add(new float[]{cityX1 + 10f, cityZ0, cityX1 + 15f, cityZ1, lib.pavers, 2f, 2f});
+        return out;
+    }
+
+    /**
+     * Ground areas painted into the map in this rectangle: sidewalks, lots, parks, car parks,
+     * plazas and medians, each {x0, z0, x1, z1, texture, uScale, vScale}. A block's areas come from a
+     * dry run of its generator (same seed, no geometry), cached.
+     */
+    void groundPaint(float x0, float z0, float x1, float z1, List<float[]> out) {
+        if (x1 < cityX0 - 30f || x0 > cityX1 + 30f || z1 < cityZ0 || z0 > cityZ1) return;
+        for (float[] r : streetPaint) if (r[2] > x0 && r[0] < x1 && r[3] > z0 && r[1] < z1) out.add(r);
+        for (int j = 0; j < nbz; j++) {
+            if (rz0[j + 1] < z0 || rz1[j] > z1) continue;
+            for (int i = 0; i < nbx; i++) {
+                if (rx0[i + 1] < x0 || rx1[i] > x1) continue;
+                final int bi = i, bj = j;
+                List<float[]> list = blockPaint.computeIfAbsent(j * 64 + i, k -> {
+                    List<float[]> l = new ArrayList<>();
+                    GeoBuilder gb = new GeoBuilder(terrain, new Chunk(0, 0));
+                    gb.dry = true;
+                    gb.paint = l;
+                    block(new Chunk(0, 0), gb, bi, bj);
+                    return l;
+                });
+                for (float[] r : list) if (r[2] > x0 && r[0] < x1 && r[3] > z0 && r[1] < z1) out.add(r);
+            }
+        }
+    }
+
     private static boolean in(float x, float z, float x0, float z0, float x1, float z1) {
         return x >= x0 && x < x1 && z >= z0 && z < z1;
     }
@@ -233,66 +294,33 @@ public final class City extends World {
     // ------------------------------------------------------------------ terrain, water, vegetation
 
     private void terrainAndWater(Chunk ch, GeoBuilder gb, float x0, float z0, float x1, float z1) {
-        float wl = GeoBuilder.sunLight(0, 1, 0);
-        for (float qz = z0; qz < z1; qz += 32f)
-            for (float qx = x0; qx < x1; qx += 32f) {
-                float m = Math.min(Math.min(terrain.height(qx, qz), terrain.height(qx + 32, qz)),
-                        Math.min(terrain.height(qx, qz + 32), terrain.height(qx + 32, qz + 32)));
-                m = Math.min(m, terrain.height(qx + 16, qz + 16));
-                if (m < 0.4f) gb.floor(qx, qz, qx + 32f, qz + 32f, 0f, lib.water, 4f, 4f, L_WATER, wl, 0f);
-            }
-        // surface of every 8 m cell of the chunk plus a one-cell border (for blending with neighbours)
-        Surface[] grid = new Surface[100];
+        // what covers every 8 m cell of the chunk plus a one-cell border (for blending with neighbours)
+        GroundPainter.Surface[] grid = new GroundPainter.Surface[100];
         for (int j = -1; j <= 8; j++)
             for (int i = -1; i <= 8; i++) {
                 float ax = x0 + i * 8f, az = z0 + j * 8f;
-                boolean overlaps = ax + 8f > cityX0 && ax < cityX1 && az + 8f > cityZ0 && az < cityZ1;
-                grid[(j + 1) * 10 + (i + 1)] = overlaps ? null : surface(ax, az, ax + 8f, az + 8f);
+                grid[(j + 1) * 10 + (i + 1)] = surface(ax, az, ax + 8f, az + 8f);
             }
-        for (int j = 0; j < 8; j++) {
+        // the ground itself is a painted map tile (Mode 7), not geometry
+        ch.ground = new GroundPainter(this).paint(ch.cx, ch.cz, grid);
+        for (int j = 0; j < 8; j++)
             for (int i = 0; i < 8; i++) {
-                float ax = x0 + i * 8f, az = z0 + j * 8f, bx = ax + 8f, bz = az + 8f;
-                Surface sf = grid[(j + 1) * 10 + (i + 1)];
-                if (sf != null) {
-                    drawCell(gb, sf, ax, az, bx, bz);
-                    if (sf.mode == 0 && sf.tex >= 0) blendEdges(gb, sf, ax, az, grid, i, j);
-                    vegetation(ch, gb, ax, az, sf.crop);
-                    continue;
-                }
-                // pieces of the cell outside the city rectangle
-                if (ax < cityX0) terrainCell(gb, ax, az, Math.min(bx, cityX0), bz);
-                if (bx > cityX1) terrainCell(gb, Math.max(ax, cityX1), az, bx, bz);
-                float mx0 = Math.max(ax, cityX0), mx1 = Math.min(bx, cityX1);
-                if (mx1 > mx0) {
-                    if (az < cityZ0) terrainCell(gb, mx0, az, mx1, Math.min(bz, cityZ0));
-                    if (bz > cityZ1) terrainCell(gb, mx0, Math.max(az, cityZ1), mx1, bz);
-                }
+                float ax = x0 + i * 8f, az = z0 + j * 8f;
+                boolean overlaps = ax + 8f > cityX0 && ax < cityX1 && az + 8f > cityZ0 && az < cityZ1;
+                GroundPainter.Surface sf = grid[(j + 1) * 10 + (i + 1)];
+                if (!overlaps && sf.tex >= 0) vegetation(ch, gb, ax, az, sf.crop);
             }
-        }
     }
 
-    /** What covers one terrain cell: texture (-1: nothing), uv tile size, crop, and how it's drawn (see cellMode). */
-    private static final class Surface {
-        int tex = -1, mode;
-        float uv = 2f;
-        Countryside.Crop crop = Countryside.Crop.NONE;
-    }
-
-    private Surface surface(float ax, float az, float bx, float bz) {
-        Surface s = new Surface();
+    private GroundPainter.Surface surface(float ax, float az, float bx, float bz) {
+        GroundPainter.Surface s = new GroundPainter.Surface();
         float h0 = terrain.height(ax, az), h1 = terrain.height(bx, az), h2 = terrain.height(ax, bz), h3 = terrain.height(bx, bz);
         float max = Math.max(Math.max(h0, h1), Math.max(h2, h3)), min = Math.min(Math.min(h0, h1), Math.min(h2, h3));
-        if (max < -0.6f) return s;
         float avg = (h0 + h1 + h2 + h3) * 0.25f;
         float slope = (max - min) / Math.max(bx - ax, bz - az);
         float mx = (ax + bx) * 0.5f, mz = (az + bz) * 0.5f;
-        int tex = slope > 0.6f ? lib.rock : (terrain.isSand(mx, mz, avg) ? lib.sand : (avg > 22f ? lib.hillGrass : lib.grass));
-        // next to roads the road mesh draws the verges; around junctions the grid is cut finely
-        // so grass never overlaps paving
-        boolean full = bx - ax > 7.9f && bz - az > 7.9f;
-        s.mode = full ? roads.cellMode(mx, mz) : 0;
-        if (s.mode == 1) return s;
-        if (tex != lib.rock && tex != lib.sand && full) {
+        int tex = slope > 0.6f ? lib.rock : (terrain.isSand(mx, mz, avg) || max < 0.6f ? lib.sand : (avg > 22f ? lib.hillGrass : lib.grass));
+        if (tex != lib.rock && tex != lib.sand) {
             if (roads.influence(mx, mz) > 0.35f) tex = lib.grass;           // road verges, cuttings and embankments
             else {
                 s.crop = countryside.crop(ax, az, avg, slope);
@@ -301,55 +329,6 @@ public final class City extends World {
         }
         s.tex = tex;
         return s;
-    }
-
-    private Countryside.Crop terrainCell(GeoBuilder gb, float ax, float az, float bx, float bz) {
-        if (bx - ax < 0.01f || bz - az < 0.01f) return Countryside.Crop.NONE;
-        Surface s = surface(ax, az, bx, bz);
-        drawCell(gb, s, ax, az, bx, bz);
-        return s.crop;
-    }
-
-    private void drawCell(GeoBuilder gb, Surface s, float ax, float az, float bx, float bz) {
-        if (s.tex < 0 || s.mode == 1) return;
-        // Natural terrain sorts in the object layer, by depth, together with buildings and sprites,
-        // so hills hide whatever stands behind them instead of always being painted first.
-        if (s.mode == 2) {
-            for (int j = 0; j < 4; j++)
-                for (int i = 0; i < 4; i++) {
-                    float sx0 = ax + i * 2f, sz0 = az + j * 2f;
-                    if (roads.onAsphalt(sx0 + 1f, sz0 + 1f, 1.45f, -1)) continue;
-                    gb.floorT(sx0, sz0, sx0 + 2f, sz0 + 2f, 0f, s.tex, s.uv, s.uv, L_OBJECT, Geo.FLAG_SORT_FAR, 0.3f, true);
-                }
-            s.crop = Countryside.Crop.NONE;
-            return;
-        }
-        gb.floorT(ax, az, bx, bz, 0f, s.tex, s.uv, s.uv, L_OBJECT, Geo.FLAG_SORT_FAR, 0.3f, true);
-        if (Countryside.paddy(s.crop)) countryside.levees(gb, ax, az, bx, bz);
-    }
-
-    /**
-     * Soft transitions between neighbouring ground types: each edge shared with a differently
-     * textured cell gets the neighbour's texture laid over this cell with a dithered coverage that
-     * fades from 50% at the shared edge to nothing across the cell (both sides do the same, so the
-     * change of texture is spread over two cells).
-     */
-    private void blendEdges(GeoBuilder gb, Surface sf, float ax, float az, Surface[] grid, int i, int j) {
-        int[][] nb = {{0, -1}, {0, 1}, {-1, 0}, {1, 0}};   // N S W E
-        float[] cov = new float[4];
-        for (int k = 0; k < 4; k++) {
-            Surface o = grid[(j + 1 + nb[k][1]) * 10 + (i + 1 + nb[k][0])];
-            if (o == null || o.tex < 0 || o.mode != 0 || o.tex == sf.tex) continue;
-            // corners: 0=(ax,bz) 1=(bx,bz) 2=(bx,az) 3=(ax,az) as in floorT
-            float e = 0.5f;
-            switch (k) {
-                case 0: cov[0] = 0; cov[1] = 0; cov[2] = e; cov[3] = e; break;   // neighbour to the north (az side)
-                case 1: cov[0] = e; cov[1] = e; cov[2] = 0; cov[3] = 0; break;   // south (bz side)
-                case 2: cov[0] = e; cov[1] = 0; cov[2] = 0; cov[3] = e; break;   // west (ax side)
-                default: cov[0] = 0; cov[1] = e; cov[2] = e; cov[3] = 0; break;  // east (bx side)
-            }
-            gb.floorBlend(ax, az, ax + 8f, az + 8f, o.tex, o.uv, cov, L_OBJECT, Geo.FLAG_SORT_FAR | Geo.FLAG_DETAIL, 0.25f);
-        }
     }
 
     private void vegetation(Chunk ch, GeoBuilder gb, float ax, float az, Countryside.Crop crop) {
@@ -486,6 +465,7 @@ public final class City extends World {
 
     /** Curb faces (bottom on the road, top at sidewalk height) around a raised rectangle. */
     private void curbs(GeoBuilder gb, float ax, float az, float bx, float bz) {
+        if (CURB == 0f) return;      // flat painted ground
         int t = lib.curb;
         float v = CURB / 2f;
         for (float s = ax; s < bx - 1e-3f; s += 8f) {

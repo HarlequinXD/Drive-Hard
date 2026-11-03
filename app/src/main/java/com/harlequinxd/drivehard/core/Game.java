@@ -138,6 +138,7 @@ public final class Game {
         renderer = new SoftRenderer(w, h);
         renderer.setThreads(Math.min(4, Math.max(1, Runtime.getRuntime().availableProcessors() - 1)));
         renderer.textures = textures;
+        renderer.ground = city.groundSource();
         renderer.setFogColor(0xBCD8EA);
         renderer.setZenithColor(0x3E86D0);
     }
@@ -408,6 +409,7 @@ public final class Game {
         r.lookAt(cam.eyeX, cam.eyeY, cam.eyeZ, cam.tx, cam.ty, cam.tz);
         r.begin();
         r.drawSky();
+        r.drawGround();
         Terrain terrain = city.terrain;
 
         batchesDrawn = batchesCulled = batchesOccluded = spritesDrawn = carsDrawn = pedsDrawn = 0;
@@ -458,10 +460,7 @@ public final class Game {
         Player p = player;
         float gy = city.groundHeight(p.x, p.z, Player.RADIUS, p.y + 0.01f, 0.01f);
         float air = Math.min(1f, (p.y - gy) / 3f);
-        boolean onTerrain = p.x < city.cityX0 || p.x > city.cityX1 || p.z < city.cityZ0 || p.z > city.cityZ1;
-        // outside the streets the ground is depth-sorted terrain, so the shadow sorts with it
-        if (onTerrain) r.groundQuad(lib.shadow, p.x, gy + 0.04f, p.z, 0.38f * (1f - air * 0.4f), SoftRenderer.MODE_SHADOW, SoftRenderer.L_OBJECT, -1.5f);
-        else r.groundQuad(lib.shadow, p.x, gy + 0.02f, p.z, 0.38f * (1f - air * 0.4f), SoftRenderer.MODE_SHADOW, SoftRenderer.L_SHADOW);
+        r.groundQuad(lib.shadow, p.x, gy + 0.02f, p.z, 0.38f * (1f - air * 0.4f), SoftRenderer.MODE_SHADOW, SoftRenderer.L_SHADOW);
         SpriteSheet s = sheet;
         // while hopping in, draw her just in front of the car so she reads as climbing in
         sprite(r, playerTex, s, s.directionFor(p.facing, cam.yaw), Animations.firstFrame(p.anim) + p.animFrame, p.x, p.y, p.z,

@@ -283,9 +283,34 @@ public final class Countryside {
         }
     }
 
-    /** Flat-ish ground cover following the terrain. */
-    private void yard(GeoBuilder gb, float x0, float z0, float x1, float z1, int tex) {
-        gb.floorAreaT(x0, z0, x1, z1, 0.05f, tex, 2f, 2f, L_OBJECT, 6f, Geo.FLAG_SORT_FAR, -0.6f);
+    /** Yards are painted into the ground map (see {@link #yards}), not built. */
+    private void yard(GeoBuilder gb, float x0, float z0, float x1, float z1, int tex) { }
+
+    interface YardSink { void yard(float x0, float z0, float x1, float z1, int tex); }
+
+    /** Every gravel yard and car park overlapping the area, for the ground painter. */
+    void yards(float ax0, float az0, float ax1, float az1, YardSink sink) {
+        int c0 = ChunkManager.chunkOf(ax0) - 1, c1 = ChunkManager.chunkOf(ax1) + 1;
+        int d0 = ChunkManager.chunkOf(az0) - 1, d1 = ChunkManager.chunkOf(az1) + 1;
+        for (int cz = d0; cz <= d1; cz++)
+            for (int cx = c0; cx <= c1; cx++) {
+                List<Site> list = sites.get(ChunkManager.key(cx, cz));
+                if (list == null) continue;
+                for (Site s : list) {
+                    float[] r;
+                    int t;
+                    if (s.kind == FARM) {
+                        float w = s.face < 2 ? s.x1 - s.x0 : s.z1 - s.z0;
+                        r = local(s, w * 0.25f, 4f, w * 0.75f, 14f);
+                        t = lib.gravel;
+                    } else if (s.kind == KONBINI) {
+                        r = new float[]{s.x0 - 3f, s.z0 - 3f, s.x1 + 3f, s.z1 + 3f};
+                        t = lib.parking;
+                    } else continue;
+                    if (r[2] < ax0 || r[0] > ax1 || r[3] < az0 || r[1] > az1) continue;
+                    sink.yard(r[0], r[1], r[2], r[3], t);
+                }
+            }
     }
 
     /** Gravel track from the yard to the road edge. */

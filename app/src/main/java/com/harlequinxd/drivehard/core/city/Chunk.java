@@ -19,6 +19,8 @@ public final class Chunk {
     /** Batches that are tall objects (buildings): candidates for terrain occlusion culling. */
     public final List<Geo> objectBatches = new ArrayList<>();
     public final List<Box> boxes = new ArrayList<>();
+    /** This chunk's tile of the painted Mode 7 ground map. */
+    public com.harlequinxd.drivehard.core.render.Ground.Tile ground;
     public float[] sprites = new float[SPRITE_STRIDE * 16];
     public int spriteCount;
     public float minX = Float.MAX_VALUE, minZ = Float.MAX_VALUE, maxX = -Float.MAX_VALUE, maxZ = -Float.MAX_VALUE;

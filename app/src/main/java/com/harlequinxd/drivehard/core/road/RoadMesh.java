@@ -54,7 +54,7 @@ public final class RoadMesh {
     public void generate(Chunk ch, GeoBuilder gb, int cx, int cz, float x0, float z0, float x1, float z1) {
         gb.begin(false);
         net.forEachPieceIn(x0, z0, x1, z1, (e, i) -> piece(ch, gb, e, i));
-        for (RoadNode n : net.nodesInChunk(cx, cz)) junction(gb, n);
+        // junction surfaces, lanes and verges are painted into the ground map (GroundPainter)
         gb.end();
     }
 
@@ -91,7 +91,8 @@ public final class RoadMesh {
         float nx = nA[0] + (nB[0] - nA[0]) * t, nz = nA[1] + (nB[1] - nA[1]) * t;
         float x = bx + nx * off, z = bz + nz * off;
         p[k * 3] = x;
-        p[k * 3 + 1] = city ? terrain.height(x, z) + lift * 0.25f : e.y[pi] + (e.y[pi + 1] - e.y[pi]) * t + lift;
+        // bridges follow their own profile; everything else stands on the painted ground
+        p[k * 3 + 1] = !e.bridge[pi] ? terrain.height(x, z) + lift : e.y[pi] + (e.y[pi + 1] - e.y[pi]) * t + lift;
         p[k * 3 + 2] = z;
     }
 
@@ -196,7 +197,9 @@ public final class RoadMesh {
         boolean bridge = e.bridge[i];
         // ramp still merged with the freeway (the taper / gore): plain asphalt, no rails
         boolean gore = cls == RoadClass.RAMP && rampOverlap();
-        if (b - a > 0.05f) {
+        if (city) return;        // city streets are painted flat into the ground map
+        if (b - a > 0.05f && bridge) {
+            // only bridge decks are real road surfaces; everywhere else the road is painted on the ground
             float vBase = (float) Math.floor(s0 / 64f) * 64f;
             float laneBase = (float) Math.floor(s0 / 320f) * 320f;
             float step = city ? 8f : 3.4f;
@@ -224,6 +227,8 @@ public final class RoadMesh {
                     }
                 }
             }
+        }
+        if (b - a > 0.05f) {
             if (!city) {
                 if (cls == RoadClass.FREEWAY) {
                     wallStrip(gb, a, b, 0f, 0f, 0.85f, lib.concrete, 0.95f, 0);
@@ -239,11 +244,6 @@ public final class RoadMesh {
             }
         }
         // cut-and-fill verges run the whole piece (through junction areas too, under the junction surface)
-        if (!city && !bridge && !gore) {
-            // verges only beside the road itself, never inside a junction (the junction has its own apron)
-            float va = Math.max(s0, trimA), vb = Math.min(s1, e.len - trimB);
-            if (vb - va > 0.05f) corridor(gb, va, vb, hw, net.crowded(e, i));
-        }
     }
 
     /** Stop line / zebra strip at a junction mouth (atA: the mouth at node a). */

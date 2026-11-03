@@ -23,7 +23,7 @@ public final class SoftRenderer {
     public static final int MODE_OPAQUE = 0, MODE_ALPHA = 1, MODE_SHADOW = 2, MODE_BLEND = 3;
     private static final int BUCKETS = 4096;
     private static final float BUCKET_SCALE = 24f;     // buckets per metre (~170 m range)
-    private static final int VA = 7;                    // per screen vertex: x y u v light fog coverage
+    private static final int VA = 8;                    // per screen vertex: x y u v light fog coverage 1/z
     private static final int MAX_PRIMS = 60000;
 
     public final int W, H;
@@ -33,7 +33,14 @@ public final class SoftRenderer {
     // camera
     public float ex, ey, ez;
     private float rx, ry, rz, ux, uy, uz, fx, fy, fz;
-    private float focal, cx, cy, tanX, tanY;
+    private float focal, cx, cy, tanX;
+    /**
+     * The camera never really pitches: like Mode 7 and voxel-space engines it looks horizontally and
+     * shifts the horizon up or down instead (a y-shear). Vertical lines stay vertical, every screen
+     * column is a vertical slice of the world, and the ground map projects exactly under the
+     * polygons standing on it. {@code hy} is the horizon row.
+     */
+    private float hy, tanTop, tanBot;
     /** PS1-style draw distances: polygons beyond {@code far} are dropped, small detail earlier. */
     public float near = 0.2f, far = 120f, detailDist = 55f;
     public float fogStart = 45f, fogEnd = 116f;
@@ -71,6 +78,7 @@ public final class SoftRenderer {
         W = w;
         H = h;
         fb = new int[w * h];
+        gthr = new float[w * h];
         setFov(62f);
     }
 
@@ -79,7 +87,9 @@ public final class SoftRenderer {
         cy = H * 0.5f;
         focal = (H * 0.5f) / (float) Math.tan(Math.toRadians(fovYDeg) * 0.5);
         tanX = cx / focal;
-        tanY = cy / focal;
+        hy = cy;
+        tanTop = hy / focal;
+        tanBot = (H - hy) / focal;
     }
 
     public void setFogColor(int rgb) { fogR = (rgb >> 16) & 255; fogG = (rgb >> 8) & 255; fogB = rgb & 255; }
@@ -87,14 +97,24 @@ public final class SoftRenderer {
 
     public void lookAt(float eyeX, float eyeY, float eyeZ, float tx, float ty, float tz) {
         ex = eyeX; ey = eyeY; ez = eyeZ;
-        fx = tx - eyeX; fy = ty - eyeY; fz = tz - eyeZ;
-        float l = (float) Math.sqrt(fx * fx + fy * fy + fz * fz);
-        fx /= l; fy /= l; fz /= l;
+        float dx = tx - eyeX, dy = ty - eyeY, dz = tz - eyeZ;
+        float hl = (float) Math.sqrt(dx * dx + dz * dz);
+        if (hl > 1e-4f) { fx = dx / hl; fz = dz / hl; }
+        else if (fx == 0f && fz == 0f) fz = 1f;          // straight down: keep the last heading
+        fy = 0f;
         rx = -fz; ry = 0; rz = fx;                       // forward x worldUp
-        l = (float) Math.sqrt(rx * rx + rz * rz);
-        rx /= l; rz /= l;
-        ux = ry * fz - rz * fy; uy = rz * fx - rx * fz; uz = rx * fy - ry * fx;  // right x forward
+        ux = 0f; uy = 1f; uz = 0f;
+        // pitch becomes a horizon shift (clamped: shearing too far looks wrong)
+        float pitch = (float) Math.atan2(dy, Math.max(hl, 1e-4f));
+        pitch = Math.max(-0.75f, Math.min(0.6f, pitch));
+        hy = cy + focal * (float) Math.tan(pitch);
+        tanTop = hy / focal;
+        tanBot = (H - hy) / focal;
     }
+
+    /** Screen row of the horizon. */
+    public float horizon() { return hy; }
+    public float focal() { return focal; }
 
     public float rightX() { return rx; }
     public float rightZ() { return rz; }
@@ -116,9 +136,8 @@ public final class SoftRenderer {
 
     /** Fills the background with a dithered sky gradient matching the fog colour at the horizon. */
     public void drawSky() {
-        float pitch = (float) Math.asin(Math.max(-1f, Math.min(1f, fy)));
         for (int y = 0; y < H; y++) {
-            float elev = (float) Math.atan((cy - (y + 0.5f)) / focal) + pitch;
+            float elev = (float) Math.atan((hy - (y + 0.5f)) / focal);
             int r, g, b;
             if (elev >= 0f) {
                 float t = (float) Math.sqrt(Math.min(1f, elev / 0.9f));
@@ -148,6 +167,145 @@ public final class SoftRenderer {
         return 0xFF000000 | (((r << 3) | (r >> 2)) << 16) | (((g << 3) | (g >> 2)) << 8) | ((b << 3) | (b >> 2));
     }
 
+    // ------------------------------------------------------------------ Mode 7 ground
+
+    /** The painted ground map; null draws no ground (sky and polygons only). */
+    public Ground.Source ground;
+    /**
+     * Per pixel, the inverse depth just behind the ground drawn there (0 where there is sky).
+     * Polygons whose 1/z is smaller are behind a hill and are skipped: the only depth test there is.
+     */
+    private final float[] gthr;
+    private boolean groundDrawn;
+    private final float[] mipD = new float[Ground.MIPS];
+    private final java.util.List<java.util.concurrent.Callable<Void>> columnBands = new java.util.ArrayList<>();
+    private final java.util.List<TileCache> tileCaches = new java.util.ArrayList<>();
+    private final TileCache soloCache = new TileCache();
+
+    /** Per-thread tile cache. */
+    private static final class TileCache {
+        Ground.Tile t;
+        int cx = Integer.MIN_VALUE, cz = Integer.MIN_VALUE;
+        float x0, z0;
+
+        boolean at(Ground.Source src, float x, float z) {
+            float fxx = x * (1f / Ground.TILE), fzz = z * (1f / Ground.TILE);
+            int tx = (int) fxx, tz = (int) fzz;
+            if (fxx < tx) tx--;
+            if (fzz < tz) tz--;
+            if (tx != cx || tz != cz) {
+                cx = tx; cz = tz;
+                t = src.tile(tx, tz);
+                x0 = tx * Ground.TILE; z0 = tz * Ground.TILE;
+            }
+            return t != null;
+        }
+    }
+
+    /**
+     * Projects the ground map: every screen column is a vertical slice of the world, marched from the
+     * camera outwards. Each step's height gives the row where the ground reaches; the rows between it
+     * and what is already drawn are filled texel by texel, interpolating along the slice (exact for
+     * the flat parts, so the map looks like a proper Mode 7 plane, and hills rise and hide).
+     */
+    public void drawGround() {
+        groundDrawn = false;
+        if (ground == null) return;
+        for (int k = 0; k < Ground.MIPS; k++) mipD[k] = Ground.TEXEL * focal * (1 << k) * 1.4f;
+        // tiles stream in and out between frames
+        for (TileCache tc : tileCaches) { tc.cx = Integer.MIN_VALUE; tc.t = null; }
+        soloCache.cx = Integer.MIN_VALUE;
+        soloCache.t = null;
+        if (pool == null) groundColumns(0, W, soloCache);
+        else {
+            try {
+                pool.invokeAll(columnBands);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        groundDrawn = true;
+    }
+
+    private float groundHeight(TileCache tc, float x, float z) {
+        if (!tc.at(ground, x, z)) return ground.height(x, z);
+        float gx = (x - tc.x0) / Ground.HCELL, gz = (z - tc.z0) / Ground.HCELL;
+        int ix = (int) gx, iz = (int) gz;
+        if (ix > Ground.HCELLS - 1) ix = Ground.HCELLS - 1;
+        if (iz > Ground.HCELLS - 1) iz = Ground.HCELLS - 1;
+        float tx = gx - ix, tz = gz - iz;
+        float[] h = tc.t.h;
+        int o = iz * (Ground.HCELLS + 1) + ix;
+        float a = h[o], b = h[o + 1], c = h[o + Ground.HCELLS + 1], d = h[o + Ground.HCELLS + 2];
+        float top = a + (b - a) * tx, bot = c + (d - c) * tx;
+        return top + (bot - top) * tz;
+    }
+
+    private int groundColor(TileCache tc, float x, float z, float d) {
+        if (!tc.at(ground, x, z)) return ground.color(x, z);
+        int k = 0;
+        while (k < Ground.MIPS - 1 && d > mipD[k + 1]) k++;
+        int n = Ground.RES >> k;
+        float sc = n / Ground.TILE;
+        int px = (int) ((x - tc.x0) * sc), pz = (int) ((z - tc.z0) * sc);
+        if (px >= n) px = n - 1; else if (px < 0) px = 0;
+        if (pz >= n) pz = n - 1; else if (pz < 0) pz = 0;
+        return tc.t.mips[k][pz * n + px];
+    }
+
+    private void groundColumns(int colA, int colB, TileCache tc) {
+        float fogK = 1f / (fogEnd - fogStart);
+        int fr = fogR, fg = fogG, fbb = fogB;
+        float[] thr = gthr;
+        int[] out = fb;
+        for (int x = colA; x < colB; x++) {
+            float xs = (x + 0.5f - cx) / focal;
+            float dx = fx + rx * xs, dz = fz + rz * xs;
+            int ybuf = H;
+            float d = 0.3f, dPrev = 0f, sPrev = 0f;
+            boolean first = true;
+            while (d <= far) {
+                float wx = ex + dx * d, wz = ez + dz * d;
+                float h = groundHeight(tc, wx, wz);
+                float s = hy - (h - ey) * focal / d;
+                int ys = (int) Math.ceil(s - 0.5f);
+                if (ys < 0) ys = 0;
+                if (ys < ybuf) {
+                    float invC = 1f / d, invP = first ? invC : 1f / dPrev, span = s - sPrev;
+                    for (int y = ybuf - 1; y >= ys; y--) {
+                        float t = first || span > -1e-3f ? 1f : ((y + 0.5f) - sPrev) / span;
+                        if (t < 0f) t = 0f; else if (t > 1f) t = 1f;
+                        float dr = 1f / (invP + (invC - invP) * t);
+                        int c = groundColor(tc, ex + dx * dr, ez + dz * dr, dr);
+                        int r = (c >> 16) & 255, g = (c >> 8) & 255, b = c & 255;
+                        float f = (dr - fogStart) * fogK;
+                        if (f > 0f) {
+                            int fv = f >= 1f ? 256 : (int) (f * 256f);
+                            r += ((fr - r) * fv) >> 8;
+                            g += ((fg - g) * fv) >> 8;
+                            b += ((fbb - b) * fv) >> 8;
+                        }
+                        int db = BAYER[((y & 3) << 2) | (x & 3)] >> 1;
+                        r = (r + db) >> 3; if (r > 31) r = 31;
+                        g = (g + db) >> 3; if (g > 31) g = 31;
+                        b = (b + db) >> 3; if (b > 31) b = 31;
+                        int k = y * W + x;
+                        out[k] = 0xFF000000 | (((r << 3) | (r >> 2)) << 16) | (((g << 3) | (g >> 2)) << 8) | ((b << 3) | (b >> 2));
+                        // polygons farther than this (with slack for things standing on it) are hidden
+                        thr[k] = 1f / (dr * 1.04f + 0.4f);
+                    }
+                    ybuf = ys;
+                    if (ybuf == 0) break;
+                }
+                first = false;
+                dPrev = d;
+                sPrev = s;
+                d += Math.max(0.3f, d * 0.022f);
+            }
+            for (int y = 0; y < ybuf; y++) thr[y * W + x] = 0f;
+        }
+    }
+
     // ------------------------------------------------------------------ parallel raster
 
     private final int[] order = new int[MAX_PRIMS];
@@ -160,6 +318,9 @@ public final class SoftRenderer {
         if (pool != null) pool.shutdownNow();
         pool = null;
         bands.clear();
+        columnBands.clear();
+        tileCaches.clear();
+        tileCaches.add(soloCache);
         if (threads <= 1) return;
         pool = java.util.concurrent.Executors.newFixedThreadPool(threads, r -> {
             Thread t = new Thread(r, "raster");
@@ -171,6 +332,10 @@ public final class SoftRenderer {
         for (int i = 0; i < nb; i++) {
             final int y0 = H * i / nb, y1 = H * (i + 1) / nb;
             bands.add(() -> { drawBand(y0, y1); return null; });
+            final int x0 = W * i / nb, x1 = W * (i + 1) / nb;
+            final TileCache tc = new TileCache();
+            tileCaches.add(tc);
+            columnBands.add(() -> { groundColumns(x0, x1, tc); return null; });
         }
     }
 
@@ -215,8 +380,8 @@ public final class SoftRenderer {
             if (vz <= far) allF = 0;
             if (vx >= -vz * tanX * 1.1f) allL = 0;
             if (vx <= vz * tanX * 1.1f) allR = 0;
-            if (vy <= vz * tanY * 1.1f) allT = 0;
-            if (vy >= -vz * tanY * 1.1f) allB = 0;
+            if (vy <= vz * tanTop * 1.1f + 0.5f) allT = 0;
+            if (vy >= -vz * tanBot * 1.1f - 0.5f) allB = 0;
         }
         return (allL | allR | allT | allB | allN | allF) == 0;
     }
@@ -365,8 +530,8 @@ public final class SoftRenderer {
             float vx = vq[k * VA], vy = vq[k * VA + 1], vz = vq[k * VA + 2];
             if (vx >= -vz * tanX) allL = 0;
             if (vx <= vz * tanX) allR = 0;
-            if (vy <= vz * tanY) allT = 0;
-            if (vy >= -vz * tanY) allB = 0;
+            if (vy <= vz * tanTop) allT = 0;
+            if (vy >= -vz * tanBot) allB = 0;
         }
         if ((allL | allR | allT | allB) != 0) return;
         statPolys++;
@@ -468,12 +633,13 @@ public final class SoftRenderer {
             float z = in[o + 2];
             float iz = focal / z;
             float sx = (float) Math.floor(cx + in[o] * iz + 0.5f);
-            float sy = (float) Math.floor(cy - in[o + 1] * iz + 0.5f);
+            float sy = (float) Math.floor(hy - in[o + 1] * iz + 0.5f);
             scr[o] = sx; scr[o + 1] = sy;
             scr[o + 2] = in[o + 3]; scr[o + 3] = in[o + 4]; scr[o + 4] = in[o + 5];
             float f = (z - fogStart) * fogK;
             scr[o + 5] = f < 0f ? 0f : (f > 1f ? 1f : f);
             scr[o + 6] = in[o + 6];
+            scr[o + 7] = 1f / z;
             if (sx >= 0) offL = 0;
             if (sx <= W) offR = 0;
             if (sy >= 0) offT = 0;
@@ -529,6 +695,9 @@ public final class SoftRenderer {
         float a0 = A[i0 + 6], a1 = A[i1 + 6], a2 = A[i2 + 6];
         float dadx = ((a1 - a0) * dy2 - (a2 - a0) * dy1) * id, dady = ((a2 - a0) * dx1 - (a1 - a0) * dx2) * id;
         int dA = (int) (dadx * 65536f);
+        float z0i = A[i0 + 7], z1i = A[i1 + 7], z2i = A[i2 + 7];
+        float dzdx = ((z1i - z0i) * dy2 - (z2i - z0i) * dy1) * id, dzdy = ((z2i - z0i) * dx1 - (z1i - z0i) * dx2) * id;
+        float[] gt = groundDrawn ? gthr : null;
 
         float dudx = ((u1 - u0) * dy2 - (u2 - u0) * dy1) * id, dudy = ((u2 - u0) * dx1 - (u1 - u0) * dx2) * id;
         float dvdx = ((v1 - v0) * dy2 - (v2 - v0) * dy1) * id, dvdy = ((v2 - v0) * dx1 - (v1 - v0) * dx2) * id;
@@ -565,10 +734,12 @@ public final class SoftRenderer {
             int L = (int) ((l0 + dldx * ox + dldy * oy) * 65536f);
             int F = (int) ((f0 + dfdx * ox + dfdy * oy) * 65536f);
             int AL = (int) ((a0 + dadx * ox + dady * oy) * 65536f);
+            float IZ = z0i + dzdx * ox + dzdy * oy;
             int row = y * width;
             int db = (y & 3) << 2;
             if (mode == MODE_SHADOW) {
-                for (int x = xs; x < xe; x++, U += dU, V += dV) {
+                for (int x = xs; x < xe; x++, U += dU, V += dV, IZ += dzdx) {
+                    if (gt != null && IZ < gt[row + x]) continue;    // behind a hill
                     int ty = V >> 16;
                     ty = ty < 0 ? 0 : (ty > hmax ? hmax : ty);
                     int c = tp[(ty << ws) | ((U >> 16) & wm)];
@@ -581,8 +752,9 @@ public final class SoftRenderer {
                 continue;
             }
             boolean alpha = mode == MODE_ALPHA, blend = mode == MODE_BLEND;
-            for (int x = xs; x < xe; x++, U += dU, V += dV, L += dL, F += dF, AL += dA) {
+            for (int x = xs; x < xe; x++, U += dU, V += dV, L += dL, F += dF, AL += dA, IZ += dzdx) {
                 int c;
+                if (gt != null && IZ < gt[row + x]) continue;        // behind a hill
                 // blended overlays: ordered-dither the coverage (PS1-style stipple blend)
                 if (blend && (AL >> 12) <= BAYER[db | (x & 3)]) continue;
                 if (alpha) {   // sprites/foliage: clamp v (atlases may be non power-of-two tall)

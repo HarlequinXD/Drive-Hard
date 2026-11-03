@@ -5,13 +5,19 @@ generated modern Japanese island city with a PS1 low-poly look. Written in plain
 software renderer, no engine.
 
 ## Current state
-- **Software renderer, PS1 style (no OpenGL, no z-buffer).** CPU rasteriser into a ~240p
-  framebuffer, scaled up with nearest-neighbour. Depth uses a PlayStation-style **ordering
-  table** (4096 depth buckets) per draw layer: water → ground/roads → road markings & paths →
-  raised sidewalks/curbs → shadows → objects, plus per-polygon bias. Vertex snapping, affine
-  texturing, 15-bit dithered colour, fog, near-plane clipping, PS1-style draw distances
-  (polygons 120 m, small detail 55 m, sprites 105 m, umbrellas 60 m), near-camera subdivision,
-  crack sealing, multi-threaded band rasterisation.
+- **Mode 7 ground + PS1-style polygons (no OpenGL, no z-buffer).** CPU renderer into a ~240p
+  framebuffer, scaled up with nearest-neighbour. The ground is not geometry: the island is a
+  flat, top-down **painted map** (streamed in 64 m tiles at 25 cm per texel, with mipmaps) plus
+  a height map, projected **Mode 7 style**, one screen column at a time (a height-mapped Mode 7,
+  like voxel-space engines), so hills rise out of the map and hide what lies behind them. The
+  camera never really pitches; it shifts the horizon (a y-shear), so vertical lines stay
+  vertical and the ground projects exactly under the 3D models standing on it. Buildings,
+  bridges, barriers, trees, cars and people are polygons and sprites, sorted with a
+  PlayStation-style **ordering table** (4096 depth buckets per layer, per-polygon bias). The
+  ground leaves a per-pixel "behind the hill" threshold, the only depth test. Vertex snapping,
+  affine texturing, 15-bit dithered colour, fog, near-plane clipping, PS1-style draw distances,
+  near-camera subdivision, crack sealing, multi-threaded column (ground) and band (polygons)
+  rendering.
 - **Culling:** per-chunk and per-batch (each building is its own batch) frustum culling,
   per-polygon backface/distance culling, per-sprite frustum culling, and terrain occlusion
   culling (buildings and sprites hidden behind hills are skipped via heightfield ray tests).
@@ -25,19 +31,19 @@ software renderer, no engine.
   out of the city (west across the island, north and south up the coast) with diamond
   interchanges and one-way slip roads, coastal highways, and ~3,800 km of highways and winding
   country roads linking ~180 villages. Country roads that cross get a junction; roads that cross
-  a freeway go over it on a bridge with piers. Terrain is cut and filled to each road's profile
-  (embankments and cuttings). All roads, city streets included, are drawn
-  from the graph: lane-wide strips following the spline (markings painted into lane textures),
-  trimmed at each junction, where one junction surface joins every road that meets there with
-  curved kerb returns; road mouths carry stop lines (and zebra crossings in the city). Roads
-  leaving a junction at grazing angles are bent apart so junctions get a proper shape. Farm
-  lanes branch off at T-junctions. Outside the city each road gets cut-and-fill verges down
-  to the terrain, and the terrain grid is cut around all paving so grass never overlaps
-  asphalt and nothing grows on a road. Freeways have median barriers and guardrails; slip
-  roads taper off the kerb lane; country roads have utility poles with wires.
-- **Ground blending:** neighbouring ground types (grass, hill grass, paddies, cabbage, soil,
-  tea, sand) blend across their shared edges with dithered overlays, and the ground is
-  vertex-shaded with soft lighter/darker patches.
+  a freeway go over it on a bridge with piers. The height map is cut and filled to each road's
+  profile (embankments and cuttings). Roads are splines that **paint** into the ground map:
+  lanes and markings traced along the spline, one junction surface where roads meet (curved
+  kerb returns; square corners in the city), stop lines and zebra crossings at road mouths, and
+  a dusty shoulder fading into the grass. Roads leaving a junction at grazing angles are bent
+  apart so junctions get a proper shape. Farm lanes branch off at T-junctions. Nothing grows
+  on a road. Only bridge decks are real road geometry; freeways have median barriers and
+  guardrails, slip roads taper off the kerb lane, and country roads have utility poles with
+  wires.
+- **Painted ground, in layers:** grass, hill grass, rock, sand, sea and shallows, crop fields
+  (with paddy levees), farm yards and car parks, the city's sidewalks, lots, parks, plazas and
+  medians, then the roads. Ground types melt into each other along irregular noisy borders,
+  and the map is lit from the height map's slopes with soft lighter and darker patches.
 - **Countryside.** Rice paddies (flooded, green or golden by district) with grass levees,
   cabbage fields, ploughed soil and fallow parcels on the lowland, tea rows on gentle slopes,
   cedar forest on the mountains. ~2,700 farmsteads along the roads (old farmhouse, timber barn,
@@ -98,12 +104,12 @@ software renderer, no engine.
 app/src/main/java/com/harlequinxd/drivehard/
   core/        pure Java (no Android) — runs on desktop too
     Game.java  world + player + camera + renderer
-    render/    SoftRenderer (ordering table rasteriser), Geo, Texture
+    render/    SoftRenderer (Mode 7 ground + ordering table rasteriser), Ground (map tiles), Geo, Texture
     city/      City (layout + chunk generator), Terrain, ChunkManager (streaming), Chunk,
                BuildingGen, Railway (viaduct, stations, trains), Countryside (fields, farms,
-               villages), GeoBuilder, TrafficLights
+               villages), GroundPainter (paints the map tiles), GeoBuilder, TrafficLights
     road/      RoadNetwork (spline road graph, terrain shaping, spatial index), RoadEdge,
-               RoadNode, RoadClass, RoadMesh (lane strips, barriers, bridges, poles)
+               RoadNode, RoadClass, RoadMesh (bridge decks, barriers, poles)
     tex/       TextureLibrary, JpTextures (shops, facades, signs), Kanji, PixelFont, Noise, Img
     model/     CharacterSpec, CharacterModel, Animations, Pose, PropModels, Flora, Cars, Loft
     sim/       Traffic (car AI), Pedestrians

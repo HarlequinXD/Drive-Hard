@@ -61,9 +61,41 @@ public final class Terrain {
 
     /** Final ground height: natural terrain shaped by the roads. */
     public float height(float x, float z) {
+        RoadNetwork r = roads;
+        if (r == null) return exact(x, z);
+        // The ground is a height map with a sample every GRID metres; the height anywhere is the
+        // bilinear blend of its four corners, exactly what the Mode 7 ground renders, so
+        // buildings, cars, people and props sit on the drawn surface.
+        float gx = x / GRID, gz = z / GRID;
+        int ix = (int) Math.floor(gx), iz = (int) Math.floor(gz);
+        float tx = gx - ix, tz = gz - iz;
+        float h00 = grid(ix, iz), h10 = grid(ix + 1, iz), h01 = grid(ix, iz + 1), h11 = grid(ix + 1, iz + 1);
+        float top = h00 + (h10 - h00) * tx, bot = h01 + (h11 - h01) * tx;
+        return top + (bot - top) * tz;
+    }
+
+    /** Spacing of the ground mesh vertices outside the city (metres). */
+    public static final float GRID = 8f;
+
+    /** Ground height shaped by roads at an exact point (no mesh interpolation). */
+    public float exact(float x, float z) {
         float n = natural(x, z);
         RoadNetwork r = roads;
         return r == null ? n : r.shapeTerrain(x, z, n);
+    }
+
+    // direct-mapped cache of mesh vertex heights: key and float bits packed in one long
+    private final long[] cache = new long[1 << 16];
+
+    /** Height of mesh vertex (ix, iz) (cached). */
+    public float grid(int ix, int iz) {
+        int key = ((ix & 0x7FFF) << 15) | (iz & 0x7FFF);
+        int slot = (key * 0x9E3779B1) >>> 16;
+        long v = cache[slot];
+        if (v != 0L && (int) (v >>> 32) == key + 1) return Float.intBitsToFloat((int) v);
+        float h = exact(ix * GRID, iz * GRID);
+        cache[slot] = ((long) (key + 1) << 32) | (Float.floatToRawIntBits(h) & 0xFFFFFFFFL);
+        return h;
     }
 
     /** Ground height without road cuttings and embankments. */
