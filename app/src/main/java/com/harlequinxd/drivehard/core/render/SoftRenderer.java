@@ -132,9 +132,8 @@ public final class SoftRenderer {
                 float t = (float) Math.sqrt(Math.min(1f, elev / 0.9f));
                 r = (int) (fogR + (zenR - fogR) * t); g = (int) (fogG + (zenG - fogG) * t); b = (int) (fogB + (zenB - fogB) * t);
             } else {
-                // below the horizon: a ground tone, so hairline cracks between polygons don't flash sky
-                float t = Math.max(0f, Math.min(1f, (-elev - 0.1f) * 4f));
-                r = (int) (fogR + (groundR - fogR) * t); g = (int) (fogG + (groundG - fogG) * t); b = (int) (fogB + (groundB - fogB) * t);
+                // below the horizon (past the draw distance) the fogged ground is fog coloured
+                r = fogR; g = fogG; b = fogB;
             }
             int row = y * W;
             int dy = (y & 3) << 2;

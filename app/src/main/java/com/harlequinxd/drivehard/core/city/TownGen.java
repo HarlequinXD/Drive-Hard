@@ -201,6 +201,58 @@ final class TownGen {
         gb.end();
     }
 
+    // ------------------------------------------------------------------ harbour
+
+    /**
+     * Fishing harbour: two concrete breakwaters reaching out to sea from either side of the quay,
+     * fishing boats moored between them, and net sheds on the quay. (qx, qz) is the end of the
+     * harbour road, (sx, sz) the seaward axis, (cx, cz) the water's edge.
+     */
+    void harbour(float qx, float qz, float sx, float sz, float cx, float cz) {
+        float px = -sz, pz = sx;                      // along the shore
+        gb.begin(true);
+        for (int side = -1; side <= 1; side += 2) {
+            float off = side * 28f, len = side < 0 ? 95f : 70f;
+            float ax = cx + px * off - sx * 8f, az = cz + pz * off - sz * 8f;
+            float bx = ax + sx * len + px * 3.5f, bz = az + sz * len + pz * 3.5f;
+            box(ax - px * 3.5f, az - pz * 3.5f, bx, bz, -4f, 1.6f, lib.concrete, lib.concrete);
+            // the harbour mouth: breakwater heads turn in across the entrance
+            float hx = bx - px * side * 3.5f, hz = bz - pz * side * 3.5f;
+            box(hx, hz, hx - px * side * 14f - sx * 5f, hz - pz * side * 14f - sz * 5f, -4f, 1.6f, lib.concrete, lib.concrete);
+        }
+        // fishing boats: white hulls with a wheelhouse, moored inside the harbour
+        for (int k = 0; k < 3; k++) {
+            float along = 22f + k * 14f, across = -14f + k * 12f;
+            float bx = cx + sx * along + px * across, bz = cz + sz * along + pz * across;
+            float hl = 4.5f, hw = 1.4f;
+            float x0 = bx - Math.abs(sx) * hl - Math.abs(px) * hw, x1 = bx + Math.abs(sx) * hl + Math.abs(px) * hw;
+            float z0 = bz - Math.abs(sz) * hl - Math.abs(pz) * hw, z1 = bz + Math.abs(sz) * hl + Math.abs(pz) * hw;
+            gb.box(x0, -0.4f, z0, x1, 0.9f, z1, lib.paintWhite, lib.metal, 1f, 1f, L_OBJECT, 0f, 0);
+            float cx0 = bx - Math.abs(sx) * 1.2f - Math.abs(px) * 0.9f, cx1 = bx + Math.abs(sx) * 0.6f + Math.abs(px) * 0.9f;
+            float cz0 = bz - Math.abs(sz) * 1.2f - Math.abs(pz) * 0.9f, cz1 = bz + Math.abs(sz) * 0.6f + Math.abs(pz) * 0.9f;
+            gb.box(cx0, 0.9f, cz0, cx1, 2.4f, cz1, lib.paintWhite, lib.paintRed, 1f, 1f, L_OBJECT, 0f, 0);
+            ch.boxes.add(new Box(x0, -1f, z0, x1, 2.4f, z1));
+        }
+        gb.end();
+        // net sheds on the quay
+        boolean[] street = new boolean[4];
+        int face = sx > 0 ? BuildingGen.E : (sx < 0 ? BuildingGen.W : (sz > 0 ? BuildingGen.S : BuildingGen.N));
+        street[face] = true;
+        for (int side = -1; side <= 1; side += 2) {
+            float mx = qx - sx * 14f + px * side * 18f, mz = qz - sz * 14f + pz * side * 18f;
+            if (city.terrain.coastOver(mx, mz) > -8f) continue;
+            float hx = Math.abs(px) * 6f + Math.abs(sx) * 5f, hz = Math.abs(pz) * 6f + Math.abs(sz) * 5f;
+            new BuildingGen(city, lib, gb, r, ch).build(BuildingGen.Type.SHED, mx - hx, mz - hz, mx + hx, mz + hz, street, new boolean[4], city.shopsSuburb);
+        }
+    }
+
+    /** Axis-aligned box spanning two corners (any order). */
+    private void box(float ax, float az, float bx, float bz, float y0, float y1, int side, int top) {
+        float x0 = Math.min(ax, bx), x1 = Math.max(ax, bx), z0 = Math.min(az, bz), z1 = Math.max(az, bz);
+        gb.box(x0, y0, z0, x1, y1, z1, side, top, 0.5f, 0.5f, L_OBJECT, 0f, 0);
+        ch.boxes.add(new Box(x0, y0, z0, x1, y1, z1));
+    }
+
     // ------------------------------------------------------------------ petrol station
 
     private void gasStation(float x0, float z0, float x1, float z1, int face) {

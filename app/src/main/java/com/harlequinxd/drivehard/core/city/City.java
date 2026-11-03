@@ -226,6 +226,7 @@ public final class City extends World {
         // a fresh mesh builder per chunk: chunks are generated on several threads
         new RoadMesh(roads, lib, terrain).generate(ch, gb, cx, cz, x0, z0, x1, z1);
         countryside.generate(ch, gb, cx, cz);
+        countryside.fences(ch, gb, x0, z0, x1, z1);
         gb.end();
         ch.finish();
         return ch;
@@ -323,11 +324,9 @@ public final class City extends World {
         float mx = (ax + bx) * 0.5f, mz = (az + bz) * 0.5f;
         int tex = slope > 0.6f ? lib.rock : (terrain.isSand(mx, mz, avg) || max < 0.6f ? lib.sand : (avg > 22f ? lib.hillGrass : lib.grass));
         if (tex != lib.rock && tex != lib.sand) {
-            if (roads.influence(mx, mz) > 0.35f) tex = lib.grass;           // road verges, cuttings and embankments
-            else {
-                s.crop = countryside.crop(ax, az, avg, slope);
-                if (s.crop != Countryside.Crop.NONE) { tex = countryside.texture(s.crop); s.uv = 8f; }
-            }
+            s.crop = countryside.crop(ax, az, avg, slope);
+            if (s.crop != Countryside.Crop.NONE) { tex = countryside.texture(s.crop); s.uv = 8f; }
+            else if (roads.influence(mx, mz) > 0.35f) tex = lib.grass;          // road verges, cuttings and embankments
         }
         s.tex = tex;
         return s;
@@ -352,12 +351,27 @@ public final class City extends World {
             return;
         }
         if (h < 0.3f) return;
-        if (countryside.inTown(jx, jz, 6f)) return;           // gardens are planted by the houses
+        if (countryside.inTown(jx, jz, 6f) || countryside.inHarbour(jx, jz)) return;   // gardens are planted by the houses
         boolean rural = terrain.cityDistance(jx, jz) > 1100f;
         if (rural && roads.influence(jx, jz) > 0.05f) return;      // keep roads and their banks clear
         if (crop != Countryside.Crop.NONE) {
-            // fields: just the odd tree on a levee corner
-            if (r < 0.006f) plant(ch, r2 < 0.5f ? Flora.CAMPHOR : Flora.ZELKOVA, ix, iz, ax + 0.6f, terrain.height(ax + 0.6f, az + 0.6f), az + 0.6f);
+            Countryside.Parcel pc = new Countryside.Parcel();
+            countryside.parcel(ax + 4f, az + 4f, pc);
+            if (pc.seam) {
+                // hedgerow trees between farm districts
+                if (r < 0.45f) plant(ch, r2 < 0.4f ? Flora.CAMPHOR : (r2 < 0.7f ? Flora.ZELKOVA : Flora.BOXWOOD), ix, iz, jx, h, jz);
+                return;
+            }
+            if (pc.crop == Countryside.Crop.ORCHARD && pc.edge > 3f) {
+                // orchard rows: a tree every 6 m along the rows, rows 5 m apart
+                float[] d = countryside.district((int) Math.floor((ax + 4f) / Countryside.DISTRICT), (int) Math.floor((az + 4f) / Countryside.DISTRICT));
+                float ra = (float) Math.floor(pc.a / 6f) * 6f + 3f, rb = (float) Math.floor(pc.b / 5f) * 5f + 2.5f;
+                float tx = d[2] + ra * d[0] - rb * d[1], tz = d[3] + ra * d[1] + rb * d[0];
+                if (tx >= ax && tx < ax + 8f && tz >= az && tz < az + 8f)
+                    plant(ch, r2 < 0.5f ? Flora.SAKURA : Flora.MAPLE, ix, iz, tx, terrain.height(tx, tz), tz);
+                return;
+            }
+            if (pc.crop == Countryside.Crop.PASTURE && r < 0.004f) plant(ch, Flora.ZELKOVA, ix, iz, jx, h, jz);   // a shade tree
             return;
         }
         if (terrain.isSand(jx, jz, h)) {

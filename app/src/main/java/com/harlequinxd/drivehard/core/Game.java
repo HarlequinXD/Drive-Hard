@@ -76,6 +76,9 @@ public final class Game {
 
     public interface Progress { void step(String what); }
 
+    /** The island everyone plays on. */
+    public static final long DEFAULT_SEED = 20261103L;
+
     public Game(long seed, Progress progress) {
         if (progress != null) progress.step("Painting textures");
         lib = new TextureLibrary(seed);
@@ -118,6 +121,8 @@ public final class Game {
         player.facing = (float) Math.PI;
         cam.yaw = 0f;
         cam.distance = 6f;
+        if (progress != null) progress.step("Drawing the map");
+        map = new com.harlequinxd.drivehard.core.map.MapData(city);
         if (progress != null) progress.step("Streaming the city");
         city.chunks.loadRadius = 150f;
         city.chunks.loadAllNow(player.x, player.z);
@@ -290,6 +295,14 @@ public final class Game {
     public boolean carReady(int style) { SpriteCache.Entry e = carEntries[style]; return e != null && e.ready(); }
 
     public boolean driving() { return mode == Mode.DRIVING || mode == Mode.ENTERING; }
+
+    /** The island map (relief, roads and names) for the minimap and the map screen. */
+    public final com.harlequinxd.drivehard.core.map.MapData map;
+
+    /** Where you are and which way you face, for the map (facing vector = (sin, cos) in x, z). */
+    public float mapX() { return vehicle != null && driving() ? vehicle.x : player.x; }
+    public float mapZ() { return vehicle != null && driving() ? vehicle.z : player.z; }
+    public float mapHeading() { return vehicle != null && driving() ? vehicle.yaw : player.facing; }
 
     // ------------------------------------------------------------------ where am I
 

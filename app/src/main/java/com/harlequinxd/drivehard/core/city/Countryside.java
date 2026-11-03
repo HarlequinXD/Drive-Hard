@@ -33,7 +33,7 @@ public final class Countryside {
     /** Field parcel size (metres), multiples of the 8 m terrain cell. */
     public static final int PARCEL_W = 40, PARCEL_D = 24;
 
-    public enum Crop { NONE, PADDY_WATER, PADDY_GREEN, PADDY_GOLD, CABBAGE, SOIL, FALLOW, TEA }
+    public enum Crop { NONE, PADDY_WATER, PADDY_GREEN, PADDY_GOLD, CABBAGE, SOIL, FALLOW, TEA, PASTURE, ORCHARD }
 
     private final City city;
     private final Terrain terrain;
@@ -42,7 +42,7 @@ public final class Countryside {
     private final int seed;
 
     static final int FARM = 0, HOUSE = 1, APAATO = 2, KONBINI = 3, LOT = 4, TOWN_HALL = 5, POST = 6, CLINIC = 7, SHOP = 8,
-            SUPERMARKET = 9, SCHOOL = 10, SHRINE = 11, GAS = 12, TOWN_KONBINI = 13;
+            SUPERMARKET = 9, SCHOOL = 10, SHRINE = 11, GAS = 12, TOWN_KONBINI = 13, HARBOUR = 14;
 
     /** A building site: footprint, kind, the side facing the road (0=N,1=S,2=W,3=E), driveway end. */
     static final class Site {
@@ -86,20 +86,197 @@ public final class Countryside {
 
     /** Crop of the 8 m cell at (cx,cz) (its min corner), given the cell's average height and slope. */
     public Crop crop(float cx, float cz, float h, float slope) {
-        if (!farmland(cx + 4f, cz + 4f, h)) return Crop.NONE;
-        if (inTown(cx + 4f, cz + 4f, 20f)) return Crop.NONE;
-        int px = (int) Math.floor(cx / PARCEL_W), pz = (int) Math.floor(cz / PARCEL_D);
-        if (slope > 0.16f) return Crop.NONE;
-        if (slope > 0.07f) return Noise.rnd(px, pz, seed + 960) < 0.6f ? Crop.TEA : Crop.FALLOW;
-        float r = Noise.rnd(px, pz, seed + 961);
-        if (r < 0.66f) {
-            // each district is at the same stage of the season
-            float stage = vn(cx / 2200f, cz / 2200f, seed + 962);
+        Parcel p = new Parcel();
+        parcel(cx + 4f, cz + 4f, p);
+        return use(p);
+    }
+
+    /**
+     * What a whole paddock is used for, decided at its centre so paddocks are farmed (or not)
+     * edge to edge: NONE off the farmland, in towns, or on steep ground; tea on gentle slopes.
+     */
+    public Crop use(Parcel p) {
+        if (p.crop == Crop.NONE) return Crop.NONE;
+        float h = terrain.natural(p.cx, p.cz);
+        if (!farmland(p.cx, p.cz, h) || inTown(p.cx, p.cz, 30f)) return Crop.NONE;
+        float r = 25f;
+        float sl = Math.max(Math.abs(terrain.natural(p.cx + r, p.cz) - terrain.natural(p.cx - r, p.cz)),
+                Math.abs(terrain.natural(p.cx, p.cz + r) - terrain.natural(p.cx, p.cz - r))) / (2f * r);
+        if (sl > 0.16f) return Crop.NONE;
+        if (sl > 0.07f) return paddy(p.crop) || p.crop == Crop.CABBAGE ? Crop.TEA : p.crop;
+        return p.crop;
+    }
+
+    // ------------------------------------------------------------------ paddocks
+
+    /** What a point of farmland belongs to. */
+    static final class Parcel {
+        Crop crop = Crop.NONE;
+        /** Distance to the paddock's edge (m), and to the nearest levee or track inside it. */
+        float edge, inner;
+        /** Coordinates along and across the paddock grid (for lining up crop rows). */
+        float a, b;
+        boolean fenced, seam;
+        /** Paddock key and centre (world). */
+        long key;
+        float cx, cz;
+    }
+
+    /** Farm districts: each has its own paddock grid, lined up with the nearest road. */
+    static final float DISTRICT = 900f, PADDOCK_A = 140f, PADDOCK_B = 100f;
+    private final java.util.concurrent.ConcurrentHashMap<Long, float[]> districts = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** {cos, sin, origin x, origin z, seed} of district (dx, dz). */
+    float[] district(int dx, int dz) {
+        long key = ((long) dx << 32) ^ (dz & 0xFFFFFFFFL);
+        float[] d = districts.get(key);
+        if (d != null) return d;
+        float ox = (dx + 0.5f) * DISTRICT, oz = (dz + 0.5f) * DISTRICT;
+        final float[] best = {Float.MAX_VALUE, 0f, 0f};
+        roads.forEachPiece(ox - 700f, oz - 700f, ox + 700f, oz + 700f, (e, i) -> {
+            if (e.cls == RoadClass.LANE || e.cls == RoadClass.TOWN) return;
+            float vx = e.x[i + 1] - e.x[i], vz = e.z[i + 1] - e.z[i], l2 = vx * vx + vz * vz;
+            if (l2 < 1e-4f) return;
+            float t = Math.max(0f, Math.min(1f, ((ox - e.x[i]) * vx + (oz - e.z[i]) * vz) / l2));
+            float qx = e.x[i] + vx * t - ox, qz = e.z[i] + vz * t - oz, dd = qx * qx + qz * qz;
+            if (dd < best[0]) { best[0] = dd; best[1] = vx; best[2] = vz; }
+        });
+        double ang = best[0] < Float.MAX_VALUE ? Math.atan2(best[2], best[1]) : Noise.rnd(dx, dz, seed + 970) * Math.PI;
+        d = new float[]{(float) Math.cos(ang), (float) Math.sin(ang), ox, oz, seed + 3000 + dx * 7919 + dz * 104729};
+        districts.put(key, d);
+        return d;
+    }
+
+    private static float edgeA(int k, int s) { return k * PADDOCK_A + (Noise.rnd(k, 17, s) - 0.5f) * 60f; }
+    private static float edgeB(int k, int s) { return k * PADDOCK_B + (Noise.rnd(23, k, s) - 0.5f) * 44f; }
+
+    /** Land use of paddock (i, j) of a district. */
+    Crop paddockCrop(int i, int j, float[] d, float wx, float wz) {
+        int s = (int) d[4];
+        float r = Noise.rnd(i, j, s + 5);
+        if (r < 0.36f) {
+            // each area is at the same stage of the season
+            float stage = vn(wx / 2200f, wz / 2200f, seed + 962);
             return stage < 0.36f ? Crop.PADDY_WATER : (stage < 0.68f ? Crop.PADDY_GREEN : Crop.PADDY_GOLD);
         }
-        if (r < 0.78f) return Crop.CABBAGE;
-        if (r < 0.9f) return Crop.SOIL;
+        if (r < 0.58f) return Crop.PASTURE;
+        if (r < 0.68f) return Crop.CABBAGE;
+        if (r < 0.76f) return Crop.SOIL;
+        if (r < 0.84f) return Crop.ORCHARD;
         return Crop.FALLOW;
+    }
+
+    /**
+     * The paddock at (x, z): farm districts are divided into paddocks of roughly 140 x 100 m
+     * (a few acres) on a grid lined up with the nearest road. Rice paddocks are split into small
+     * levee-bounded paddies, vegetable paddocks into strips with grass tracks; pasture is fenced.
+     * Where two districts meet runs a hedgerow.
+     */
+    void parcel(float x, float z, Parcel out) {
+        int dx = (int) Math.floor(x / DISTRICT), dz = (int) Math.floor(z / DISTRICT);
+        float[] d = district(dx, dz);
+        int s = (int) d[4];
+        float rx = x - d[2], rz = z - d[3];
+        float a = rx * d[0] + rz * d[1], b = -rx * d[1] + rz * d[0];
+        out.a = a;
+        out.b = b;
+        float seam = Math.min(Math.min(x - dx * DISTRICT, (dx + 1) * DISTRICT - x), Math.min(z - dz * DISTRICT, (dz + 1) * DISTRICT - z));
+        out.seam = seam < 5f;
+        int i = (int) Math.floor(a / PADDOCK_A);
+        if (a < edgeA(i, s)) i--; else if (a >= edgeA(i + 1, s)) i++;
+        int j = (int) Math.floor(b / PADDOCK_B);
+        if (b < edgeB(j, s)) j--; else if (b >= edgeB(j + 1, s)) j++;
+        float a0 = edgeA(i, s), a1 = edgeA(i + 1, s), b0 = edgeB(j, s), b1 = edgeB(j + 1, s);
+        out.edge = Math.min(Math.min(a - a0, a1 - a), Math.min(b - b0, b1 - b));
+        float ca = (a0 + a1) * 0.5f, cb = (b0 + b1) * 0.5f;
+        out.cx = d[2] + ca * d[0] - cb * d[1];
+        out.cz = d[3] + ca * d[1] + cb * d[0];
+        out.key = ((long) s * 31 + i) * 1000003L + j;
+        Crop c = paddockCrop(i, j, d, x, z);
+        out.crop = out.seam ? Crop.NONE : c;
+        out.fenced = c == Crop.PASTURE;
+        if (paddy(c)) {
+            float pa = (a - a0) % 30f, pb = (b - b0) % 18f;
+            out.inner = Math.min(Math.min(pa, 30f - pa), Math.min(pb, 18f - pb));
+        } else if (c == Crop.CABBAGE || c == Crop.SOIL) {
+            float pb = (b - b0) % 24f;
+            out.inner = Math.min(pb, 24f - pb);
+        } else out.inner = 99f;
+    }
+
+    /**
+     * Post-and-wire fences round the pasture paddocks in this chunk: one textured strip per 4 m
+     * span, following the ground, left out across roads, yards and towns.
+     */
+    void fences(Chunk ch, GeoBuilder gb, float x0, float z0, float x1, float z1) {
+        java.util.HashSet<Long> seen = new java.util.HashSet<>();
+        float[][] corners = {{x0, z0}, {x1, z0}, {x0, z1}, {x1, z1}};
+        gb.begin(false);
+        for (float[] c : corners) {
+            int dx = (int) Math.floor(c[0] / DISTRICT), dz = (int) Math.floor(c[1] / DISTRICT);
+            if (!seen.add(((long) dx << 32) ^ (dz & 0xFFFFFFFFL))) continue;
+            float[] d = district(dx, dz);
+            int s = (int) d[4];
+            float amin = Float.MAX_VALUE, amax = -Float.MAX_VALUE, bmin = Float.MAX_VALUE, bmax = -Float.MAX_VALUE;
+            for (float[] q : corners) {
+                float rx = q[0] - d[2], rz = q[1] - d[3];
+                float a = rx * d[0] + rz * d[1], b = -rx * d[1] + rz * d[0];
+                amin = Math.min(amin, a); amax = Math.max(amax, a); bmin = Math.min(bmin, b); bmax = Math.max(bmax, b);
+            }
+            int i0 = (int) Math.floor(amin / PADDOCK_A) - 1, i1 = (int) Math.floor(amax / PADDOCK_A) + 1;
+            int j0 = (int) Math.floor(bmin / PADDOCK_B) - 1, j1 = (int) Math.floor(bmax / PADDOCK_B) + 1;
+            for (int i = i0; i <= i1 + 1; i++)
+                for (int j = j0; j <= j1; j++) {
+                    // boundary a = edgeA(i) between paddocks (i-1, j) and (i, j)
+                    float ea = edgeA(i, s), eb0 = edgeB(j, s), eb1 = edgeB(j + 1, s);
+                    if (fencedSide(i - 1, j, d) || fencedSide(i, j, d)) fenceLine(gb, d, dx, dz, ea, eb0, ea, eb1, x0, z0, x1, z1);
+                    // boundary b = edgeB(j) between paddocks (i, j-1) and (i, j)
+                    float eb = edgeB(j, s), ea0 = edgeA(i, s), ea1 = edgeA(i + 1, s);
+                    if (fencedSide(i, j - 1, d) || fencedSide(i, j, d)) fenceLine(gb, d, dx, dz, ea0, eb, ea1, eb, x0, z0, x1, z1);
+                }
+        }
+        gb.end();
+    }
+
+    /** Paddock (i, j) of district d is farmed pasture. */
+    private boolean fencedSide(int i, int j, float[] d) {
+        float r = Noise.rnd(i, j, (int) d[4] + 5);
+        if (r < 0.36f || r >= 0.58f) return false;
+        int s = (int) d[4];
+        float ca = (edgeA(i, s) + edgeA(i + 1, s)) * 0.5f, cb = (edgeB(j, s) + edgeB(j + 1, s)) * 0.5f;
+        Parcel p = new Parcel();
+        p.crop = Crop.PASTURE;
+        p.cx = d[2] + ca * d[0] - cb * d[1];
+        p.cz = d[3] + ca * d[1] + cb * d[0];
+        return use(p) == Crop.PASTURE;
+    }
+
+    private void fenceLine(GeoBuilder gb, float[] d, int dx, int dz, float a0, float b0, float a1, float b1,
+                           float x0, float z0, float x1, float z1) {
+        float len = (float) Math.hypot(a1 - a0, b1 - b0);
+        int n = Math.max(1, (int) Math.ceil(len / 4f));
+        float[] p = new float[12], t = new float[8], l = {1f, 1f, 1f, 1f};
+        for (int k = 0; k < n; k++) {
+            float ta = k / (float) n, tb = (k + 1) / (float) n;
+            float pa = a0 + (a1 - a0) * ta, pb = b0 + (b1 - b0) * ta, qa = a0 + (a1 - a0) * tb, qb = b0 + (b1 - b0) * tb;
+            float px = d[2] + pa * d[0] - pb * d[1], pz = d[3] + pa * d[1] + pb * d[0];
+            float qx = d[2] + qa * d[0] - qb * d[1], qz = d[3] + qa * d[1] + qb * d[0];
+            float mx = (px + qx) * 0.5f, mz = (pz + qz) * 0.5f;
+            // each span belongs to the chunk (and district) its middle is in
+            if (mx < x0 || mx >= x1 || mz < z0 || mz >= z1) continue;
+            if ((int) Math.floor(mx / DISTRICT) != dx || (int) Math.floor(mz / DISTRICT) != dz) continue;
+            float h = terrain.natural(mx, mz);
+            if (!farmland(mx, mz, h) || inTown(mx, mz, 10f)) continue;
+            if (roads.roadClearance(mx, mz, 6f) < 2.5f || roads.roadClearance(px, pz, 6f) < 2f || roads.roadClearance(qx, qz, 6f) < 2f) continue;
+            float hp = terrain.height(px, pz), hq = terrain.height(qx, qz);
+            p[0] = px; p[1] = hp; p[2] = pz;
+            p[3] = qx; p[4] = hq; p[5] = qz;
+            p[6] = qx; p[7] = hq + 1.15f; p[8] = qz;
+            p[9] = px; p[10] = hp + 1.15f; p[11] = pz;
+            float span = len / n;
+            t[0] = 0f; t[1] = 1f; t[2] = span / 4f; t[3] = 1f; t[4] = span / 4f; t[5] = 0f; t[6] = 0f; t[7] = 0f;
+            gb.quad(p, t, l, lib.fence, L_OBJECT, Geo.FLAG_ALPHA | Geo.FLAG_DETAIL, 0f, true);
+        }
     }
 
     public int texture(Crop c) {
@@ -110,6 +287,7 @@ public final class Countryside {
             case CABBAGE: return lib.cabbage;
             case SOIL: return lib.soil;
             case TEA: return lib.tea;
+            case FALLOW: return lib.hillGrass;
             default: return lib.grass;
         }
     }
@@ -176,6 +354,20 @@ public final class Countryside {
             add(st);
             farmCount++;
         }
+        // fishing harbours: quay, breakwaters, boats and sheds
+        for (float[] h : roads.harbours) {
+            Site st = new Site();
+            float qx = h[0], qz = h[1], sx = h[2], sz = h[3];
+            // quay apron round the end of the harbour road, out to the water's edge
+            float ax = Math.min(qx - sx * 25f, h[4] + sx * 4f), bx = Math.max(qx - sx * 25f, h[4] + sx * 4f);
+            float az = Math.min(qz - sz * 25f, h[5] + sz * 4f), bz = Math.max(qz - sz * 25f, h[5] + sz * 4f);
+            if (sx == 0f) { ax = qx - 32f; bx = qx + 32f; } else { az = qz - 32f; bz = qz + 32f; }
+            st.x0 = qx - 1f; st.z0 = qz - 1f; st.x1 = qx + 1f; st.z1 = qz + 1f;
+            st.kind = HARBOUR; st.seed = rnd.nextInt(); st.rx = sx; st.rz = sz;
+            st.ground = new ArrayList<>();
+            st.ground.add(new float[]{ax, az, bx, bz, lib.concrete});
+            add(st);
+        }
         // villages and towns with street grids: lots along every street, a centre with civic buildings
         for (com.harlequinxd.drivehard.core.road.Town t : roads.towns) if (t.grid != null) townLots(t, rnd);
         // hamlets: houses around the junction
@@ -208,6 +400,12 @@ public final class Countryside {
     }
 
     // ------------------------------------------------------------------ towns
+
+    /** True on a harbour quay (no trees). */
+    public boolean inHarbour(float x, float z) {
+        for (float[] h : roads.harbours) if (Math.abs(x - h[0]) < 70f && Math.abs(z - h[1]) < 70f) return true;
+        return false;
+    }
 
     /** True inside the built-up area of a village or town (no fields or forest there). */
     public boolean inTown(float x, float z, float margin) {
@@ -425,6 +623,13 @@ public final class Countryside {
                 new BuildingGen(city, lib, gb, r, ch).build(BuildingGen.Type.KONBINI, s.x0 + 3f, s.face == 0 ? s.z0 + 7f : s.z0 + 1f,
                         s.x1 - 2f, s.face == 0 ? s.z1 - 1f : s.z1 - 7f, street, street, city.shopsKonbini);
                 break;
+            case HARBOUR: {
+                float qx = (s.x0 + s.x1) * 0.5f, qz = (s.z0 + s.z1) * 0.5f;
+                float[] h = null;
+                for (float[] hh : roads.harbours) if (Math.abs(hh[0] - qx) < 0.1f && Math.abs(hh[1] - qz) < 0.1f) h = hh;
+                if (h != null) new TownGen(city, lib, gb, r, ch).harbour(h[0], h[1], h[2], h[3], h[4], h[5]);
+                break;
+            }
             case TOWN_HALL: case POST: case CLINIC: case SUPERMARKET: case SCHOOL: case SHRINE: case GAS:
                 new TownGen(city, lib, gb, r, ch).build(s.kind, s.x0, s.z0, s.x1, s.z1, s.face);
                 break;

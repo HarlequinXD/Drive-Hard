@@ -141,7 +141,7 @@ public final class TextureLibrary {
     public HouseTextures.Window[] houseWinKind;
     public HouseTextures.Door[] houseDoorKind;
     public HouseTextures.Roof[] houseRoofKind;
-    public int signTownOffice, signPost, signSuper, signSchool, signClinic, signGas, schoolWall, superWall, canopy, field;
+    public int fence, signTownOffice, signPost, signSuper, signSchool, signClinic, signGas, schoolWall, superWall, canopy, field;
 
     private void houseTextures(int seed) {
         HouseTextures.Material S = HouseTextures.Material.SIDING, U = HouseTextures.Material.STUCCO, B = HouseTextures.Material.BOARDS,
@@ -202,6 +202,7 @@ public final class TextureLibrary {
             houseRoofKind[i] = (HouseTextures.Roof) roofsAll[i][0];
             houseRoof[i] = add(HouseTextures.roof(houseRoofKind[i], (Integer) roofsAll[i][1], seed + 3300 + i));
         }
+        fence = add(FarmTextures.fence(seed + 3399));
         signTownOffice = add(TownTextures.sign("TOWN OFFICE", 0xF4F2EC, 0x1A2A4A, seed + 3400));
         signPost = add(TownTextures.postSign(seed + 3401));
         signSuper = add(TownTextures.sign("SUPERMARKET", 0xD8302A, 0xFFFFFF, seed + 3402));

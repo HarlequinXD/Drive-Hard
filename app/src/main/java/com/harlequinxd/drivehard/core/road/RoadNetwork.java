@@ -47,18 +47,11 @@ public final class RoadNetwork {
         cityNode = new int[city.nbx + 1][city.nbz + 1];
         long t0 = System.nanoTime();
         cityGrid();
-        RoadNode[][] vil = villageGrid();
+        settlements();
         List<RoadEdge> fw = new ArrayList<>();
-        int w = freeway(cityNode[0][4], -1, 0, fw);
-        int n = freeway(cityNode[6][0], 0, -1, fw);
-        int s = freeway(cityNode[3][city.nbz], 0, 1, fw);
-        int hn = coastHighway(cityNode[city.nbx][0], -1);
-        int hs = coastHighway(cityNode[city.nbx][city.nbz], 1);
-        towns(vil);
-        villageLinks(vil);
-        for (int end : new int[]{w, n, s, hn, hs}) linkToVillage(end, RoadClass.HIGHWAY, Float.NaN, Float.NaN);
-        cityConnectors();
+        network(fw);
         for (RoadEdge f : fw) interchanges(f);
+        router = null;
         resolveCrossings();
         profiles();
         buildIndex();
@@ -119,61 +112,7 @@ public final class RoadNetwork {
             }
     }
 
-    // ------------------------------------------------------------------ villages
-
-    public static final float VILLAGE_SPACING = 9000f;
-
-    private RoadNode[][] villageGrid() {
-        int n = (int) (Terrain.ISLAND_SIZE / VILLAGE_SPACING);
-        RoadNode[][] v = new RoadNode[n][n];
-        for (int gz = 0; gz < n; gz++)
-            for (int gx = 0; gx < n; gx++) {
-                float bx = terrain.islandX0 + VILLAGE_SPACING * (gx + 0.5f), bz = terrain.islandZ0 + VILLAGE_SPACING * (gz + 0.5f);
-                float best = Float.MAX_VALUE, vx = 0, vz = 0;
-                for (int k = 0; k < 6; k++) {
-                    float x = bx + (Noise.rnd(gx, gz, seed + 600 + k) - 0.5f) * 6500f;
-                    float z = bz + (Noise.rnd(gx, gz, seed + 610 + k) - 0.5f) * 6500f;
-                    if (terrain.coastOver(x, z) > -1500f || terrain.cityDistance(x, z) < 4500f) continue;
-                    float h = terrain.natural(x, z);
-                    if (h < best) { best = h; vx = x; vz = z; }
-                }
-                if (best > 150f) continue;
-                RoadNode nd = addNode(vx, vz, RoadNode.Kind.JUNCTION);
-                v[gx][gz] = nd;
-                villages.add(nd);
-            }
-        return v;
-    }
-
-    private void villageLinks(RoadNode[][] v) {
-        int n = v.length;
-        for (int gz = 0; gz < n; gz++)
-            for (int gx = 0; gx < n; gx++) {
-                RoadNode a = v[gx][gz];
-                if (a == null) continue;
-                boolean hwX = gz % 4 == 1, hwZ = gx % 4 == 1;
-                // a few country links are left out so the grid doesn't read as a grid
-                boolean skipX = !hwX && Noise.rnd(gx, gz, seed + 640) < 0.22f;
-                boolean skipZ = !hwZ && Noise.rnd(gx, gz, seed + 641) < 0.22f;
-                for (int k = 1; k <= 2 && gx + k < n && !skipX; k++) {
-                    RoadNode b = v[gx + k][gz];
-                    if (b == null) continue;
-                    route(hwX ? RoadClass.HIGHWAY : RoadClass.COUNTRY, gate(a, b.x, b.z), gate(b, a.x, a.z), 0f, 0f, 0f, 0f);
-                    break;
-                }
-                for (int k = 1; k <= 2 && gz + k < n && !skipZ; k++) {
-                    RoadNode b = v[gx][gz + k];
-                    if (b == null) continue;
-                    route(hwZ ? RoadClass.HIGHWAY : RoadClass.COUNTRY, gate(a, b.x, b.z), gate(b, a.x, a.z), 0f, 0f, 0f, 0f);
-                    break;
-                }
-                // occasional diagonal lanes
-                if (gx + 1 < n && gz + 1 < n && Noise.rnd(gx, gz, seed + 642) < 0.25f) {
-                    RoadNode b = v[gx + 1][gz + 1];
-                    if (b != null) route(RoadClass.COUNTRY, gate(a, b.x, b.z), gate(b, a.x, a.z), 0f, 0f, 0f, 0f);
-                }
-            }
-    }
+    // ------------------------------------------------------------------ links
 
     /** Joins a node to the nearest village, preferring villages in direction (hx,hz) if given. */
     private void linkToVillage(int nodeId, RoadClass cls, float hx, float hz) {
@@ -209,30 +148,83 @@ public final class RoadNetwork {
     /** Street spacing in towns (centre line to centre line). */
     public static final float TOWN_SX = 64f, TOWN_SZ = 52f;
 
-    /** Names the island's regions, then every village; villages and towns get their street grids. */
-    private void towns(RoadNode[][] vil) {
-        names = new PlaceNames(seed);
+    /** Names the island's regions: the 3x3 parts of the island, each centred on land. */
+    private void regions() {
         int rn = 3;
         float cell = Terrain.ISLAND_SIZE / rn;
         for (int j = 0; j < rn; j++)
             for (int i = 0; i < rn; i++) {
-                float x = terrain.islandX0 + cell * (i + 0.2f + 0.6f * Noise.rnd(i, j, seed + 1500));
-                float z = terrain.islandZ0 + cell * (j + 0.2f + 0.6f * Noise.rnd(i, j, seed + 1501));
-                boolean coastal = terrain.coastOver(x, z) > -9000f;
-                boolean high = terrain.natural(x, z) > 110f;
-                regions.add(new Town.Region(names.region(coastal, high), x, z));
+                float bx = 0, bz = 0, bd = -1;
+                for (int k = 0; k < 40; k++) {
+                    float x = terrain.islandX0 + cell * (i + Noise.rnd(i * 41 + k, j, seed + 1500));
+                    float z = terrain.islandZ0 + cell * (j + Noise.rnd(i, j * 37 + k, seed + 1501));
+                    float d = -terrain.coastOver(x, z);
+                    if (d > bd) { bd = d; bx = x; bz = z; }
+                }
+                if (bd < 1500f) continue;          // this part of the square is (nearly) all sea
+                boolean coastal = bd < 7000f;
+                boolean high = terrain.natural(bx, bz) > 140f;
+                regions.add(new Town.Region(names.region(coastal, high), bx, bz));
             }
-        int n = vil.length;
-        for (int gz = 0; gz < n; gz++)
-            for (int gx = 0; gx < n; gx++) {
-                RoadNode v = vil[gx][gz];
-                if (v == null) continue;
-                boolean onHighway = gz % 4 == 1 || gx % 4 == 1;
-                float r = Noise.rnd(gx, gz, seed + 1510);
-                Town.Size size = onHighway ? (r < 0.55f ? Town.Size.TOWN : Town.Size.VILLAGE)
-                        : (r < 0.4f ? Town.Size.VILLAGE : Town.Size.HAMLET);
-                makeTown(v, size, false);
+    }
+
+    /**
+     * Places towns, villages and hamlets where people would build them: flat land below the
+     * hills, in valleys and on the coastal plain, around bays, spaced out like real settlements.
+     * The best sites become towns, then villages; the rest are hamlets.
+     */
+    private void settlements() {
+        names = new PlaceNames(seed);
+        regions();
+        Random r = new Random(seed * 41L + 9);
+        List<float[]> cand = new ArrayList<>();           // x, z, score, inland distance
+        float step = 1300f;
+        for (float z = terrain.islandZ0 + step * 0.5f; z < terrain.islandZ1; z += step)
+            for (float x = terrain.islandX0 + step * 0.5f; x < terrain.islandX1; x += step) {
+                if (terrain.coastOver(x, z) > 2000f) continue;
+                float best = -1f, bx = 0, bz = 0, bd = 0;
+                for (int k = 0; k < 4; k++) {
+                    float px = x + (r.nextFloat() - 0.5f) * step, pz = z + (r.nextFloat() - 0.5f) * step;
+                    float d = -terrain.coastOver(px, pz);
+                    if (d < 550f || terrain.cityDistance(px, pz) < 6500f) continue;
+                    float h = terrain.natural(px, pz);
+                    if (h < 3f || h > 180f) continue;
+                    float sl = slopeAround(px, pz, 200f);
+                    if (sl > 0.08f) continue;
+                    float sc = (1f / (1f + sl * 30f)) * (1f - h / 400f) * (d < 3000f ? 1.45f : 1f)
+                            * (0.7f + 0.6f * Noise.rnd((int) px, (int) pz, seed + 1520));
+                    if (sc > best) { best = sc; bx = px; bz = pz; bd = d; }
+                }
+                if (best > 0f) cand.add(new float[]{bx, bz, best, bd});
             }
+        cand.sort((A, B) -> Float.compare(B[2], A[2]));
+        List<float[]> chosen = new ArrayList<>();
+        for (float[] c : cand) {
+            float min = c[3] < 3000f ? 4000f : 4600f;
+            boolean ok = true;
+            for (float[] o : chosen) if (Math.hypot(o[0] - c[0], o[1] - c[1]) < min) { ok = false; break; }
+            if (ok) chosen.add(c);
+        }
+        int n = chosen.size();
+        for (int i = 0; i < n; i++) {
+            float[] c = chosen.get(i);
+            Town.Size size = i < n * 0.3f ? Town.Size.TOWN : (i < n * 0.62f ? Town.Size.VILLAGE : Town.Size.HAMLET);
+            RoadNode nd = addNode(c[0], c[1], RoadNode.Kind.JUNCTION);
+            villages.add(nd);
+            Town t = makeTown(nd, size, false);
+            t.coastal = c[3] < 3000f;
+        }
+    }
+
+    /** Largest height difference across a +-r cross, as a slope. */
+    private float slopeAround(float x, float z, float r) {
+        float h = terrain.natural(x, z);
+        float m = 0f;
+        m = Math.max(m, Math.abs(terrain.natural(x + r, z) - h));
+        m = Math.max(m, Math.abs(terrain.natural(x - r, z) - h));
+        m = Math.max(m, Math.abs(terrain.natural(x, z + r) - h));
+        m = Math.max(m, Math.abs(terrain.natural(x, z - r) - h));
+        return m / r;
     }
 
     public Town.Region regionAt(float x, float z) {
@@ -348,7 +340,7 @@ public final class RoadNetwork {
             float x = t.x + sx * dist, z = t.z + sz * dist;
             if (terrain.coastOver(x, z) > -1500f || terrain.cityDistance(x, z) < 3500f || terrain.natural(x, z) > 140f) continue;
             boolean near = false;
-            for (Town o : towns) if (Math.hypot(o.centre.x - x, o.centre.z - z) < 2200f) { near = true; break; }
+            for (Town o : towns) if (Math.hypot(o.centre.x - x, o.centre.z - z) < 4500f) { near = true; break; }
             if (near) continue;
             if (!gridFits(x, z, 5)) continue;
             RoadNode c = addNode(x, z, RoadNode.Kind.JUNCTION);
@@ -367,6 +359,32 @@ public final class RoadNetwork {
      * a / arrives at b with (zero = free), used for straight exits from the city and ramps.
      */
     private RoadEdge route(RoadClass cls, RoadNode a, RoadNode b, float sx, float sz, float ex, float ez) {
+        if (a == b || Math.hypot(a.x - b.x, a.z - b.z) < 60f) return null;
+        if (router != null) {
+            float lead = (sx != 0f || sz != 0f) ? Math.min(400f, (float) Math.hypot(b.x - a.x, b.z - a.z) * 0.2f) : 0f;
+            float tail = (ex != 0f || ez != 0f) ? Math.min(400f, (float) Math.hypot(b.x - a.x, b.z - a.z) * 0.2f) : 0f;
+            float ax = a.x + sx * lead, az = a.z + sz * lead, bx = b.x - ex * tail, bz = b.z - ez * tail;
+            List<float[]> path = router.path(ax, az, bx, bz, cls, ringRouting);
+            if (path == null) return null;
+            List<float[]> wp = new ArrayList<>();
+            wp.add(new float[]{a.x, a.z});
+            List<float[]> simple = simplify(path, cls == RoadClass.HIGHWAY ? 80f : 60f);
+            for (float[] q : simple) {
+                float[] l = wp.get(wp.size() - 1);
+                if (Math.hypot(q[0] - l[0], q[1] - l[1]) > 30f) wp.add(q);
+            }
+            float[] l = wp.get(wp.size() - 1);
+            if (Math.hypot(b.x - l[0], b.z - l[1]) > 30f) wp.add(new float[]{b.x, b.z});
+            else { l[0] = b.x; l[1] = b.z; }
+            if (wp.size() < 2) return null;
+            float[][] pl = spline(wp, cls.step);
+            router.mark(pl[0], pl[1], 3);
+            return addEdge(cls, a.id, b.id, pl[0], pl[1]);
+        }
+        return routeDirect(cls, a, b, sx, sz, ex, ez);
+    }
+
+    private RoadEdge routeDirect(RoadClass cls, RoadNode a, RoadNode b, float sx, float sz, float ex, float ez) {
         List<float[]> wp = new ArrayList<>();
         wp.add(new float[]{a.x, a.z});
         float dx = b.x - a.x, dz = b.z - a.z, d = (float) Math.sqrt(dx * dx + dz * dz);
@@ -441,63 +459,382 @@ public final class RoadNetwork {
 
     // ------------------------------------------------------------------ freeways & highways
 
-    /** Freeway from a city node heading (dx,dz) to near the coast. Returns the far end node. */
-    private int freeway(int startId, int dx, int dz, List<RoadEdge> out) {
+    /**
+     * The road network, built the way real ones grow: a highway round the coast linking the
+     * coastal towns and the city, freeways from the city to the most important distant towns,
+     * highways joining the towns across the island, and country roads to every neighbouring
+     * settlement. Every road is routed over the terrain: it follows valleys and the coastal plain,
+     * avoids steep climbs, cliffs, beaches and other towns, and keeps away from roads already
+     * there (they meet at junctions where they cross).
+     */
+    private void network(List<RoadEdge> fw) {
+        router = new Router();
+        for (Town t : towns) if (t.grid != null) router.markArea(t.x0 - 60f, t.z0 - 60f, t.x1 + 60f, t.z1 + 60f, 4);
+        java.util.HashSet<Long> linked = new java.util.HashSet<>();
+        // 1. coastal highway round the island, through the city
+        List<Town> ring = new ArrayList<>();
+        for (Town t : towns) if (t.coastal) ring.add(t);
+        float ccx = terrain.centreX, ccz = terrain.centreZ;
+        ring.sort((A, B) -> Float.compare((float) Math.atan2(A.centre.z - ccz, A.centre.x - ccx), (float) Math.atan2(B.centre.z - ccz, B.centre.x - ccx)));
+        RoadNode cityN = nodes.get(cityNode[city.nbx][0]), cityS = nodes.get(cityNode[city.nbx][city.nbz]);
+        float cityAng = (float) Math.atan2((cityN.z + cityS.z) * 0.5f - ccz, cityN.x - ccx);
+        int at = 0;
+        while (at < ring.size() && Math.atan2(ring.get(at).centre.z - ccz, ring.get(at).centre.x - ccx) < cityAng) at++;
+        List<Town> order = new ArrayList<>();
+        for (int k = 0; k < ring.size(); k++) order.add(ring.get((at + k) % ring.size()));
+        // towns well off the line of the coast (out on a peninsula) get a spur road instead
+        for (int pass = 0; pass < 2; pass++)
+            for (int k = 0; k < order.size(); k++) {
+                float px = k == 0 ? cityS.x : order.get(k - 1).centre.x, pz = k == 0 ? cityS.z : order.get(k - 1).centre.z;
+                float nx = k == order.size() - 1 ? cityN.x : order.get(k + 1).centre.x, nz = k == order.size() - 1 ? cityN.z : order.get(k + 1).centre.z;
+                Town t = order.get(k);
+                double detour = Math.hypot(t.centre.x - px, t.centre.z - pz) + Math.hypot(nx - t.centre.x, nz - t.centre.z) - Math.hypot(nx - px, nz - pz);
+                if (detour > 3500) { t.coastal = false; t.spur = true; order.remove(k); k--; }
+            }
+        // order starts just south of the city and runs round to just north of it
+        ringRouting = true;
+        RoadNode prev = cityS;
+        Town prevTown = null;
+        for (Town t : order) {
+            RoadNode in = gate(t.centre, prev.x, prev.z);
+            if (route(RoadClass.HIGHWAY, prev, in, 0f, prev == cityS ? 1f : 0f, 0f, 0f) != null && prevTown != null)
+                linked.add(pair(prevTown.id, t.id));
+            prev = gate(t.centre, prev.x + (t.centre.x - prev.x) * 3f, prev.z + (t.centre.z - prev.z) * 3f);
+            prevTown = t;
+        }
+        route(RoadClass.HIGHWAY, prev, cityN, 0f, 0f, 0f, 1f);
+        ringRouting = false;
+        // 2. freeways from the city to the most important towns far away
+        List<Town> majors = new ArrayList<>();
+        for (Town t : towns) if (t.size == Town.Size.TOWN) majors.add(t);
+        freewayTo(cityNode[0][4], -1f, 0f, majors, fw);
+        freewayTo(cityNode[6][0], 0f, -1f, majors, fw);
+        freewayTo(cityNode[3][city.nbz], 0f, 1f, majors, fw);
+        // 3. highways joining the towns: a spanning tree, plus short cut links
+        int m = majors.size();
+        boolean[] in = new boolean[m];
+        if (m > 0) in[0] = true;
+        for (int it = 1; it < m; it++) {
+            int bi = -1, bj = -1;
+            double bd = Double.MAX_VALUE;
+            for (int i = 0; i < m; i++) {
+                if (!in[i]) continue;
+                for (int j = 0; j < m; j++) {
+                    if (in[j]) continue;
+                    double d = dist(majors.get(i), majors.get(j));
+                    if (d < bd) { bd = d; bi = i; bj = j; }
+                }
+            }
+            if (bj < 0) break;
+            in[bj] = true;
+            highwayLink(majors.get(bi), majors.get(bj), linked);
+        }
+        for (int i = 0; i < m; i++)
+            for (int j = i + 1; j < m; j++) {
+                Town a = majors.get(i), b = majors.get(j);
+                double d = dist(a, b);
+                if (d > 22000 || linked.contains(pair(a.id, b.id))) continue;
+                if (rngNeighbours(majors, a, b, d) && Noise.rnd(a.id, b.id, seed + 1530) < 0.5f) highwayLink(a, b, linked);
+            }
+        // 4. country roads between neighbouring settlements
+        for (int i = 0; i < towns.size(); i++)
+            for (int j = i + 1; j < towns.size(); j++) {
+                Town a = towns.get(i), b = towns.get(j);
+                if (a.exitTown || b.exitTown) continue;
+                double d = dist(a, b);
+                if (d > 14000 || linked.contains(pair(a.id, b.id))) continue;
+                if (a.coastal && b.coastal && d > 3000) continue;     // the coast road joins them
+                if (!rngNeighbours(towns, a, b, d)) continue;
+                if (route(RoadClass.COUNTRY, gate(a.centre, b.centre.x, b.centre.z), gate(b.centre, a.centre.x, a.centre.z), 0f, 0f, 0f, 0f) != null)
+                    linked.add(pair(a.id, b.id));
+            }
+        // 5. the city's own roads out west, north and south
+        cityConnectors();
+        // 6. fishing harbours below the coastal towns
+        for (Town t : towns) if (t.coastal || t.spur) harbour(t);
+    }
+
+    /** Harbours: {quay x, quay z, seaward x, seaward z (unit, along an axis), coast x, coast z, town id}. */
+    public final List<float[]> harbours = new ArrayList<>();
+
+    /** A short road from the town down to a quay where the coast is low (not under cliffs). */
+    private void harbour(Town t) {
+        float best = Float.MAX_VALUE;
+        float[] bestDir = null;
+        int[][] dirs = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        for (int[] dv : dirs) {
+            for (float r = 200f; r < 3600f; r += 25f) {
+                float x = t.centre.x + dv[0] * r, z = t.centre.z + dv[1] * r;
+                if (terrain.coastOver(x, z) > 0f) {
+                    if (r < best && terrain.cliff(x, z) < 0.4f && terrain.cityDistance(x, z) > 3000f) { best = r; bestDir = new float[]{dv[0], dv[1], x, z}; }
+                    break;
+                }
+            }
+        }
+        if (bestDir == null) return;
+        float sx = bestDir[0], sz = bestDir[1];
+        // the coast point, then a quay node ~45 m inland of it
+        float cx = bestDir[2], cz = bestDir[3];
+        float qx = cx - sx * 45f, qz = cz - sz * 45f;
+        for (float[] h : harbours) if (Math.hypot(h[0] - qx, h[1] - qz) < 1500f) return;
+        RoadNode q = addNode(qx, qz, RoadNode.Kind.END);
+        RoadNode from = gate(t.centre, qx, qz);
+        if (route(RoadClass.TOWN, from, q, 0f, 0f, sx, sz) == null && route(RoadClass.COUNTRY, from, q, 0f, 0f, 0f, 0f) == null) {
+            q.dead = true;
+            return;
+        }
+        harbours.add(new float[]{qx, qz, sx, sz, cx, cz, t.id});
+    }
+
+    private static long pair(int a, int b) { return a < b ? ((long) a << 32) | b : ((long) b << 32) | a; }
+
+    private static double dist(Town a, Town b) { return Math.hypot(a.centre.x - b.centre.x, a.centre.z - b.centre.z); }
+
+    /** Relative neighbourhood test: no third settlement closer to both a and b than they are to each other. */
+    private static boolean rngNeighbours(List<Town> set, Town a, Town b, double d) {
+        for (Town c : set) {
+            if (c == a || c == b) continue;
+            if (Math.max(dist(a, c), dist(b, c)) < d) return false;
+        }
+        return true;
+    }
+
+    private void highwayLink(Town a, Town b, java.util.HashSet<Long> linked) {
+        if (linked.contains(pair(a.id, b.id))) return;
+        if (a.coastal && b.coastal) return;            // the coastal highway already joins them
+        if (route(RoadClass.HIGHWAY, gate(a.centre, b.centre.x, b.centre.z), gate(b.centre, a.centre.x, a.centre.z), 0f, 0f, 0f, 0f) != null)
+            linked.add(pair(a.id, b.id));
+    }
+
+    /**
+     * Freeway from a city node heading (dx, dz) to the most important distant town that way. The
+     * freeway ends ~1.5 km short of the town and a highway carries on into it.
+     */
+    private void freewayTo(int startId, float dx, float dz, List<Town> majors, List<RoadEdge> out) {
         RoadNode a = nodes.get(startId);
+        Town best = null;
+        double bs = 0;
+        for (Town t : majors) {
+            double ex = t.centre.x - a.x, ez = t.centre.z - a.z, d = Math.hypot(ex, ez);
+            double along = (ex * dx + ez * dz) / d;
+            if (d < 18000 || along < 0.55) continue;
+            double sc = Math.min(d, 60000) * along;
+            if (sc > bs) { bs = sc; best = t; }
+        }
+        if (best == null) return;
+        float lx = a.x + dx * 1100f, lz = a.z + dz * 1100f;
+        List<float[]> path = router.path(lx, lz, best.centre.x, best.centre.z, RoadClass.FREEWAY, false);
+        if (path == null) return;
+        // stop short of the town
+        float left = 0f;
+        int cut = path.size() - 1;
+        while (cut > 1) {
+            left += (float) Math.hypot(path.get(cut)[0] - path.get(cut - 1)[0], path.get(cut)[1] - path.get(cut - 1)[1]);
+            if (left > 1500f) break;
+            cut--;
+        }
         List<float[]> wp = new ArrayList<>();
         wp.add(new float[]{a.x, a.z});
         wp.add(new float[]{a.x + dx * 350f, a.z + dz * 350f});
-        wp.add(new float[]{a.x + dx * 1100f, a.z + dz * 1100f});
-        float px = a.x + dx * 1100f, pz = a.z + dz * 1100f;
-        for (int k = 0; k < 40; k++) {
-            float nx = px + dx * 5000f, nz = pz + dz * 5000f;
-            if (nx < terrain.islandX0 + 6000f || nz < terrain.islandZ0 + 6000f || nz > terrain.islandZ1 - 6000f) break;
-            float best = Float.MAX_VALUE, bx = nx, bz = nz;
-            // north/south freeways start on the coast, so they may only drift inland (west)
-            int tLo = dz != 0 ? -3 : -2, tHi = dz != 0 ? 1 : 2;
-            for (int t = tLo; t <= tHi; t++) {
-                // candidate positions shifted sideways (perpendicular to the heading)
-                float qx = nx + (dz != 0 ? t * 1300f : 0f), qz = nz + (dx != 0 ? t * 1200f : 0f);
-                if (terrain.coastOver(qx, qz) > -1500f) continue;
-                float h = 0f;
-                for (int q = 0; q <= 4; q++) {
-                    float u = q / 4f;
-                    h += terrain.natural(px + (qx - px) * u, pz + (qz - pz) * u);
-                }
-                h += Math.abs(t) * 25f;
-                if (h < best) { best = h; bx = qx; bz = qz; }
-            }
-            if (best == Float.MAX_VALUE) break;
-            wp.add(new float[]{bx, bz});
-            px = bx; pz = bz;
-        }
-        RoadNode end = addNode(px, pz, RoadNode.Kind.END);
-        float[][] pl = spline(wp, RoadClass.FREEWAY.step);
-        out.add(addEdge(RoadClass.FREEWAY, a.id, end.id, pl[0], pl[1]));
-        return end.id;
-    }
-
-    /** Coastal highway from a city corner heading north (dz=-1) or south (+1), ~900 m inland. */
-    private int coastHighway(int startId, int dz) {
-        RoadNode a = nodes.get(startId);
-        List<float[]> wp = new ArrayList<>();
-        wp.add(new float[]{a.x, a.z});
-        wp.add(new float[]{a.x, a.z + dz * 400f});
-        float z = a.z + dz * 400f, px = a.x;
-        for (int k = 0; k < 30; k++) {
-            z += dz * 2500f;
-            if (Math.abs(z - (terrain.islandZ0 + terrain.islandZ1) * 0.5f) > Terrain.ISLAND_SIZE * 0.5f - 6000f) break;
-            // walk inland from the east edge until ~900 m from the coast
-            float x = terrain.islandX1 + 3000f;
-            while (x > terrain.islandX1 - 20000f && terrain.coastOver(x, z) > -900f) x -= 150f;
-            wp.add(new float[]{x, z});
-            px = x;
-        }
+        wp.add(new float[]{lx, lz});
+        List<float[]> simple = simplify(path.subList(0, cut + 1), 90f);
+        for (int i = 1; i < simple.size(); i++) wp.add(simple.get(i));
         float[] last = wp.get(wp.size() - 1);
         RoadNode end = addNode(last[0], last[1], RoadNode.Kind.END);
-        float[][] pl = spline(wp, RoadClass.HIGHWAY.step);
-        addEdge(RoadClass.HIGHWAY, a.id, end.id, pl[0], pl[1]);
-        return end.id;
+        float[][] pl = spline(wp, RoadClass.FREEWAY.step);
+        RoadEdge e = addEdge(RoadClass.FREEWAY, a.id, end.id, pl[0], pl[1]);
+        router.mark(pl[0], pl[1], 3);
+        out.add(e);
+        route(RoadClass.HIGHWAY, end, gate(best.centre, end.x, end.z), 0f, 0f, 0f, 0f);
+    }
+
+    // ------------------------------------------------------------------ terrain routing
+
+    private Router router;
+    /** Routing the coastal highway: stay near the coast. */
+    private boolean ringRouting;
+
+    /**
+     * A* over a 250 m grid of the island. Moving costs distance times a factor for the grade
+     * (beyond what the road class allows it grows fast), being near the shore, being far from
+     * the coast for the coastal highway, height for freeways, and other roads and towns nearby.
+     */
+    private final class Router {
+        final int n = 512;
+        final float cell = Terrain.ISLAND_SIZE / n;
+        final float[] h = new float[n * n], inland = new float[n * n];
+        final byte[] used = new byte[n * n];
+        final float[] g = new float[n * n];
+        final int[] from = new int[n * n], stamp = new int[n * n];
+        int[] heap = new int[1 << 16];
+        float[] hf = new float[1 << 16];
+        int cur, size;
+
+        Router() {
+            for (int j = 0; j < n; j++)
+                for (int i = 0; i < n; i++) {
+                    float x = x(i), z = z(j);
+                    float d = -terrain.coastOver(x, z);
+                    inland[j * n + i] = d;
+                    h[j * n + i] = d > -100f ? terrain.natural(x, z) : -50f;
+                }
+            markArea(city.cityX0 - 20f, city.cityZ0 - 20f, city.cityX1 + 20f, city.cityZ1 + 20f, 100);
+        }
+
+        float x(int i) { return terrain.islandX0 + (i + 0.5f) * cell; }
+        float z(int j) { return terrain.islandZ0 + (j + 0.5f) * cell; }
+        int ci(float x) { return Math.max(0, Math.min(n - 1, (int) ((x - terrain.islandX0) / cell))); }
+        int cj(float z) { return Math.max(0, Math.min(n - 1, (int) ((z - terrain.islandZ0) / cell))); }
+
+        void markArea(float x0, float z0, float x1, float z1, int v) {
+            for (int j = cj(z0); j <= cj(z1); j++)
+                for (int i = ci(x0); i <= ci(x1); i++) used[j * n + i] = (byte) Math.min(120, Math.max(used[j * n + i], v));
+        }
+
+        /** Marks the cells a road runs through so later roads keep their distance. */
+        void mark(float[] xs, float[] zs, int v) {
+            for (int k = 0; k < xs.length; k++) {
+                int i0 = ci(xs[k]), j0 = cj(zs[k]);
+                for (int dj = -1; dj <= 1; dj++)
+                    for (int di = -1; di <= 1; di++) {
+                        int i = i0 + di, j = j0 + dj;
+                        if (i < 0 || j < 0 || i >= n || j >= n) continue;
+                        int c = j * n + i, w = di == 0 && dj == 0 ? v * 2 : v;
+                        if (used[c] < 100) used[c] = (byte) Math.min(99, Math.max(used[c], w));
+                    }
+            }
+        }
+
+        float stepCost(int a, int b, float len, RoadClass cls, int sa, int sb) {
+            float d = inland[b];
+            boolean end = near(b, sa) || near(b, sb);
+            if (d < 120f && !end) return Float.POSITIVE_INFINITY;               // sea, beach and cliff edge
+            if (used[b] >= 100 && !end) return Float.POSITIVE_INFINITY;          // the city
+            float grade = Math.abs(h[b] - h[a]) / len;
+            float gmax = cls == RoadClass.FREEWAY ? 0.035f : (cls == RoadClass.HIGHWAY ? 0.06f : 0.09f);
+            float q = grade / gmax;
+            float c = 1f + q * q * 2.5f + (q > 2f ? (q - 2f) * 30f : 0f);
+            if (d < 350f) c += 1.5f;                                      // keep off the shore
+            if (ringRouting && d > 2500f) c += (d - 2500f) / 1200f;      // the coastal road stays coastal
+            if (cls == RoadClass.FREEWAY) c += Math.max(0f, h[b] - 60f) / 120f;
+            int u = used[b];
+            if (u > 0 && !end) c += u * 0.6f;
+            return len * c;
+        }
+
+        boolean near(int a, int b) { return Math.abs(a % n - b % n) <= 2 && Math.abs(a / n - b / n) <= 2; }
+
+        /** Grid path from (ax, az) to (bx, bz) as world points (cell centres, ends exact), or null. */
+        List<float[]> path(float ax, float az, float bx, float bz, RoadClass cls, boolean ring) {
+            int sa = cj(az) * n + ci(ax), sb = cj(bz) * n + ci(bx);
+            cur++;
+            size = 0;
+            g[sa] = 0f;
+            stamp[sa] = cur;
+            from[sa] = -1;
+            push(sa, heuristic(sa, sb));
+            int[] di = {1, -1, 0, 0, 1, 1, -1, -1}, dj = {0, 0, 1, -1, 1, -1, 1, -1};
+            int expanded = 0;
+            boolean found = false;
+            while (size > 0) {
+                float fk = hf[0];
+                int k = pop();
+                if (fk > g[k] + heuristic(k, sb) + 1e-2f) continue;          // stale heap entry
+                if (k == sb) { found = true; break; }
+                if (++expanded > 300000) break;
+                int i = k % n, j = k / n;
+                for (int t = 0; t < 8; t++) {
+                    int ni = i + di[t], nj = j + dj[t];
+                    if (ni < 0 || nj < 0 || ni >= n || nj >= n) continue;
+                    int nb = nj * n + ni;
+                    float len = t < 4 ? cell : cell * 1.4142f;
+                    float c = stepCost(k, nb, len, cls, sa, sb);
+                    if (c == Float.POSITIVE_INFINITY) continue;
+                    float ng = g[k] + c;
+                    if (stamp[nb] != cur || ng < g[nb] - 1e-3f) {
+                        stamp[nb] = cur;
+                        g[nb] = ng;
+                        from[nb] = k;
+                        push(nb, ng + heuristic(nb, sb));
+                    }
+                }
+            }
+            if (!found) return null;
+            List<float[]> out = new ArrayList<>();
+            for (int k = sb; k >= 0; k = from[k]) out.add(new float[]{x(k % n), z(k / n)});
+            java.util.Collections.reverse(out);
+            out.get(0)[0] = ax; out.get(0)[1] = az;
+            out.get(out.size() - 1)[0] = bx; out.get(out.size() - 1)[1] = bz;
+            return out;
+        }
+
+        float heuristic(int a, int b) {
+            float dx = (a % n - b % n) * cell, dz = (a / n - b / n) * cell;
+            return (float) Math.sqrt(dx * dx + dz * dz) * 1.2f;
+        }
+
+        void push(int k, float f) {
+            if (size == heap.length) { heap = Arrays.copyOf(heap, size * 2); hf = Arrays.copyOf(hf, size * 2); }
+            int i = size++;
+            while (i > 0) {
+                int p = (i - 1) >> 1;
+                if (hf[p] <= f) break;
+                heap[i] = heap[p]; hf[i] = hf[p];
+                i = p;
+            }
+            heap[i] = k; hf[i] = f;
+        }
+
+        int pop() {
+            int top = heap[0];
+            size--;
+            if (size > 0) {
+                int k = heap[size];
+                float f = hf[size];
+                int i = 0;
+                while (true) {
+                    int l = 2 * i + 1, r = l + 1, m = i;
+                    float fm = f;
+                    if (l < size && hf[l] < fm) { m = l; fm = hf[l]; }
+                    if (r < size && hf[r] < fm) { m = r; }
+                    if (m == i) break;
+                    heap[i] = heap[m]; hf[i] = hf[m];
+                    i = m;
+                }
+                heap[i] = k; hf[i] = f;
+            }
+            return top;
+        }
+    }
+
+    /** Douglas-Peucker: drops grid points within {@code tol} metres of the simplified line. */
+    private static List<float[]> simplify(List<float[]> pts, float tol) {
+        int n = pts.size();
+        if (n < 3) return new ArrayList<>(pts);
+        boolean[] keep = new boolean[n];
+        keep[0] = keep[n - 1] = true;
+        java.util.ArrayDeque<int[]> st = new java.util.ArrayDeque<>();
+        st.push(new int[]{0, n - 1});
+        while (!st.isEmpty()) {
+            int[] r = st.pop();
+            float[] a = pts.get(r[0]), b = pts.get(r[1]);
+            float dx = b[0] - a[0], dz = b[1] - a[1], l = (float) Math.sqrt(dx * dx + dz * dz) + 1e-3f;
+            float best = -1f;
+            int bi = -1;
+            for (int i = r[0] + 1; i < r[1]; i++) {
+                float[] p = pts.get(i);
+                float d = Math.abs((p[0] - a[0]) * dz - (p[1] - a[1]) * dx) / l;
+                if (d > best) { best = d; bi = i; }
+            }
+            if (best > tol) {
+                keep[bi] = true;
+                st.push(new int[]{r[0], bi});
+                st.push(new int[]{bi, r[1]});
+            }
+        }
+        List<float[]> out = new ArrayList<>();
+        for (int i = 0; i < n; i++) if (keep[i]) out.add(pts.get(i));
+        return out;
     }
 
     /** Diamond interchanges every ~9 km: one-way slip roads to junctions either side of the freeway. */

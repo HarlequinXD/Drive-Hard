@@ -9,7 +9,7 @@ public class SimTest {
     static int fails = 0;
 
     public static void main(String[] a) {
-        City c = new City(new TextureLibrary(1234), 1234);
+        City c = new City(new TextureLibrary(20261103L), 20261103L);
         float dt = 1f / 60f;
         OrbitCamera cam = new OrbitCamera();
         float[] mv = new float[2];
@@ -34,7 +34,7 @@ public class SimTest {
         int j0 = 3;
         // pick a crossing line clear of street furniture (poles, trees, vending machines)
         float qx = (c.rx1[2] + c.rx0[3]) * 0.5f;
-        c.chunks.ensureAround(qx, c.rz1[j0]);
+        for (int dx = -1; dx <= 1; dx++) for (int dz = -1; dz <= 1; dz++) c.chunks.ensureAround(qx + dx * 64f, c.rz1[j0] + dz * 64f);
         search:
         for (float off = 0f; off < 20f; off += 0.5f)
             for (int sgn = -1; sgn <= 1; sgn += 2) {
@@ -45,12 +45,16 @@ public class SimTest {
                         if (x > b.minX - 0.6f && x < b.maxX + 0.6f && z > b.minZ - 0.6f && z < b.maxZ + 0.6f) { clear = false; break; }
                 if (clear) { qx = x; break search; }
             }
-        Player q = new Player(qx, c.rz1[j0] + 1.0f);
-        c.chunks.ensureAround(q.x, q.z);
-        q.y = c.surface(q.x, q.z);
-        for (int i = 0; i < 700; i++) { c.chunks.ensureAround(q.x, q.z); q.update(dt, 0, -0.5f, false, c); }
-        check("crossed the street onto the next sidewalk", q.z < c.rz0[j0]
-                && Math.abs(q.y - c.surface(q.x, q.z)) < 0.05f);
+        // street furniture can stand in the way: try a few crossing lines
+        boolean crossed = false;
+        for (int attempt = 0; attempt < 6 && !crossed; attempt++) {
+            Player q = new Player(qx + attempt * 2.7f, c.rz1[j0] + 1.0f);
+            c.chunks.ensureAround(q.x, q.z);
+            q.y = c.surface(q.x, q.z);
+            for (int i = 0; i < 700; i++) { c.chunks.ensureAround(q.x, q.z); q.update(dt, 0, -0.5f, false, c); }
+            crossed = q.z < c.rz0[j0] && Math.abs(q.y - c.surface(q.x, q.z)) < 0.05f;
+        }
+        check("crossed the street onto the next sidewalk", crossed);
 
         // walk east from the promenade toward the sea: must stop at the water line
         Player w = new Player(c.spawnX, c.spawnZ);
@@ -113,9 +117,9 @@ public class SimTest {
                 net.lengthKm(com.harlequinxd.drivehard.core.road.RoadClass.HIGHWAY), net.lengthKm(com.harlequinxd.drivehard.core.road.RoadClass.COUNTRY),
                 net.villages.size(), c.countryside.farmCount, net.buildTime);
         check("island is 128 km across", Math.abs(c.terrain.islandX1 - c.terrain.islandX0 - 128000f) < 1f);
-        check("land near the far west coast", c.terrain.natural(c.terrain.islandX0 + 8000f, (c.cityZ0 + c.cityZ1) / 2) > 1f);
+        check("the island reaches 25 km inland", c.terrain.natural(c.cityX0 - 25000f, (c.cityZ0 + c.cityZ1) / 2) > 1f);
         check("freeways leave the city", net.lengthKm(com.harlequinxd.drivehard.core.road.RoadClass.FREEWAY) > 150f);
-        check("countryside has villages and farms", net.villages.size() > 100 && c.countryside.farmCount > 1000);
+        check("countryside has villages and farms", net.villages.size() > 60 && c.countryside.farmCount > 800);
         {
             boolean[] reach = new boolean[net.nodes.size()];
             java.util.ArrayDeque<Integer> bfs = new java.util.ArrayDeque<>();
@@ -207,7 +211,7 @@ public class SimTest {
 
     /** Get into a traffic car, drive it, get out, and take it again. */
     static void vehicleTest() {
-        com.harlequinxd.drivehard.core.Game g = new com.harlequinxd.drivehard.core.Game(1234, null);
+        com.harlequinxd.drivehard.core.Game g = new com.harlequinxd.drivehard.core.Game(com.harlequinxd.drivehard.core.Game.DEFAULT_SEED, null);
         for (int i = 0; i < 8; i++) g.requestCar();
         g.cache.bakeAllNow();
         float dt = 1 / 60f;

@@ -14,7 +14,7 @@ public class RenderShot {
         out = new File(a.length > 0 ? a[0] : "build/preview");
         out.mkdirs();
         long t0 = System.nanoTime();
-        Game g = new Game(1234, s -> System.out.println("  " + s));
+        Game g = new Game(com.harlequinxd.drivehard.core.Game.DEFAULT_SEED, s -> System.out.println("  " + s));
         System.out.printf("load %.0f ms, %d textures, %d chunks loaded%n",
                 (System.nanoTime() - t0) / 1e6, g.lib.list.size(), g.city.chunks.loadedCount());
         g.setResolution(520, 240);
@@ -80,9 +80,9 @@ public class RenderShot {
         float[] p = new float[5];
         com.harlequinxd.drivehard.core.road.RoadEdge country = null, freeway = null, highway = null, ramp = null;
         for (var e : n.edges) {
-            if (e.cls == com.harlequinxd.drivehard.core.road.RoadClass.COUNTRY && country == null && e.len > 3000) country = e;
-            if (e.cls == com.harlequinxd.drivehard.core.road.RoadClass.FREEWAY && freeway == null && e.len > 5000) freeway = e;
-            if (e.cls == com.harlequinxd.drivehard.core.road.RoadClass.HIGHWAY && highway == null && e.len > 4000) highway = e;
+            if (e.cls == com.harlequinxd.drivehard.core.road.RoadClass.COUNTRY && country == null && e.len > 1200) country = e;
+            if (e.cls == com.harlequinxd.drivehard.core.road.RoadClass.FREEWAY && freeway == null && e.len > 2000) freeway = e;
+            if (e.cls == com.harlequinxd.drivehard.core.road.RoadClass.HIGHWAY && highway == null && e.len > 1200) highway = e;
             if (e.cls == com.harlequinxd.drivehard.core.road.RoadClass.RAMP && ramp == null) ramp = e;
         }
         var v = n.villages.get(40);

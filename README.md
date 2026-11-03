@@ -22,42 +22,49 @@ software renderer, no engine.
 - **Culling:** per-chunk and per-batch (each building is its own batch) frustum culling,
   per-polygon backface/distance culling, per-sprite frustum culling, and terrain occlusion
   culling (buildings and sprites hidden behind hills are skipped via heightfield ray tests).
-- **Streaming island, 128 x 128 km.** The world is generated in 64 m chunks on a background
-  thread around the player and unloaded when far away (~45 chunks in memory). The city sits
-  on the east coast on a gently rolling plateau ringed by hills; inland the terrain opens into
-  coastal plains, farmland, rolling hill country and mountain ranges up to ~500 m, with
-  beaches all around the coast.
-- **Spline road network.** Every road is an edge of one connected graph holding a Catmull-Rom
-  spline and a smoothed, grade-limited height profile: the city street grid, three freeways
-  out of the city (west across the island, north and south up the coast) with diamond
-  interchanges and one-way slip roads, coastal highways, and ~3,800 km of highways and winding
-  country roads linking ~200 villages and towns. Country roads that cross get a junction; roads that cross
-  a freeway go over it on a bridge with piers. The height map is cut and filled to each road's
-  profile (embankments and cuttings). Roads are splines that **paint** into the ground map:
-  lanes and markings traced along the spline, one junction surface where roads meet (curved
-  kerb returns; square corners in the city), stop lines and zebra crossings at road mouths, and
-  a dusty shoulder fading into the grass. Roads leaving a junction at grazing angles are bent
-  apart so junctions get a proper shape. Farm lanes branch off at T-junctions. Nothing grows
-  on a road. Only bridge decks are real road geometry; freeways have median barriers and
-  guardrails, slip roads taper off the kerb lane, and country roads have utility poles with
-  wires.
+- **Streaming island.** A ~100 km long island (seed 20261103) generated the way real
+  volcanic-arc islands look: a chain of lobes along a bent axis, peninsulas, bays and coves
+  from layered domain warping, mountain ranges in the interior, hill country and coastal plains
+  around them. The coast changes along its length between sandy beaches, rocky shores and
+  cliffs dropping into deep water. The world is generated in 64 m chunks on background
+  threads around the player and dropped when far away (~45 chunks in memory). The city sits on
+  a straight stretch of the east coast.
+- **Spline road network that grows like a real one.** Settlements are placed where people
+  build: flat ground in valleys, on the coastal plain and round bays, spaced out like real
+  towns. A coastal highway rings the island through the coastal towns and the city; freeways
+  run from the city to the most important distant towns with diamond interchanges (and exit
+  towns); highways join the towns across the island; country roads link neighbouring
+  settlements. Every road is routed over the terrain with A*: it follows valleys and the
+  coastal plain, avoids steep grades, cliffs, beaches and towns, and keeps clear of roads already
+  built, meeting them at junctions; roads that cross a freeway bridge over it. The height map
+  is cut and filled to each road's profile. Roads are splines that **paint** into the ground
+  map: lanes and markings, junction surfaces with kerb returns, stop lines and zebra crossings,
+  and a dusty shoulder fading into the grass. Only bridge decks are real road geometry;
+  freeways have median barriers and guardrails, slip roads taper off the kerb lane, and country
+  roads and town streets have utility poles with wires.
 - **Painted ground, in layers:** grass, hill grass, rock, sand, sea and shallows, crop fields
   (with paddy levees), farm yards and car parks, the city's sidewalks, lots, parks, plazas and
   medians, then the roads. Ground types melt into each other along irregular noisy borders,
   and the map is lit from the height map's slopes with soft lighter and darker patches.
-- **Countryside.** Rice paddies (flooded, green or golden by district) with grass levees,
-  cabbage fields, ploughed soil and fallow parcels on the lowland, tea rows on gentle slopes,
-  cedar forest on the mountains. ~4,600 farmsteads along the roads (farmhouse, timber barn,
-  vinyl greenhouse, gravel yard, shelter trees and bamboo).
-- **Named towns and regions.** The island is divided into nine named regions, and ~200
+- **Countryside in paddocks.** Farm districts are divided into paddocks of a few acres on a
+  grid lined up with the nearest road, with hedgerows where districts meet: rice paddocks split
+  into small paddies with levees (flooded, green or golden by area), vegetable strips, ploughed
+  soil, orchards in rows, fallow ground, tea on gentle slopes, and pasture fenced with
+  post-and-wire fences. Farmsteads along the roads (farmhouse, timber barn, vinyl greenhouse,
+  gravel yard, shelter trees and bamboo).
+- **Named towns and regions.** The island is divided into named regions, and ~100
   settlements each get a generated Japanese name (Takahara, Shimo-Kuronuma, ...). Hamlets are
   a junction with scattered houses; villages and towns have their own grid of narrow streets
   with green walking strips, and roads from elsewhere arrive at the edge of the grid. Every
   block has two rows of house lots. Towns have a centre with the town office, post office,
   clinic, a row of shops, a supermarket with its car park and a convenience store, plus a school
   with its sports ground, a shrine with a torii and stone lanterns, and a petrol station.
-  Freeway exits lead to towns built just off the interchange. Arriving somewhere shows its
-  name and region on screen.
+  Freeway exits lead to towns built just off the interchange. Coastal towns have a fishing
+  harbour: a quay, two breakwaters with an entrance, moored boats and net sheds. Arriving
+  somewhere shows its name and region on screen.
+- **Minimap and island map.** A north-up minimap in the corner shows the roads and places
+  around you; tap it to open the island map (shaded relief, every road, names of the city,
+  towns, villages and regions appearing as you zoom), drag to move, pinch to zoom.
 - **Procedural houses.** 250 suburban and 150 farmhouse designs, each a seeded set of
   parameters: plan (rectangle, L with a front or back wing, offset blocks, annex, upper floor
   over part of the ground floor), storeys, roof (gable, hip, hip-and-gable irimoya,

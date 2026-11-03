@@ -30,6 +30,7 @@ public final class GameView extends SurfaceView implements SurfaceHolder.Callbac
     private static final int LOW_H = 240;
 
     private final TouchControls controls;
+    private final MapOverlay mapView;
     private final TouchControls.State input = new TouchControls.State();
     private volatile Game game;
     private volatile String loading = "Starting";
@@ -55,6 +56,7 @@ public final class GameView extends SurfaceView implements SurfaceHolder.Callbac
         getHolder().addCallback(this);
         setFocusable(true);
         controls = new TouchControls(context.getResources().getDisplayMetrics().density);
+        mapView = new MapOverlay(context.getResources().getDisplayMetrics().density);
         blit.setFilterBitmap(false);
         blit.setAntiAlias(false);
         blit.setDither(false);
@@ -65,7 +67,7 @@ public final class GameView extends SurfaceView implements SurfaceHolder.Callbac
         Thread loader = new Thread(() -> {
             try {
                 long t0 = System.currentTimeMillis();
-                Game g = new Game(1234L, s -> loading = s);
+                Game g = new Game(Game.DEFAULT_SEED, s -> loading = s);
                 Log.i(TAG, "loaded in " + (System.currentTimeMillis() - t0) + " ms");
                 game = g;
             } catch (Throwable t) {
@@ -106,6 +108,20 @@ public final class GameView extends SurfaceView implements SurfaceHolder.Callbac
     @SuppressLint("ClickableViewAccessibility")
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        Game g = game;
+        if (mapView.open) {
+            mapView.onTouch(event, g, surfW, surfH);
+            return true;
+        }
+        if (g != null && event.getActionMasked() == MotionEvent.ACTION_DOWN && mapView.hitMini(event.getX(), event.getY(), surfW, surfH)) {
+            // tapping the minimap opens the island map; let go of the controls first
+            MotionEvent cancel = MotionEvent.obtain(event);
+            cancel.setAction(MotionEvent.ACTION_CANCEL);
+            controls.onTouch(cancel);
+            cancel.recycle();
+            mapView.openAt(g, surfW, surfH);
+            return true;
+        }
         controls.onTouch(event);
         return true;
     }
@@ -136,6 +152,22 @@ public final class GameView extends SurfaceView implements SurfaceHolder.Callbac
             float dt = Math.min(0.05f, (now - last) / 1e9f);
             last = now;
 
+            if (mapView.open) {
+                // the world waits while you read the map
+                Canvas c = lockCanvas();
+                if (c != null) {
+                    try {
+                        c.drawBitmap(frame, null, dst, blit);
+                        mapView.drawFull(c, g, surfW, surfH);
+                    } finally {
+                        getHolder().unlockCanvasAndPost(c);
+                    }
+                }
+                last = System.nanoTime();
+                long target = now + FRAME_NS;
+                for (long wait; (wait = target - System.nanoTime()) > 0; ) java.util.concurrent.locks.LockSupport.parkNanos(wait);
+                continue;
+            }
             boolean driving = g.driving();
             carVisible = driving || g.canEnter();
             carAlpha += ((carVisible ? 1f : 0f) - carAlpha) * Math.min(1f, dt * 7f);
@@ -211,6 +243,7 @@ public final class GameView extends SurfaceView implements SurfaceHolder.Callbac
         else drawFootHud(c, d);
         drawCarButton(c, g, d);
         drawPlace(c, g, d);
+        mapView.drawMini(c, g, surfW, surfH);
         // stats
         text.setTextSize(12 * d);
         text.setTextAlign(Paint.Align.LEFT);

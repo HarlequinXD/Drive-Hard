@@ -33,6 +33,8 @@ final class GroundPainter {
         int tex = -1;
         float uv = 2f;
         Countryside.Crop crop = Countryside.Crop.NONE;
+        /** Farmland may reach into this cell (a paddock edge runs through it): resolve per texel. */
+        boolean farm;
     }
 
     private final City city;
@@ -144,6 +146,21 @@ final class GroundPainter {
      * @param grid surfaces of the tile's 8x8 cells plus a one-cell border (10x10)
      */
     Ground.Tile paint(int cx, int cz, Surface[] grid) {
+        // cells next to farmed cells may hold part of a paddock too
+        for (int j = 0; j < 10; j++)
+            for (int i = 0; i < 10; i++) {
+                Surface g = grid[j * 10 + i];
+                if (g == null) continue;
+                boolean f = g.crop != Countryside.Crop.NONE;
+                for (int dj = -1; dj <= 1 && !f; dj++)
+                    for (int di = -1; di <= 1 && !f; di++) {
+                        int ii = i + di, jj = j + dj;
+                        if (ii < 0 || jj < 0 || ii > 9 || jj > 9) continue;
+                        Surface o = grid[jj * 10 + ii];
+                        f = o != null && o.crop != Countryside.Crop.NONE;
+                    }
+                g.farm = f && g.tex != lib.sand && g.tex != lib.rock;
+            }
         float x0 = cx * Ground.TILE, z0 = cz * Ground.TILE;
         int gx0 = cx * Ground.HCELLS, gz0 = cz * Ground.HCELLS;
         // ---- height map (with a border for slopes) and per-sample lighting
@@ -257,12 +274,30 @@ final class GroundPainter {
         return grid[j * 10 + i];
     }
 
+    private final Countryside.Parcel parcel = new Countryside.Parcel();
+    private final java.util.HashMap<Long, Countryside.Crop> paddockUse = new java.util.HashMap<>();
+
+    /** Crop of the paddock under (x, z), cached per tile; NONE if it isn't farmed. */
+    private Countryside.Crop farmAt(float x, float z) {
+        city.countryside.parcel(x, z, parcel);
+        if (parcel.seam) return null;                       // hedgerow
+        Countryside.Crop c = paddockUse.get(parcel.key);
+        if (c == null) { c = city.countryside.use(parcel); paddockUse.put(parcel.key, c); }
+        return c;
+    }
+
     private int groundColor(Surface s, float x, float z) {
-        // paddy levees: grass bunds along the parcel edges
-        if (Countryside.paddy(s.crop)) {
-            float mx = x - (float) Math.floor(x / Countryside.PARCEL_W) * Countryside.PARCEL_W;
-            float mz = z - (float) Math.floor(z / Countryside.PARCEL_D) * Countryside.PARCEL_D;
-            if (mx < 0.7f || mz < 0.7f) return world(lib.grass, 2f, x, z);
+        if (s.farm) {
+            // paddocks lined up with the road, rows lined up with the paddock
+            Countryside.Crop c = farmAt(x, z);
+            if (c == Countryside.Crop.NONE) return s.crop != Countryside.Crop.NONE || s.tex < 0 ? world(lib.grass, 2f, x, z) : world(s.tex, s.uv, x, z);
+            if (c == null) c = Countryside.Crop.NONE;
+            if (c == Countryside.Crop.NONE) return world(lib.hillGrass, 2f, x, z);           // hedgerow between farm districts
+            if (parcel.edge < 1.1f) return world(lib.grass, 2f, x, z);                       // grass margin round the paddock
+            if (Countryside.paddy(c) && parcel.inner < 0.4f) return world(lib.grass, 2f, x, z);   // levees between paddies
+            if ((c == Countryside.Crop.CABBAGE || c == Countryside.Crop.SOIL) && parcel.inner < 0.6f) return world(lib.grass, 2f, x, z);
+            boolean rows = c != Countryside.Crop.PASTURE && c != Countryside.Crop.ORCHARD && c != Countryside.Crop.FALLOW;
+            return world(city.countryside.texture(c), rows ? 8f : 2f, parcel.a, parcel.b);
         }
         return world(s.tex, s.uv, x, z);
     }

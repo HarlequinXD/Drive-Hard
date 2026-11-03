@@ -23,6 +23,10 @@ public final class Town {
     public float x0, z0, x1, z1;
     /** True for towns built at a freeway exit. */
     public boolean exitTown;
+    /** On the coast (fishing towns have a harbour). */
+    public boolean coastal;
+    /** Coastal, but off the coast road (reached by its own road). */
+    public boolean spur;
 
     Town(int id, String name, Region region, Size size, RoadNode centre) {
         this.id = id;

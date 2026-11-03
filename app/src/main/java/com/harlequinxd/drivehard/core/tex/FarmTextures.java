@@ -157,6 +157,18 @@ public final class FarmTextures {
         return m.texture();
     }
 
+    /** Farm fence: a timber post and three wires on a transparent background (64x32, one 4 m span). */
+    public static Texture fence(int seed) {
+        Img m = new Img(64, 32);
+        java.util.Arrays.fill(m.px, 0x00000000);
+        int wood = rgb(120, 96, 70), wire = rgb(150, 150, 146);
+        for (int y = 1; y < 32; y++)
+            for (int x = 0; x < 3; x++) m.px[y * 64 + x] = mix(wood, rgb(80, 64, 48), x == 2 ? 0.5f : 0f);
+        for (int wy : new int[]{4, 13, 22})
+            for (int x = 3; x < 64; x++) m.px[wy * 64 + x] = wire;
+        return m.texture();
+    }
+
     /**
      * Coloured walking strip at the edge of a town street (u 0 at the lane edge line to 1 at the
      * road edge): green-tinted asphalt, as painted along school routes.
