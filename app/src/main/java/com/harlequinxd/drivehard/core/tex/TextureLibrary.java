@@ -32,7 +32,7 @@ public final class TextureLibrary {
     /** Lane textures with their painted edge lines (see FarmTextures.lane). */
     /** City lane textures and junction mouths (stop lines, zebra crossings). */
     public final int laneStreet, laneAvInner, laneAvOuter, mouthStreet, mouthAvenue, mouthCountry, mouthHighway, mouthLane;
-    public final int laneCountry, laneHwInner, laneHwOuter, laneHwMedian, laneFwInner, laneFwOuter, laneRamp;
+    public final int laneCountry, laneHwInner, laneHwOuter, laneHwMedian, laneFwInner, laneFwOuter, laneRamp, laneTown, walkStrip, mouthTown;
     public final int trainSideA, trainSideB, trainFrontA, trainFrontB, track, platform, blockWall;
     public final List<String> shopNames = new ArrayList<>();
     public static final String[] STATIONS = {"MINATO-CHUO", "SAKURAGAOKA", "HIGASHI-HAMA"};
@@ -128,6 +128,90 @@ public final class TextureLibrary {
         mouthHighway = add(FarmTextures.mouth(asp, 16.6f, 3f, 6.8f, false, true));
         mouthLane = add(FarmTextures.mouth(asp, 4.4f, 3f, 2.0f, false, true));
         laneRamp = add(FarmTextures.lane(asp, 3.75f, FarmTextures.LINE_SOLID, FarmTextures.LINE_SOLID));
+        laneTown = add(FarmTextures.lane(asp, 2.75f, FarmTextures.LINE_NONE, FarmTextures.LINE_SOLID));
+        walkStrip = add(FarmTextures.walkStrip(asp, 1.75f));
+        mouthTown = add(FarmTextures.mouth(asp, 9f, 3f, 2.75f, false, true));
+        houseTextures((int) seed);
+    }
+
+    // ------------------------------------------------------------------ house generator parts
+
+    public int[] houseMat, houseWin, houseDoor, houseRoof;
+    public HouseTextures.Material[] houseMatKind;
+    public HouseTextures.Window[] houseWinKind;
+    public HouseTextures.Door[] houseDoorKind;
+    public HouseTextures.Roof[] houseRoofKind;
+    public int signTownOffice, signPost, signSuper, signSchool, signClinic, signGas, schoolWall, superWall, canopy, field;
+
+    private void houseTextures(int seed) {
+        HouseTextures.Material S = HouseTextures.Material.SIDING, U = HouseTextures.Material.STUCCO, B = HouseTextures.Material.BOARDS,
+                T = HouseTextures.Material.TILE, K = HouseTextures.Material.BRICK, P = HouseTextures.Material.PANEL,
+                L = HouseTextures.Material.PLASTER, C = HouseTextures.Material.CHARRED;
+        Object[][] mats = {
+                {S, 0xEEEAE0}, {S, 0xE2D8C6}, {S, 0xD0CCC4}, {S, 0xB4B8B0}, {S, 0x8E9AA6}, {S, 0xC8B49A}, {S, 0x7A6A5A}, {S, 0xA8B4A0},
+                {S, 0x5E6670}, {S, 0xF2EEE6},
+                {U, 0xF0ECE2}, {U, 0xE6DCC8}, {U, 0xD8CCB8}, {U, 0xC8C0B0}, {U, 0xE8E0D8}, {U, 0xBCB4A8},
+                {B, 0x9A7452}, {B, 0x6A4E38}, {B, 0xB89670},
+                {T, 0xE8E2D6}, {T, 0xC8B8A4}, {T, 0x9A8A7A}, {T, 0xD8D8D2},
+                {K, 0xA06048}, {K, 0x8A5A44}, {K, 0xC09078},
+                {P, 0xDADAD4}, {P, 0x9AA0A4}, {P, 0x6A6E72}, {P, 0xE6E0D2},
+                {L, 0xF2F0E8}, {L, 0xE8E2D2},
+                {C, 0x2A2420}};
+        houseMat = new int[mats.length];
+        houseMatKind = new HouseTextures.Material[mats.length];
+        for (int i = 0; i < mats.length; i++) {
+            houseMatKind[i] = (HouseTextures.Material) mats[i][0];
+            houseMat[i] = add(HouseTextures.material(houseMatKind[i], (Integer) mats[i][1], seed + 3000 + i));
+        }
+        int[] frames = {0xB8BCC0, 0x5A4A3E, 0xEEEEEA, 0x2E2E30};
+        java.util.List<Integer> wins = new java.util.ArrayList<>();
+        java.util.List<HouseTextures.Window> winKinds = new java.util.ArrayList<>();
+        for (HouseTextures.Window w : HouseTextures.Window.values())
+            for (int f = 0; f < frames.length; f++) {
+                if ((w == HouseTextures.Window.LATTICE || w == HouseTextures.Window.SHOJI) && f != 1 && f != 3) continue;
+                wins.add(add(HouseTextures.window(w, w == HouseTextures.Window.LATTICE ? 0x6A4A2E : frames[f], seed + 3100 + wins.size())));
+                winKinds.add(w);
+            }
+        houseWin = new int[wins.size()];
+        houseWinKind = winKinds.toArray(new HouseTextures.Window[0]);
+        for (int i = 0; i < houseWin.length; i++) houseWin[i] = wins.get(i);
+        Object[][] doors = {
+                {HouseTextures.Door.WOOD, 0x8A6440}, {HouseTextures.Door.WOOD, 0x5E4430}, {HouseTextures.Door.WOOD, 0xA8845E},
+                {HouseTextures.Door.METAL, 0x6E7276}, {HouseTextures.Door.METAL, 0xC8C6C0}, {HouseTextures.Door.METAL, 0x3A4A5A},
+                {HouseTextures.Door.DARK, 0x2E2824}, {HouseTextures.Door.DARK, 0x4A3A30},
+                {HouseTextures.Door.SLIDING_LATTICE, 0x6A4A2E}, {HouseTextures.Door.SLIDING_LATTICE, 0x3A2A20},
+                {HouseTextures.Door.SLIDING_GLASS, 0xB8BCC0}, {HouseTextures.Door.SLIDING_GLASS, 0x5A4A3E},
+                {HouseTextures.Door.GARAGE, 0xC8C8C2}, {HouseTextures.Door.GARAGE, 0x8A8E92}, {HouseTextures.Door.GARAGE, 0x6A5A4A}};
+        houseDoor = new int[doors.length];
+        houseDoorKind = new HouseTextures.Door[doors.length];
+        for (int i = 0; i < doors.length; i++) {
+            houseDoorKind[i] = (HouseTextures.Door) doors[i][0];
+            houseDoor[i] = add(HouseTextures.door(houseDoorKind[i], (Integer) doors[i][1], seed + 3200 + i));
+        }
+        Object[][] roofsAll = {
+                {HouseTextures.Roof.KAWARA, 0x6A6E72}, {HouseTextures.Roof.KAWARA, 0x2E3034}, {HouseTextures.Roof.KAWARA, 0x3A4A6A},
+                {HouseTextures.Roof.KAWARA, 0x6A4A3A}, {HouseTextures.Roof.KAWARA, 0x8A8E90}, {HouseTextures.Roof.KAWARA, 0x4A5660},
+                {HouseTextures.Roof.KAWARA, 0x8A3A2A},
+                {HouseTextures.Roof.METAL, 0x4A3A30}, {HouseTextures.Roof.METAL, 0x2E3A4E}, {HouseTextures.Roof.METAL, 0x3A5A44},
+                {HouseTextures.Roof.METAL, 0x6A6E72}, {HouseTextures.Roof.METAL, 0x8A2E26}, {HouseTextures.Roof.METAL, 0x2A2A2C},
+                {HouseTextures.Roof.SLATE, 0x2E3034}, {HouseTextures.Roof.SLATE, 0x5A5E62}, {HouseTextures.Roof.SLATE, 0x5A4638},
+                {HouseTextures.Roof.SLATE, 0x46525E}, {HouseTextures.Roof.COPPER, 0x5A8A78}};
+        houseRoof = new int[roofsAll.length];
+        houseRoofKind = new HouseTextures.Roof[roofsAll.length];
+        for (int i = 0; i < roofsAll.length; i++) {
+            houseRoofKind[i] = (HouseTextures.Roof) roofsAll[i][0];
+            houseRoof[i] = add(HouseTextures.roof(houseRoofKind[i], (Integer) roofsAll[i][1], seed + 3300 + i));
+        }
+        signTownOffice = add(TownTextures.sign("TOWN OFFICE", 0xF4F2EC, 0x1A2A4A, seed + 3400));
+        signPost = add(TownTextures.postSign(seed + 3401));
+        signSuper = add(TownTextures.sign("SUPERMARKET", 0xD8302A, 0xFFFFFF, seed + 3402));
+        signSchool = add(TownTextures.sign("SCHOOL", 0xF4F2EC, 0x2A4A2A, seed + 3403));
+        signClinic = add(TownTextures.sign("CLINIC", 0xFFFFFF, 0x2A7A4A, seed + 3404));
+        signGas = add(TownTextures.sign("GAS", 0x1A5AB0, 0xFFFFFF, seed + 3405));
+        schoolWall = add(TownTextures.schoolFacade(seed + 3406));
+        superWall = add(TownTextures.superFront(seed + 3407));
+        canopy = add(TownTextures.canopy(seed + 3408));
+        field = add(TownTextures.field(seed + 3409));
     }
 
     public int add(Texture t) {

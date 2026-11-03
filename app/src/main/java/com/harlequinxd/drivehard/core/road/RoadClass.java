@@ -11,6 +11,8 @@ public enum RoadClass {
     /** Narrow farm access lane (two-way, unmarked). */
     LANE(     1, 1.8f, 0f,    0.4f,  8f, 0, false,  30f, 5f, 0.14f),
     COUNTRY(  1, 3.0f, 0.1f,  0.8f, 16f, 2, false, 90f, 10f, 0.09f),
+    /** Village and town streets: two narrow lanes, no centre line, coloured walking strips. */
+    TOWN(     1, 2.75f, 0f,   1.75f, 10f, 1, false, 24f, 4f, 0.12f),
     HIGHWAY(  2, 3.25f, 0.3f, 1.5f, 21f, 3, false, 170f, 10f, 0.07f),
     FREEWAY(  2, 3.5f, 1.4f,  2.5f, 27f, 5, false, 340f, 10f, 0.05f),
     RAMP(     1, 3.75f, 0f,   1.5f, 15f, 4, false, 70f, 5f, 0.06f);

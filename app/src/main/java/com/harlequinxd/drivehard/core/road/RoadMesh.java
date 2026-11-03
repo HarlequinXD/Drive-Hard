@@ -165,6 +165,8 @@ public final class RoadMesh {
                         {4.9f, 8.4f, lib.laneFwOuter, 0}, {8.4f, hw, -1, 0}};
             case LANE:
                 return new float[][]{{0f, hw, -1, 1}};
+            case TOWN:
+                return new float[][]{{0f, 2.75f, lib.laneTown, 0}, {2.75f, hw, lib.walkStrip, 0}};
             default:   // RAMP
                 return new float[][]{{0f, 1.875f, lib.laneRamp, 1}, {1.875f, hw, -1, 0}};
         }
@@ -240,7 +242,7 @@ public final class RoadMesh {
                     wallStrip(gb, a, b, -hw + 0.3f, 0.35f, 0.8f, lib.guardrail, 1f, Geo.FLAG_DETAIL);
                 }
                 if (bridge) bridgePiece(ch, gb, a, b, hw);
-                if (cls == RoadClass.COUNTRY && !bridge) poles(ch, gb, a, b, hw);
+                if ((cls == RoadClass.COUNTRY || cls == RoadClass.TOWN) && !bridge) poles(ch, gb, a, b, hw);
             }
         }
         // cut-and-fill verges run the whole piece (through junction areas too, under the junction surface)

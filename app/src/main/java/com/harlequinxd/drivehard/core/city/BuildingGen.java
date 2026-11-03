@@ -18,7 +18,7 @@ import static com.harlequinxd.drivehard.core.render.SoftRenderer.L_OBJECT;
 final class BuildingGen {
     static final int N = 0, S = 1, W = 2, E = 3;
     enum Type { TOWER, DEPT_STORE, ZAKKYO, MANSION, SHOPHOUSE, KONBINI, PACHINKO, HOUSE, APAATO, FIRE_STATION, KOBAN, WAREHOUSE,
-        FARMHOUSE, SHED, GREENHOUSE }
+        FARMHOUSE, SHED, GREENHOUSE, TOWN_HALL, POST_OFFICE, CLINIC, SUPERMARKET, SCHOOL, SHRINE_HALL }
 
     private final City city;
     private final TextureLibrary lib;
@@ -56,13 +56,19 @@ final class BuildingGen {
             case SHOPHOUSE: block(x0, z0, x1, z1, base, street, shops, shopSet, Kind.SHOPHOUSE, Kind.BLANK, 2 + r.nextInt(3), 3.0f, false, r.nextInt(2)); break;
             case KONBINI: block(x0, z0, x1, z1, base, street, shops, shopSet, Kind.BLANK, Kind.BLANK, 1, 3.6f, false, 0); break;
             case PACHINKO: block(x0, z0, x1, z1, base, street, shops, shopSet, Kind.ZAKKYO, Kind.BLANK, 2, 4.0f, true, 3); break;
-            case HOUSE: house(x0, z0, x1, z1, base, street); break;
+            case HOUSE: houseDesign(false, r.nextInt(HouseGen.SUBURB_DESIGNS), x0, z0, x1, z1, base, street, false); break;
             case APAATO: block(x0, z0, x1, z1, base, street, new boolean[4], shopSet, Kind.CORRIDOR, Kind.HOUSE, 2, 2.9f, false, 0); break;
             case FIRE_STATION: fireStation(x0, z0, x1, z1, base, street); break;
             case KOBAN: koban(x0, z0, x1, z1, base, street); break;
-            case FARMHOUSE: farmhouse(x0, z0, x1, z1, base, street); break;
+            case FARMHOUSE: houseDesign(true, r.nextInt(HouseGen.FARM_DESIGNS), x0, z0, x1, z1, base, street, false); break;
             case SHED: shed(x0, z0, x1, z1, base); break;
             case GREENHOUSE: greenhouse(x0, z0, x1, z1, base); break;
+            case TOWN_HALL: block(x0, z0, x1, z1, base, street, street, lib.lobbies, Kind.OFFICE_GRID, Kind.BLANK, 3, 3.6f, false, 0); break;
+            case POST_OFFICE: block(x0, z0, x1, z1, base, street, street, shopSet, Kind.BLANK, Kind.BLANK, 2, 3.2f, false, 0); break;
+            case CLINIC: block(x0, z0, x1, z1, base, street, new boolean[4], shopSet, Kind.SHOPHOUSE, Kind.BLANK, 2, 3.2f, false, 0); break;
+            case SUPERMARKET: block(x0, z0, x1, z1, base, street, street, shopSet, Kind.BLANK, Kind.BLANK, 1, 3.6f, false, 0); break;
+            case SCHOOL: school(x0, z0, x1, z1, base); break;
+            case SHRINE_HALL: shrineHall(x0, z0, x1, z1, base); break;
             default: block(x0, z0, x1, z1, base, street, new boolean[4], shopSet, Kind.WAREHOUSE, Kind.WAREHOUSE, 1 + r.nextInt(2), 5f, false, 0); break;
         }
         gb.end();
@@ -243,6 +249,29 @@ final class BuildingGen {
 
     // ------------------------------------------------------------------ houses
 
+    /** A house from the procedural generator, front toward the first street side. */
+    private void houseDesign(boolean farm, int design, float x0, float z0, float x1, float z1, float base, boolean[] street, boolean lot) {
+        int face = N;
+        for (int s = 0; s < 4; s++) if (street[s]) { face = s; break; }
+        new HouseGen(lib, gb, ch, r).build(HouseGen.design(lib, farm, design), x0, z0, x1, z1, face, base, lot);
+    }
+
+    /** A house design on a whole lot (garden, carport, fence), for village and town streets. */
+    void lotHouse(boolean farm, int design, float x0, float z0, float x1, float z1, int face) {
+        gb.begin(true);
+        float base = foundationLot(x0, z0, x1, z1);
+        new HouseGen(lib, gb, ch, r).build(HouseGen.design(lib, farm, design), x0, z0, x1, z1, face, base, true);
+        gb.end();
+    }
+
+    /** Base height for a lot: its highest corner (the house stands on a low plinth). */
+    private float foundationLot(float x0, float z0, float x1, float z1) {
+        Terrain t = city.terrain;
+        float base = Math.max(Math.max(t.height(x0, z0), t.height(x1, z0)), Math.max(t.height(x0, z1), t.height(x1, z1)));
+        footMin = Math.min(Math.min(t.height(x0, z0), t.height(x1, z0)), Math.min(t.height(x0, z1), t.height(x1, z1))) - 0.3f;
+        return base + 0.15f;
+    }
+
     private void house(float x0, float z0, float x1, float z1, float base, boolean[] street) {
         boolean wood = r.nextInt(5) == 0;
         int wall = pick(wood ? Kind.HOUSE_WOOD : Kind.HOUSE);
@@ -385,6 +414,32 @@ final class BuildingGen {
     }
 
     // ------------------------------------------------------------------ civic
+
+    /** Three storeys of classrooms with long window bands all round, flat roof. */
+    private void school(float x0, float z0, float x1, float z1, float base) {
+        float top = base + 3 * 3.6f;
+        for (int s = 0; s < 4; s++)
+            facadeSide(edge(s, x0, z0, x1, z1), base, 0f, top, 3.6f, lib.schoolWall, lib.schoolWall, 0.8f, null);
+        roof(x0, z0, x1, z1, top, 0.8f, lib.concrete);
+        rooftop(x0, z0, x1, z1, top);
+        ch.boxes.add(new Box(x0, footMin, z0, x1, top + 0.8f, z1));
+    }
+
+    /** Shrine hall: dark timber on a raised floor under a deep copper or tiled roof. */
+    private void shrineHall(float x0, float z0, float x1, float z1, float base) {
+        int wall = pick(Kind.HOUSE_WOOD);
+        gb.box(x0 - 0.6f, base - 0.4f, z0 - 0.6f, x1 + 0.6f, base + 0.6f, z1 + 0.6f, lib.concrete, lib.planter, 0.5f, 0.5f, L_OBJECT, 0f, 0);
+        float floor = base + 0.6f, top = floor + 3.2f;
+        for (int s = 0; s < 4; s++) {
+            float[] e = edge(s, x0, z0, x1, z1);
+            gb.wallGrid(e[0], e[1], e[2], e[3], floor, top, wall, 0.5f, 1f / 3.2f, 8f, 3.2f, L_OBJECT, 0f, true);
+        }
+        int roofTex = lib.houseRoof[lib.houseRoof.length - 1];
+        for (int i = 0; i < lib.houseRoofKind.length; i++)
+            if (lib.houseRoofKind[i] == com.harlequinxd.drivehard.core.tex.HouseTextures.Roof.KAWARA && r.nextBoolean()) { roofTex = lib.houseRoof[i]; break; }
+        gable(x0 - 0.3f, z0 - 0.3f, x1 + 0.3f, z1 + 0.3f, top, wall, roofTex);
+        ch.boxes.add(new Box(x0 - 0.6f, footMin, z0 - 0.6f, x1 + 0.6f, top + 2f, z1 + 0.6f));
+    }
 
     private void fireStation(float x0, float z0, float x1, float z1, float base, boolean[] street) {
         int fac = pick(Kind.FIRE);

@@ -416,6 +416,7 @@ final class GroundPainter {
             case AVENUE: return lib.mouthAvenue;
             case HIGHWAY: return lib.mouthHighway;
             case LANE: return lib.mouthLane;
+            case TOWN: return lib.mouthTown;
             default: return lib.mouthCountry;
         }
     }
@@ -438,6 +439,8 @@ final class GroundPainter {
                         {4.9f, 8.4f, lib.laneFwOuter, 0}, {8.4f, hw, -1, 0}};
             case LANE:
                 return new float[][]{{0f, hw, -1, 1}};
+            case TOWN:
+                return new float[][]{{0f, 2.75f, lib.laneTown, 0}, {2.75f, hw, lib.walkStrip, 0}};
             default:   // RAMP
                 return new float[][]{{0f, 1.875f, lib.laneRamp, 1}, {1.875f, hw, -1, 0}};
         }

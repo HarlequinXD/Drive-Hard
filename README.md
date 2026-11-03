@@ -31,7 +31,7 @@ software renderer, no engine.
   spline and a smoothed, grade-limited height profile: the city street grid, three freeways
   out of the city (west across the island, north and south up the coast) with diamond
   interchanges and one-way slip roads, coastal highways, and ~3,800 km of highways and winding
-  country roads linking ~180 villages. Country roads that cross get a junction; roads that cross
+  country roads linking ~200 villages and towns. Country roads that cross get a junction; roads that cross
   a freeway go over it on a bridge with piers. The height map is cut and filled to each road's
   profile (embankments and cuttings). Roads are splines that **paint** into the ground map:
   lanes and markings traced along the spline, one junction surface where roads meet (curved
@@ -47,9 +47,25 @@ software renderer, no engine.
   and the map is lit from the height map's slopes with soft lighter and darker patches.
 - **Countryside.** Rice paddies (flooded, green or golden by district) with grass levees,
   cabbage fields, ploughed soil and fallow parcels on the lowland, tea rows on gentle slopes,
-  cedar forest on the mountains. ~2,700 farmsteads along the roads (old farmhouse, timber barn,
-  vinyl greenhouse, gravel yard and driveway, shelter trees and bamboo) and village clusters of
-  houses, small apartments and a convenience store at every village junction.
+  cedar forest on the mountains. ~4,600 farmsteads along the roads (farmhouse, timber barn,
+  vinyl greenhouse, gravel yard, shelter trees and bamboo).
+- **Named towns and regions.** The island is divided into nine named regions, and ~200
+  settlements each get a generated Japanese name (Takahara, Shimo-Kuronuma, ...). Hamlets are
+  a junction with scattered houses; villages and towns have their own grid of narrow streets
+  with green walking strips, and roads from elsewhere arrive at the edge of the grid. Every
+  block has two rows of house lots. Towns have a centre with the town office, post office,
+  clinic, a row of shops, a supermarket with its car park and a convenience store, plus a school
+  with its sports ground, a shrine with a torii and stone lanterns, and a petrol station.
+  Freeway exits lead to towns built just off the interchange. Arriving somewhere shows its
+  name and region on screen.
+- **Procedural houses.** 250 suburban and 150 farmhouse designs, each a seeded set of
+  parameters: plan (rectangle, L with a front or back wing, offset blocks, annex, upper floor
+  over part of the ground floor), storeys, roof (gable, hip, hip-and-gable irimoya,
+  mono-pitch, flat with parapet), pitch and overhang, one or two-tone walls (siding, stucco,
+  boards, tile, brick, panels, plaster, charred cedar), roof covering (kawara, metal, slate,
+  copper), window and door styles, balcony, porch canopy, skirt roof, carport and front fence.
+  Walls are built around their openings (no decals, no z-fighting) and doors sit in a recess;
+  gable ends are plain wall material.
 - **City (modern Japan):** street grid following the terrain, vehicles keep left, signals on
   the far-left corner, crosswalks, curbs, sidewalks. Districts: a central business district
   of office towers and department stores around the main station, an entertainment quarter of
@@ -107,10 +123,10 @@ app/src/main/java/com/harlequinxd/drivehard/
     Game.java  world + player + camera + renderer
     render/    SoftRenderer (Mode 7 ground, perspective-correct polygons, sprite blits), Ground (map tiles), Geo, Texture
     city/      City (layout + chunk generator), Terrain, ChunkManager (streaming), Chunk,
-               BuildingGen, Railway (viaduct, stations, trains), Countryside (fields, farms,
-               villages), GroundPainter (paints the map tiles), GeoBuilder, TrafficLights
+               BuildingGen, HouseGen (procedural houses), TownGen (town-centre buildings),
+               Railway (viaduct, stations, trains), Countryside (fields, farms, town lots), GroundPainter (paints the map tiles), GeoBuilder, TrafficLights
     road/      RoadNetwork (spline road graph, terrain shaping, spatial index), RoadEdge,
-               RoadNode, RoadClass, RoadMesh (bridge decks, barriers, poles)
+               RoadNode, RoadClass, Town + PlaceNames (named towns and regions), RoadMesh (bridge decks, barriers, poles)
     tex/       TextureLibrary, JpTextures (shops, facades, signs), Kanji, PixelFont, Noise, Img
     model/     CharacterSpec, CharacterModel, Animations, Pose, PropModels, Flora, Cars, Loft
     sim/       Traffic (car AI), Pedestrians

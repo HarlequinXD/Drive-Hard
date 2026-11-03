@@ -210,12 +210,53 @@ public final class GameView extends SurfaceView implements SurfaceHolder.Callbac
         if (input.driving) drawDriveHud(c, g, d);
         else drawFootHud(c, d);
         drawCarButton(c, g, d);
+        drawPlace(c, g, d);
         // stats
         text.setTextSize(12 * d);
         text.setTextAlign(Paint.Align.LEFT);
         c.drawText(String.format(Locale.US, "DRIVE HARD  %.0f fps  %.1f ms  %dx%d  %d tris  %s",
                 fps, frameMs, g.renderer.W, g.renderer.H, g.renderer.statPrims, g.mode.name()),
                 10 * d, 18 * d, text);
+    }
+
+    // ------------------------------------------------------------------ place names
+
+    private String shownPlace = "", shownRegion = "";
+    private long placeSince;
+
+    /** Town and region name banner when you arrive somewhere new; fades out after a few seconds. */
+    private void drawPlace(Canvas c, Game g, float d) {
+        String place = g.placeName, region = g.regionName;
+        long now = System.nanoTime();
+        boolean newPlace = !place.isEmpty() && !place.equals(shownPlace);
+        boolean newRegion = !region.equals(shownRegion);
+        if (newPlace || newRegion) {
+            if (newPlace || shownRegion.isEmpty() || place.isEmpty()) placeSince = now;
+            if (!place.isEmpty()) shownPlace = place;
+            shownRegion = region;
+        }
+        if (place.isEmpty() && !newRegion) shownPlace = "";
+        float t = (now - placeSince) / 1e9f;
+        if (t > 5f) return;
+        float a = t < 0.5f ? t / 0.5f : (t > 4f ? 5f - t : 1f);
+        int alpha = Math.max(0, Math.min(255, (int) (a * 255)));
+        float cx = getWidth() * 0.5f, y = 64 * d;
+        text.setTextAlign(Paint.Align.CENTER);
+        String big = shownPlace.isEmpty() ? shownRegion : shownPlace.toUpperCase(Locale.US);
+        String small = shownPlace.isEmpty() ? "" : shownRegion;
+        text.setTextSize(26 * d);
+        text.setColor(alpha << 24);
+        c.drawText(big, cx + 2 * d, y + 2 * d, text);
+        text.setColor(alpha << 24 | 0xFFFFFF);
+        c.drawText(big, cx, y, text);
+        if (!small.isEmpty()) {
+            text.setTextSize(14 * d);
+            text.setColor(alpha << 24);
+            c.drawText(small, cx + 1.5f * d, y + 24 * d + 1.5f * d, text);
+            text.setColor(alpha << 24 | 0xFFFFFF);
+            c.drawText(small, cx, y + 24 * d, text);
+        }
+        text.setColor(0xFFFFFFFF);
     }
 
     private void button(Canvas c, float x, float y, float r, boolean held, int alpha) {

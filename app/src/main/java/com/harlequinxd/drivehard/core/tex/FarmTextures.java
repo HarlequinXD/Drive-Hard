@@ -157,6 +157,23 @@ public final class FarmTextures {
         return m.texture();
     }
 
+    /**
+     * Coloured walking strip at the edge of a town street (u 0 at the lane edge line to 1 at the
+     * road edge): green-tinted asphalt, as painted along school routes.
+     */
+    public static Texture walkStrip(Texture asphalt, float width) {
+        int w = 32, h = 64;
+        Img m = new Img(w, h);
+        int green = rgb(78, 128, 92);
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                int sx = (int) (x * width / w / 2f * asphalt.w) & (asphalt.w - 1);
+                int sy = (int) (y * 5f / h / 2f * asphalt.h) & (asphalt.h - 1);
+                m.px[y * w + x] = mix(green, asphalt.px[sy * asphalt.w + sx], 0.55f);
+            }
+        return m.texture();
+    }
+
     private static void paint(Img m, int x0, int wpx, int style) {
         if (style == LINE_NONE) return;
         int c = style == LINE_YELLOW ? rgb(226, 178, 58) : rgb(236, 236, 228);

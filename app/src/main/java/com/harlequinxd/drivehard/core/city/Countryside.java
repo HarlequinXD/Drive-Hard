@@ -41,13 +41,16 @@ public final class Countryside {
     private final TextureLibrary lib;
     private final int seed;
 
-    static final int FARM = 0, HOUSE = 1, APAATO = 2, KONBINI = 3;
+    static final int FARM = 0, HOUSE = 1, APAATO = 2, KONBINI = 3, LOT = 4, TOWN_HALL = 5, POST = 6, CLINIC = 7, SHOP = 8,
+            SUPERMARKET = 9, SCHOOL = 10, SHRINE = 11, GAS = 12, TOWN_KONBINI = 13;
 
     /** A building site: footprint, kind, the side facing the road (0=N,1=S,2=W,3=E), driveway end. */
     static final class Site {
         float x0, z0, x1, z1;
-        int kind, face, seed;
+        int kind, face, seed, design;
         float rx, rz;   // driveway end at the road edge
+        /** Painted ground areas {x0, z0, x1, z1, texture}. */
+        List<float[]> ground;
     }
 
     private final HashMap<Long, List<Site>> sites = new HashMap<>();
@@ -84,6 +87,7 @@ public final class Countryside {
     /** Crop of the 8 m cell at (cx,cz) (its min corner), given the cell's average height and slope. */
     public Crop crop(float cx, float cz, float h, float slope) {
         if (!farmland(cx + 4f, cz + 4f, h)) return Crop.NONE;
+        if (inTown(cx + 4f, cz + 4f, 20f)) return Crop.NONE;
         int px = (int) Math.floor(cx / PARCEL_W), pz = (int) Math.floor(cz / PARCEL_D);
         if (slope > 0.16f) return Crop.NONE;
         if (slope > 0.07f) return Noise.rnd(px, pz, seed + 960) < 0.6f ? Crop.TEA : Crop.FALLOW;
@@ -172,8 +176,12 @@ public final class Countryside {
             add(st);
             farmCount++;
         }
-        // villages: houses around the junction
-        for (RoadNode v : roads.villages) {
+        // villages and towns with street grids: lots along every street, a centre with civic buildings
+        for (com.harlequinxd.drivehard.core.road.Town t : roads.towns) if (t.grid != null) townLots(t, rnd);
+        // hamlets: houses around the junction
+        for (com.harlequinxd.drivehard.core.road.Town t : roads.towns) {
+            if (t.grid != null) continue;
+            RoadNode v = t.centre;
             int houses = 9 + rnd.nextInt(8);
             boolean shop = false;
             for (int k = 0; k < houses * 3 && houses > 0; k++) {
@@ -199,6 +207,186 @@ public final class Countryside {
         }
     }
 
+    // ------------------------------------------------------------------ towns
+
+    /** True inside the built-up area of a village or town (no fields or forest there). */
+    public boolean inTown(float x, float z, float margin) {
+        com.harlequinxd.drivehard.core.road.Town t = roads.townAt(x, z, margin);
+        return t != null && t.grid != null;
+    }
+
+    /**
+     * Lots of a village or town. Every block between four streets has two rows of lots, one facing
+     * the street on each long side. Blocks around the centre hold the town office, post office,
+     * clinic, a row of shops, the supermarket and a convenience store; a school with its sports
+     * ground, a shrine and a petrol station take blocks further out. Everything else is houses
+     * (with a few small apartment buildings), each picking one of the house designs.
+     */
+    private void townLots(com.harlequinxd.drivehard.core.road.Town t, Random rnd) {
+        int nbx = t.gx.length - 1, nbz = t.gz.length - 1;
+        boolean town = t.size == com.harlequinxd.drivehard.core.road.Town.Size.TOWN;
+        int ci = (t.gx.length - 1) / 2, cj = (t.gz.length - 1) / 2;   // centre node: blocks ci-1..ci, cj-1..cj touch it
+        float edge = RoadClass.TOWN.halfWidth() + 0.6f;
+        for (int bj = 0; bj < nbz; bj++)
+            for (int bi = 0; bi < nbx; bi++) {
+                float bx0 = t.gx[bi] + edge, bx1 = t.gx[bi + 1] - edge, bz0 = t.gz[bj] + edge, bz1 = t.gz[bj + 1] - edge;
+                float rowD = (bz1 - bz0) * 0.5f;
+                String role = blockRole(town, bi, bj, ci, cj, nbx, nbz, t.id);
+                switch (role) {
+                    case "civic":
+                        civic(TOWN_HALL, bx0, bz0, bx1, bz0 + rowD, 0, lib.concrete, rnd);
+                        civic(POST, bx0, bz1 - rowD, (bx0 + bx1) * 0.5f, bz1, 1, lib.concrete, rnd);
+                        civic(CLINIC, (bx0 + bx1) * 0.5f, bz1 - rowD, bx1, bz1, 1, lib.concrete, rnd);
+                        break;
+                    case "shops":
+                        shopRow(bx0, bz0, bx1, bz0 + rowD, 0, rnd);
+                        shopRow(bx0, bz1 - rowD, bx1, bz1, 1, rnd);
+                        break;
+                    case "market":
+                        if (!civic(SUPERMARKET, bx0, bz0, bx1, bz1, 0, lib.parking, rnd)) {
+                            houseRow(bx0, bz0, bx1, bz0 + rowD, 0, rnd, true);
+                            houseRow(bx0, bz1 - rowD, bx1, bz1, 1, rnd, true);
+                        }
+                        break;
+                    case "school":
+                        if (!civic(SCHOOL, bx0, bz0, bx1, bz1, 0, lib.field, rnd)) {
+                            houseRow(bx0, bz0, bx1, bz0 + rowD, 0, rnd, true);
+                            houseRow(bx0, bz1 - rowD, bx1, bz1, 1, rnd, true);
+                        }
+                        break;
+                    case "shrine":
+                        if (!civic(SHRINE, bx0, bz0, bx1, bz1, 1, lib.gravel, rnd)) {
+                            houseRow(bx0, bz0, bx1, bz0 + rowD, 0, rnd, true);
+                            houseRow(bx0, bz1 - rowD, bx1, bz1, 1, rnd, true);
+                        }
+                        break;
+                    case "village_centre":
+                        shopRow(bx0, bz0, bx1 - 14f, bz0 + rowD, 0, rnd);
+                        civic(POST, bx1 - 14f, bz0, bx1, bz0 + rowD, 0, lib.concrete, rnd);
+                        houseRow(bx0, bz1 - rowD, bx1, bz1, 1, rnd, false);
+                        break;
+                    default:
+                        boolean gas = role.equals("gas");
+                        boolean kon = role.equals("konbini");
+                        float cut = bx0;
+                        if (gas) { civic(GAS, bx0, bz0, bx0 + 26f, bz0 + rowD, 0, lib.concrete, rnd); cut = bx0 + 26f; }
+                        if (kon) { civic(TOWN_KONBINI, bx0, bz0, bx0 + 22f, bz0 + rowD, 0, lib.parking, rnd); cut = bx0 + 22f; }
+                        houseRow(cut, bz0, bx1, bz0 + rowD, 0, rnd, true);
+                        houseRow(bx0, bz1 - rowD, bx1, bz1, 1, rnd, true);
+                        break;
+                }
+            }
+    }
+
+    private static String blockRole(boolean town, int bi, int bj, int ci, int cj, int nbx, int nbz, int id) {
+        if (town) {
+            if (bi == ci - 1 && bj == cj - 1) return "civic";
+            if (bi == ci && bj == cj - 1) return "shops";
+            if (bi == ci - 1 && bj == cj) return "market";
+            if (bi == ci && bj == cj) return "konbini";
+            int corner = id & 3;
+            int sx = (corner & 1) == 0 ? 0 : nbx - 1, sz = (corner & 2) == 0 ? 0 : nbz - 1;
+            if (bi == sx && bj == sz) return "school";
+            if (bi == nbx - 1 - sx && bj == nbz - 1 - sz) return "shrine";
+            if (bi == nbx - 1 - sx && bj == sz) return "gas";
+            return "houses";
+        }
+        if (bi == 0 && bj == 0) return "village_centre";
+        if (bi == nbx - 1 && bj == nbz - 1) return "shrine";
+        if (bi == nbx - 1 && bj == 0) return "konbini";
+        return "houses";
+    }
+
+    /** Lots of 11-15 m along a row; each gets a house design (sometimes a small apartment block). */
+    private void houseRow(float x0, float z0, float x1, float z1, int face, Random rnd, boolean apartments) {
+        float x = x0;
+        while (x1 - x > 9.5f) {
+            float w = 11f + rnd.nextFloat() * 4f;
+            if (x1 - x - w < 9.5f) w = x1 - x;
+            float lx0 = x, lx1 = x + w;
+            x += w;
+            if (!lotClear(lx0, z0, lx1, z1)) continue;
+            Site st = new Site();
+            st.x0 = lx0; st.z0 = z0; st.x1 = lx1; st.z1 = z1;
+            st.face = face;
+            st.seed = rnd.nextInt();
+            st.rx = Float.NaN;
+            if (apartments && rnd.nextFloat() < 0.07f && w > 12f) {
+                st.kind = APAATO;
+                st.ground = new ArrayList<>();
+                st.ground.add(new float[]{lx0, z0, lx1, z1, lib.parking});
+            } else {
+                st.kind = LOT;
+                st.design = rnd.nextInt(HouseGen.SUBURB_DESIGNS);
+                st.ground = lotGround(st);
+            }
+            add(st);
+        }
+    }
+
+    /** Shops two or three storeys tall, 8-11 m frontages, built to the pavement. */
+    private void shopRow(float x0, float z0, float x1, float z1, int face, Random rnd) {
+        float x = x0;
+        float depth = Math.min(z1 - z0, 13f);
+        while (x1 - x > 7.5f) {
+            float w = 8f + rnd.nextFloat() * 3f;
+            if (x1 - x - w < 7.5f) w = x1 - x;
+            float lx0 = x, lx1 = x + w;
+            x += w;
+            float sz0 = face == 0 ? z0 + 1f : z1 - depth, sz1 = face == 0 ? z0 + depth : z1 - 1f;
+            if (!lotClear(lx0, sz0, lx1, sz1)) continue;
+            Site st = new Site();
+            st.x0 = lx0 + 0.2f; st.z0 = sz0; st.x1 = lx1 - 0.2f; st.z1 = sz1;
+            st.kind = SHOP; st.face = face; st.seed = rnd.nextInt(); st.rx = Float.NaN;
+            st.ground = new ArrayList<>();
+            st.ground.add(new float[]{lx0, face == 0 ? z0 : sz1 - 0.5f, lx1, face == 0 ? sz0 + 0.5f : z1, lib.pavers});
+            add(st);
+        }
+    }
+
+    private boolean civic(int kind, float x0, float z0, float x1, float z1, int face, int groundTex, Random rnd) {
+        if (!lotClear(x0, z0, x1, z1)) return false;
+        Site st = new Site();
+        st.x0 = x0; st.z0 = z0; st.x1 = x1; st.z1 = z1;
+        st.kind = kind; st.face = face; st.seed = rnd.nextInt(); st.rx = Float.NaN;
+        st.ground = new ArrayList<>();
+        st.ground.add(new float[]{x0, z0, x1, z1, groundTex});
+        if (kind == SCHOOL) st.ground.add(new float[]{x0, z0, x1, z0 + 15f, lib.concrete});
+        if (kind == SUPERMARKET) st.ground.add(new float[]{x0, z1 - 22f, x1, z1, lib.concrete});
+        add(st);
+        return true;
+    }
+
+    /** Lot ground: a concrete drive in front of the carport (or a path to the door). */
+    private List<float[]> lotGround(Site st) {
+        List<float[]> g = new ArrayList<>();
+        HouseGen.Design d = HouseGen.design(lib, false, st.design);
+        float W = st.x1 - st.x0, D = st.z1 - st.z0;
+        float[] lay = HouseGen.layout(d, W, D, true);
+        float u0, u1;
+        if (!Float.isNaN(lay[4])) { u0 = lay[4]; u1 = lay[5]; }
+        else { u0 = d.leftDoor ? lay[2] - 3.2f : lay[0] + 0.2f; u1 = u0 + 3f; }
+        float v1 = Float.isNaN(lay[4]) ? lay[1] : Math.min(D - 1f, lay[1] + 5.4f);
+        // local u along the frontage: rows face N (u = x - x0) or S (u = x1 - x)
+        float x0 = st.face == 0 ? st.x0 + u0 : st.x1 - u1, x1 = st.face == 0 ? st.x0 + u1 : st.x1 - u0;
+        float z0 = st.face == 0 ? st.z0 : st.z1 - v1, z1 = st.face == 0 ? st.z0 + v1 : st.z1;
+        g.add(new float[]{x0, z0, x1, z1, lib.concrete});
+        return g;
+    }
+
+    /** A lot is usable if no road crosses it and the ground is gentle. */
+    private boolean lotClear(float x0, float z0, float x1, float z1) {
+        float lo = Float.MAX_VALUE, hi = -Float.MAX_VALUE;
+        for (int j = 0; j <= 2; j++)
+            for (int i = 0; i <= 2; i++) {
+                float x = x0 + 1f + (x1 - x0 - 2f) * i / 2f, z = z0 + 1f + (z1 - z0 - 2f) * j / 2f;
+                if (roads.roadClearance(x, z, 20f) < 0.5f) return false;
+                float h = terrain.height(x, z);
+                lo = Math.min(lo, h); hi = Math.max(hi, h);
+            }
+        return hi - lo < 4f;
+    }
+
     // ------------------------------------------------------------------ building
 
     void generate(Chunk ch, GeoBuilder gb, int cx, int cz) {
@@ -217,8 +405,28 @@ public final class Countryside {
                 yard(gb, s.x0 - 3f, s.z0 - 3f, s.x1 + 3f, s.z1 + 3f, lib.parking);
                 new BuildingGen(city, lib, gb, r, ch).build(BuildingGen.Type.KONBINI, s.x0, s.z0, s.x1, s.z1, street, street, city.shopsKonbini);
                 break;
-            case APAATO:
-                new BuildingGen(city, lib, gb, r, ch).build(BuildingGen.Type.APAATO, s.x0, s.z0, s.x1, s.z1, street, new boolean[4], city.shopsSuburb);
+            case APAATO: {
+                float ax0 = s.x0, ax1 = s.x1, az0 = s.z0, az1 = s.z1;
+                if (s.ground != null) {      // on a town lot: set back behind a car park
+                    ax0 += 1f; ax1 -= 1f;
+                    if (s.face == 0) { az0 += 6f; az1 -= 1f; } else { az0 += 1f; az1 -= 6f; }
+                }
+                new BuildingGen(city, lib, gb, r, ch).build(BuildingGen.Type.APAATO, ax0, az0, ax1, az1, street, new boolean[4], city.shopsSuburb);
+                break;
+            }
+            case LOT:
+                new BuildingGen(city, lib, gb, r, ch).lotHouse(false, s.design, s.x0, s.z0, s.x1, s.z1, s.face);
+                garden(ch, s, r);
+                break;
+            case SHOP:
+                new BuildingGen(city, lib, gb, r, ch).build(BuildingGen.Type.SHOPHOUSE, s.x0, s.z0, s.x1, s.z1, street, street, city.shopsSuburb);
+                break;
+            case TOWN_KONBINI:
+                new BuildingGen(city, lib, gb, r, ch).build(BuildingGen.Type.KONBINI, s.x0 + 3f, s.face == 0 ? s.z0 + 7f : s.z0 + 1f,
+                        s.x1 - 2f, s.face == 0 ? s.z1 - 1f : s.z1 - 7f, street, street, city.shopsKonbini);
+                break;
+            case TOWN_HALL: case POST: case CLINIC: case SUPERMARKET: case SCHOOL: case SHRINE: case GAS:
+                new TownGen(city, lib, gb, r, ch).build(s.kind, s.x0, s.z0, s.x1, s.z1, s.face);
                 break;
             default:
                 new BuildingGen(city, lib, gb, r, ch).build(r.nextInt(3) == 0 ? BuildingGen.Type.FARMHOUSE : BuildingGen.Type.HOUSE,
@@ -274,6 +482,16 @@ public final class Countryside {
     }
 
     private void garden(Chunk ch, Site s, Random r) {
+        if (s.kind == LOT) {
+            Flora[] plants = {Flora.BLACK_PINE, Flora.MAPLE, Flora.CAMELLIA, Flora.BOXWOOD, Flora.HYDRANGEA, Flora.AZALEA, Flora.SAKURA};
+            int n = 1 + r.nextInt(2);
+            for (int k = 0; k < n; k++) {
+                float x = s.x0 + 1.2f + r.nextFloat() * (s.x1 - s.x0 - 2.4f);
+                float z = s.face == 0 ? s.z1 - 1.4f : s.z0 + 1.4f;     // back garden
+                city.plantAtTerrain(ch, plants[r.nextInt(plants.length)], x, z);
+            }
+            return;
+        }
         Flora[] plants = {Flora.BLACK_PINE, Flora.MAPLE, Flora.CAMELLIA, Flora.BOXWOOD, Flora.HYDRANGEA, Flora.AZALEA, Flora.SAKURA};
         int n = 1 + r.nextInt(3);
         for (int k = 0; k < n; k++) {
@@ -297,6 +515,11 @@ public final class Countryside {
                 List<Site> list = sites.get(ChunkManager.key(cx, cz));
                 if (list == null) continue;
                 for (Site s : list) {
+                    if (s.ground != null) {
+                        for (float[] g : s.ground)
+                            if (!(g[2] < ax0 || g[0] > ax1 || g[3] < az0 || g[1] > az1)) sink.yard(g[0], g[1], g[2], g[3], (int) g[4]);
+                        continue;
+                    }
                     float[] r;
                     int t;
                     if (s.kind == FARM) {

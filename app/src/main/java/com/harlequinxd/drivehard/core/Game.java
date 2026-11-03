@@ -185,6 +185,7 @@ public final class Game {
                        float steer, float gas, float reverse, boolean carButton) {
         time += dt;
         cache.update();
+        updatePlace(dt);
         // keep active styles alive and slowly rotate in new ones so all 100 appear over time
         for (Traffic.Car c : traffic.cars) if (carEntries[c.style] != null) cache.touch(carEntries[c.style]);
         if (vehicle != null && carEntries[vehicle.style] != null) cache.touch(carEntries[vehicle.style]);
@@ -289,6 +290,29 @@ public final class Game {
     public boolean carReady(int style) { SpriteCache.Entry e = carEntries[style]; return e != null && e.ready(); }
 
     public boolean driving() { return mode == Mode.DRIVING || mode == Mode.ENTERING; }
+
+    // ------------------------------------------------------------------ where am I
+
+    /** Name of the city, the town or village here ("" in open country), and the region. */
+    public volatile String placeName = "", regionName = "";
+    private float placeTimer;
+
+    private void updatePlace(float dt) {
+        placeTimer -= dt;
+        if (placeTimer > 0f) return;
+        placeTimer = 0.5f;
+        float x = vehicle != null && driving() ? vehicle.x : player.x, z = vehicle != null && driving() ? vehicle.z : player.z;
+        com.harlequinxd.drivehard.core.road.RoadNetwork n = city.roads;
+        String place;
+        if (x > city.cityX0 - 200f && x < city.cityX1 + 300f && z > city.cityZ0 - 200f && z < city.cityZ1 + 200f) place = City.NAME;
+        else {
+            com.harlequinxd.drivehard.core.road.Town t = n.townAt(x, z, 80f);
+            place = t == null ? "" : t.name;
+        }
+        com.harlequinxd.drivehard.core.road.Town.Region rg = n.regionAt(x, z);
+        placeName = place;
+        regionName = rg == null ? "" : rg.name;
+    }
 
     private void findNearestCar() {
         nearCar = null;

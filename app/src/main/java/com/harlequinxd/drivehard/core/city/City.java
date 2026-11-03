@@ -34,6 +34,8 @@ public final class City extends World {
     /** Everything on the ground is painted flat: no kerbs. */
     public static final float CURB = 0f, SIDEWALK = 4f;
     public static final float FLOOR_H = 3.4f, SHOP_H = 4.6f;
+    /** The island's big city. */
+    public static final String NAME = "Minato City";
 
     final TextureLibrary lib;
     private final long seed;
@@ -350,6 +352,7 @@ public final class City extends World {
             return;
         }
         if (h < 0.3f) return;
+        if (countryside.inTown(jx, jz, 6f)) return;           // gardens are planted by the houses
         boolean rural = terrain.cityDistance(jx, jz) > 1100f;
         if (rural && roads.influence(jx, jz) > 0.05f) return;      // keep roads and their banks clear
         if (crop != Countryside.Crop.NONE) {
