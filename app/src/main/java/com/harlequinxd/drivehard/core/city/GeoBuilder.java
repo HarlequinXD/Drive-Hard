@@ -54,6 +54,11 @@ public final class GeoBuilder {
         target().add(p, uv, l, tex, layer, flags, bias, doubleSided);
     }
 
+    /** Dither-blended overlay quad (coverage per vertex), drawn over what lies beneath it. */
+    public void quadBlend(float[] p, float[] uv, float[] l, float[] a, int tex, int layer, int flags, float bias) {
+        target().addBlend(p, uv, l, a, tex, layer, flags, bias);
+    }
+
     public void quad3(float[] p, float[] uv, float[] l, int tex, int layer) {
         target().add(p, uv, l, tex, layer, Geo.FLAG_NO_SUBDIV, 0f, false);
     }
@@ -83,7 +88,34 @@ public final class GeoBuilder {
 
     private float tl(float x, float z) {
         terrain.normal(x, z, n3);
-        return sunLight(n3[0], n3[1], n3[2]);
+        // "vertex painting": broad, soft patches of lighter and darker ground
+        return sunLight(n3[0], n3[1], n3[2]) * (0.86f + 0.26f * paint(x, z));
+    }
+
+    /** Smooth value noise in 0..1 with ~30 m features, for per-vertex ground tint. */
+    private static float paint(float x, float z) {
+        float fx = x / 31f, fz = z / 31f;
+        int ix = (int) Math.floor(fx), iz = (int) Math.floor(fz);
+        float tx = fx - ix, tz = fz - iz;
+        tx = tx * tx * (3 - 2 * tx);
+        tz = tz * tz * (3 - 2 * tz);
+        float a = com.harlequinxd.drivehard.core.tex.Noise.rnd(ix, iz, 77), b = com.harlequinxd.drivehard.core.tex.Noise.rnd(ix + 1, iz, 77);
+        float c = com.harlequinxd.drivehard.core.tex.Noise.rnd(ix, iz + 1, 77), d = com.harlequinxd.drivehard.core.tex.Noise.rnd(ix + 1, iz + 1, 77);
+        float top = a + (b - a) * tx, bot = c + (d - c) * tx;
+        return top + (bot - top) * tz;
+    }
+
+    /** Terrain-following overlay cell with per-corner coverage (corners as in floorT), dither-blended. */
+    public void floorBlend(float ax, float az, float bx, float bz, int tex, float uvScale, float[] cov, int layer, int flags, float bias) {
+        float[] p = new float[12], t = new float[8], l = new float[4], a = new float[4];
+        float[] xs = {ax, bx, bx, ax}, zs = {bz, bz, az, az};
+        for (int k = 0; k < 4; k++) {
+            p[k * 3] = xs[k]; p[k * 3 + 1] = h(xs[k], zs[k]) + 0.01f; p[k * 3 + 2] = zs[k];
+            t[k * 2] = xs[k] / uvScale; t[k * 2 + 1] = zs[k] / uvScale;
+            l[k] = tl(xs[k], zs[k]);
+            a[k] = cov[k];
+        }
+        target().addBlend(p, t, l, a, tex, layer, flags, bias);
     }
 
     /** Corners: 0=(ax,bz) 1=(bx,bz) 2=(bx,az) 3=(ax,az). */

@@ -61,6 +61,12 @@ public final class RoadNetwork {
         resolveCrossings();
         profiles();
         buildIndex();
+        farms();
+        splay();
+        clearances();
+        buildIndex();
+        indexNodes();
+        for (RoadNode nd : nodes) ring(nd);
         buildTime = (System.nanoTime() - t0) / 1e6f;
     }
 
@@ -369,8 +375,10 @@ public final class RoadNetwork {
     private void ramp(RoadNode fn, RoadNode t, float sx, float sz, float hx, float hz, float lane, boolean off) {
         float ox = fn.x + sx * lane, oz = fn.z + sz * lane;
         float[][] pl;
-        if (off) pl = bezier(ox, oz, ox + hx * 140f, oz + hz * 140f, t.x - sx * 45f, t.z - sz * 45f, t.x, t.z, RoadClass.RAMP.step);
-        else pl = bezier(t.x, t.z, t.x - sx * 45f, t.z - sz * 45f, ox - hx * 140f, oz - hz * 140f, ox, oz, RoadClass.RAMP.step);
+        // the slip roads meet the crossroad at right angles to each other: the exit arrives from
+        // behind, the entry leaves forward
+        if (off) pl = bezier(ox, oz, ox + hx * 140f, oz + hz * 140f, t.x - (sx + hx) * 32f, t.z - (sz + hz) * 32f, t.x, t.z, RoadClass.RAMP.step);
+        else pl = bezier(t.x, t.z, t.x - (sx - hx) * 32f, t.z - (sz - hz) * 32f, ox - hx * 140f, oz - hz * 140f, ox, oz, RoadClass.RAMP.step);
         // the slip road starts/ends on the freeway's kerb lane (a taper), not at the node centre
         RoadEdge e = off ? addEdge(RoadClass.RAMP, fn.id, t.id, pl[0], pl[1]) : addEdge(RoadClass.RAMP, t.id, fn.id, pl[0], pl[1]);
         e.rampSide = lane;
@@ -399,13 +407,36 @@ public final class RoadNetwork {
         int oldB = e.b;
         nodes.get(oldB).removeEdge(e.id);
         e.b = nd.id;
+        float[] oy = e.y;
+        boolean[] ob = e.bridge;
+        float oyAt = p[2];
         e.setPoints(A[0], A[1]);
         nd.addEdge(e.id);
         RoadEdge ne = addEdge(e.cls, nd.id, oldB, B[0], B[1]);
+        // carry the height profile (and bridge flags) over to both pieces
+        copyProfile(oy, ob, 0, e, A[0].length, i, oyAt, true);
+        copyProfile(oy, ob, i + 1, ne, B[0].length, i, oyAt, false);
+        nd.y = oyAt;
         ne.rampSide = e.rampSide;
         ne.origin = e.origin;
         ne.ns = e.ns;
         return nd.id;
+    }
+
+    /** Copies heights from the unsplit profile; the split point gets the interpolated height. */
+    private static void copyProfile(float[] oy, boolean[] ob, int from, RoadEdge e, int n, int cut, float cutY, boolean first) {
+        int on = oy.length;
+        for (int k = 0; k < n; k++) {
+            int src = first ? k : from + k - 1;
+            float v;
+            if (first) v = k < n - 1 ? oy[Math.min(on - 1, src)] : cutY;
+            else v = k == 0 ? cutY : oy[Math.min(on - 1, src)];
+            e.y[k] = v;
+        }
+        for (int k = 0; k < n - 1; k++) {
+            int src = first ? Math.min(ob.length - 1, k) : Math.min(ob.length - 1, cut + k);
+            e.bridge[k] = ob[src];
+        }
     }
 
     private static float[][] dedupe(float[] x, float[] z) {
@@ -607,12 +638,475 @@ public final class RoadNetwork {
                 if (d < flat) over.bridge[i] = true;
             }
         }
-        // clearances at nodes
-        for (RoadEdge e : edges) {
-            if (e.cls.city) continue;
-            e.clearA = clearance(e, nodes.get(e.a));
-            e.clearB = clearance(e, nodes.get(e.b));
+    }
+
+    // ------------------------------------------------------------------ farm lanes
+
+    /** Farmsteads: {x0, z0, x1, z1, face (0=N,1=S,2=W,3=E: side toward the lane), seed}. */
+    public final List<float[]> farms = new ArrayList<>();
+    private final java.util.HashSet<Long> farmCells = new java.util.HashSet<>();
+
+    /**
+     * Places farmsteads beside country roads and highways. Each gets its own access lane that
+     * branches off the road at a T-junction and ends in the farm yard.
+     */
+    private void farms() {
+        Random r = new Random(seed * 13L + 5);
+        float[] p = new float[5];
+        List<float[]> picks = new ArrayList<>();           // edge, s, side, farm index
+        int edgeCount = edges.size();
+        for (int ei = 0; ei < edgeCount; ei++) {
+            RoadEdge e = edges.get(ei);
+            if (e.cls != RoadClass.COUNTRY && e.cls != RoadClass.HIGHWAY) continue;
+            float s = 140f + r.nextFloat() * 300f;
+            while (s < e.len - 140f) {
+                e.point(s, p);
+                int side = r.nextBoolean() ? 1 : -1;
+                float lx = p[4] * side, lz = -p[3] * side;
+                float off = e.cls.halfWidth() + 20f + r.nextFloat() * 14f;
+                float cx = p[0] + lx * off, cz = p[1] + lz * off;
+                // the yard faces the lane (dominant axis toward the road)
+                int face = Math.abs(lx) > Math.abs(lz) ? (lx > 0 ? 2 : 3) : (lz > 0 ? 0 : 1);
+                boolean wide = face < 2;
+                float hu = 15f, hv = 13f;
+                float x0 = cx - (wide ? hu : hv), x1 = cx + (wide ? hu : hv), z0 = cz - (wide ? hv : hu), z1 = cz + (wide ? hv : hu);
+                if (!e.bridge[e.seg(s)] && laneClear(p[0] + lx * (e.cls.halfWidth() + 4f), p[1] + lz * (e.cls.halfWidth() + 4f), cx, cz)
+                        && farmSite(x0, z0, x1, z1)) {
+                    farms.add(new float[]{x0, z0, x1, z1, face, r.nextInt()});
+                    picks.add(new float[]{ei, s, side, farms.size() - 1});
+                }
+                s += 300f + r.nextFloat() * 560f;
+            }
         }
+        // split roads from the far end of each edge so earlier distances stay valid
+        picks.sort((A, B) -> A[0] != B[0] ? Float.compare(A[0], B[0]) : Float.compare(B[1], A[1]));
+        for (float[] pk : picks) {
+            RoadEdge e = edges.get((int) pk[0]);
+            float[] f = farms.get((int) pk[3]);
+            int jn = splitAt(e, pk[1], RoadNode.Kind.JUNCTION);
+            RoadNode j = nodes.get(jn);
+            int face = (int) f[4];
+            float fx, fz, dx, dz;   // yard gate and the direction into the yard
+            switch (face) {
+                case 0: fx = (f[0] + f[2]) * 0.5f; fz = f[1]; dx = 0; dz = 1; break;
+                case 1: fx = (f[0] + f[2]) * 0.5f; fz = f[3]; dx = 0; dz = -1; break;
+                case 2: fx = f[0]; fz = (f[1] + f[3]) * 0.5f; dx = 1; dz = 0; break;
+                default: fx = f[2]; fz = (f[1] + f[3]) * 0.5f; dx = -1; dz = 0; break;
+            }
+            RoadNode end = addNode(fx + dx * 3f, fz + dz * 3f, RoadNode.Kind.END);
+            e.point(e.len, p);   // at the junction (end of the first piece)
+            float side = pk[2];
+            float lx = p[4] * side, lz = -p[3] * side;
+            float hw = e.cls.halfWidth();
+            float[][] pl = bezier(j.x, j.z, j.x + lx * (hw + 10f), j.z + lz * (hw + 10f),
+                    fx - dx * 10f, fz - dz * 10f, end.x, end.z, RoadClass.LANE.step);
+            RoadEdge lane = addEdge(RoadClass.LANE, j.id, end.id, pl[0], pl[1]);
+            profile(lane);
+            pin(lane);
+        }
+    }
+
+    /** The straight run from the road to the yard crosses no other road. */
+    private boolean laneClear(float ax, float az, float bx, float bz) {
+        for (int k = 0; k <= 8; k++) {
+            float t = k / 8f;
+            if (roadClearance(ax + (bx - ax) * t, az + (bz - az) * t, 20f) < 2f) return false;
+        }
+        return true;
+    }
+
+    private boolean farmSite(float x0, float z0, float x1, float z1) {
+        if (terrain.cityDistance((x0 + x1) * 0.5f, (z0 + z1) * 0.5f) < 1300f) return false;
+        float lo = Float.MAX_VALUE, hi = -Float.MAX_VALUE;
+        float[][] pts = {{x0, z0}, {x1, z0}, {x0, z1}, {x1, z1}, {(x0 + x1) * 0.5f, (z0 + z1) * 0.5f}};
+        for (float[] q : pts) {
+            if (terrain.coastOver(q[0], q[1]) > -150f) return false;
+            if (roadClearance(q[0], q[1], 40f) < 6f) return false;
+            float h = terrain.natural(q[0], q[1]);
+            lo = Math.min(lo, h); hi = Math.max(hi, h);
+        }
+        if (hi - lo > 4.5f || lo < 3f) return false;
+        int a = (int) Math.floor(x0 / 32f) - 1, b = (int) Math.floor(x1 / 32f) + 1, c = (int) Math.floor(z0 / 32f) - 1, d = (int) Math.floor(z1 / 32f) + 1;
+        for (int z = c; z <= d; z++) for (int x = a; x <= b; x++) if (farmCells.contains(((long) x << 32) ^ (z & 0xFFFFFFFFL))) return false;
+        for (int z = c; z <= d; z++) for (int x = a; x <= b; x++) farmCells.add(((long) x << 32) ^ (z & 0xFFFFFFFFL));
+        return true;
+    }
+
+    // ------------------------------------------------------------------ junction geometry
+
+    /** Smallest angle between two roads leaving a junction. */
+    private static final float MIN_JUNCTION_ANGLE = (float) Math.toRadians(38);
+
+    /**
+     * Real junctions don't have roads leaving at grazing angles: where two roads leave a junction
+     * closer than ~38 degrees, their first stretch is bent apart (the bend fades out over ~120 m)
+     * so the junction gets a proper shape instead of a long sliver.
+     */
+    private void splay() {
+        float[] u = new float[2];
+        for (int pass = 0; pass < 3; pass++) {
+            for (RoadNode n : nodes) {
+                if (n.dead || n.kind == RoadNode.Kind.CITY || n.kind == RoadNode.Kind.SPLIT || n.edges.length < 2) continue;
+                int k = n.edges.length;
+                float[] ang = new float[k];
+                Integer[] order = new Integer[k];
+                for (int i = 0; i < k; i++) {
+                    outwardFar(edges.get(n.edges[i]), n, u);
+                    ang[i] = (float) Math.atan2(u[1], u[0]);
+                    order[i] = i;
+                }
+                java.util.Arrays.sort(order, (A, B) -> Float.compare(ang[A], ang[B]));
+                for (int q = 0; q < k; q++) {
+                    int i = order[q], j = order[(q + 1) % k];
+                    float th = ang[j] - ang[i];
+                    if (q == k - 1) th += (float) (2 * Math.PI);
+                    if (th >= MIN_JUNCTION_ANGLE) continue;
+                    float need = (MIN_JUNCTION_ANGLE - th) * 0.5f + 0.01f;
+                    RoadEdge ei = edges.get(n.edges[i]), ej = edges.get(n.edges[j]);
+                    // the motorway system and the more important road move less
+                    float wi = ei.cls.motorway() ? 0f : (ei.cls.priority > ej.cls.priority ? 0.5f : 1f);
+                    float wj = ej.cls.motorway() ? 0f : (ej.cls.priority > ei.cls.priority ? 0.5f : 1f);
+                    if (wi + wj == 0f) continue;
+                    float tot = need * 2f / (wi + wj);
+                    bend(ei, n, -tot * wi);
+                    bend(ej, n, tot * wj);
+                }
+            }
+        }
+    }
+
+    /** Outward direction measured further out (25 m), robust to tiny kinks at the node. */
+    private void outwardFar(RoadEdge e, RoadNode n, float[] out) {
+        float d = Math.min(25f, e.len * 0.45f);
+        float[] p = new float[5], q = new float[5];
+        e.point(n.id == e.a ? 0f : e.len, p);
+        e.point(n.id == e.a ? d : e.len - d, q);
+        float dx = q[0] - p[0], dz = q[1] - p[1], l = (float) Math.sqrt(dx * dx + dz * dz);
+        out[0] = l > 1e-4f ? dx / l : 1f;
+        out[1] = l > 1e-4f ? dz / l : 0f;
+    }
+
+    /** Rotates the start of an edge about node n by an angle that fades out along the road. */
+    private void bend(RoadEdge e, RoadNode n, float angle) {
+        if (Math.abs(angle) < 1e-4f) return;
+        float L = Math.min(140f, e.len * 0.45f);
+        int cnt = e.count();
+        for (int k = 0; k < cnt; k++) {
+            float d = n.id == e.a ? e.s[k] : e.len - e.s[k];
+            if (d <= 0f || d >= L) continue;
+            float f = 1f - d / L;
+            float a = angle * f * f * (3f - 2f * f) ;
+            float dx = e.x[k] - n.x, dz = e.z[k] - n.z;
+            float c = (float) Math.cos(a), sn = (float) Math.sin(a);
+            e.x[k] = n.x + dx * c - dz * sn;
+            e.z[k] = n.z + dx * sn + dz * c;
+        }
+        // distances change a little; heights stay with their samples
+        float[] y = e.y;
+        boolean[] br = e.bridge;
+        e.setPoints(e.x, e.z);
+        e.y = y;
+        e.bridge = br;
+    }
+
+    /** Mouth length (stop line / crossing strip) at the end of an edge arriving at node n. */
+    public float mouth(RoadEdge e, RoadNode n) {
+        if (n.kind == RoadNode.Kind.CITY) return e.cls.city ? 5f : 3f;
+        if (n.kind == RoadNode.Kind.JUNCTION) return 3f;
+        return 0f;
+    }
+
+    /** Junction corner fillet radius at a node. */
+    public float fillet(RoadNode n) {
+        if (n.kind == RoadNode.Kind.CITY) return 0f;
+        float w = 0f;
+        for (int id : n.edges) w = Math.max(w, edges.get(id).cls.halfWidth());
+        return Math.min(9f, 2.5f + w * 0.5f);
+    }
+
+    /** Outward unit direction of edge e at node n (toward the rest of the road). */
+    public void outward(RoadEdge e, RoadNode n, float[] out) {
+        float d = Math.min(8f, e.len * 0.5f);
+        float[] p = new float[5], q = new float[5];
+        e.point(n.id == e.a ? 0f : e.len, p);
+        e.point(n.id == e.a ? d : e.len - d, q);
+        float dx = q[0] - p[0], dz = q[1] - p[1], l = (float) Math.sqrt(dx * dx + dz * dz);
+        out[0] = l > 1e-4f ? dx / l : 1f;
+        out[1] = l > 1e-4f ? dz / l : 0f;
+    }
+
+    /**
+     * Sets every edge's clearance at each end from the junction geometry: far enough back that the
+     * kerb lines of neighbouring roads have separated by the corner fillet radius.
+     */
+    private void clearances() {
+        float[] u = new float[2];
+        for (RoadNode n : nodes) {
+            if (n.dead || n.edges.length == 0) continue;
+            int k = n.edges.length;
+            if (n.kind == RoadNode.Kind.SPLIT) {
+                for (int id : n.edges) setClear(edges.get(id), n, 1f);
+                continue;
+            }
+            if (k == 1) { setClear(edges.get(n.edges[0]), n, n.kind == RoadNode.Kind.END ? 2f : 1.5f); continue; }
+            float[] ang = new float[k], cl = new float[k], hw = new float[k];
+            Integer[] order = new Integer[k];
+            for (int i = 0; i < k; i++) {
+                RoadEdge e = edges.get(n.edges[i]);
+                outward(e, n, u);
+                ang[i] = (float) Math.atan2(u[1], u[0]);
+                hw[i] = e.cls.halfWidth();
+                cl[i] = n.kind == RoadNode.Kind.CITY ? 0f : 1.5f;
+                order[i] = i;
+            }
+            java.util.Arrays.sort(order, (A, B) -> Float.compare(ang[A], ang[B]));
+            float r = fillet(n);
+            for (int q = 0; q < k; q++) {
+                int i = order[q], j = order[(q + 1) % k];
+                float th = ang[j] - ang[i];
+                if (q == k - 1) th += (float) (2 * Math.PI);
+                if (th >= Math.PI - 0.02f) continue;               // open side: kerbs never meet
+                th = Math.max(0.12f, th);
+                float sin = (float) Math.sin(th), cos = (float) Math.cos(th);
+                float di = (hw[j] + hw[i] * cos) / sin, dj = (hw[i] + hw[j] * cos) / sin;
+                cl[i] = Math.max(cl[i], di + r);
+                cl[j] = Math.max(cl[j], dj + r);
+            }
+            for (int i = 0; i < k; i++) {
+                RoadEdge e = edges.get(n.edges[i]);
+                setClear(e, n, Math.min(Math.min(70f, e.len * 0.4f), cl[i]));
+            }
+        }
+    }
+
+    private static void setClear(RoadEdge e, RoadNode n, float c) {
+        if (n.id == e.a) e.clearA = c;
+        if (n.id == e.b) e.clearB = c;
+    }
+
+    /**
+     * Junction outline: each road's two kerb corners at its clearance, in angular order, joined by
+     * curved kerb returns (square corners in the city grid).
+     */
+    private void ring(RoadNode n) {
+        if (n.dead || n.kind == RoadNode.Kind.SPLIT || n.edges.length < 2) return;
+        int k = n.edges.length;
+        boolean cityNode = n.kind == RoadNode.Kind.CITY;
+        float[] ang = new float[k], u = new float[2], p = new float[5];
+        float[][] L = new float[k][], R = new float[k][], dir = new float[k][];
+        Integer[] order = new Integer[k];
+        for (int i = 0; i < k; i++) {
+            RoadEdge ed = edges.get(n.edges[i]);
+            outward(ed, n, u);
+            ang[i] = (float) Math.atan2(u[1], u[0]);
+            ed.point(n.id == ed.a ? ed.clearA : ed.len - ed.clearB, p);
+            float hw = ed.cls.halfWidth(), lx = u[1], lz = -u[0];
+            L[i] = new float[]{p[0] + lx * hw, p[2], p[1] + lz * hw};
+            R[i] = new float[]{p[0] - lx * hw, p[2], p[1] - lz * hw};
+            dir[i] = new float[]{u[0], u[1]};
+            order[i] = i;
+        }
+        java.util.Arrays.sort(order, (A, B) -> Float.compare(ang[A], ang[B]));
+        float[] ring = new float[k * 24 * 3];
+        boolean[] kerb = new boolean[k * 24];
+        int m = 0;
+        for (int q = 0; q < k; q++) {
+            int i = order[q], j = order[(q + 1) % k];
+            System.arraycopy(L[i], 0, ring, m * 3, 3); kerb[m] = false; m++;
+            System.arraycopy(R[i], 0, ring, m * 3, 3); kerb[m] = true; m++;
+            float th = ang[j] - ang[i];
+            if (q == k - 1) th += (float) (2 * Math.PI);
+            if (th >= Math.PI - 0.05f) {
+                // open side: follow road i's kerb back to the node, round the node, out along road j's
+                // kerb, so the trimmed road ends between the node and the mouths are paved too
+                RoadEdge ei = edges.get(n.edges[i]), ej = edges.get(n.edges[j]);
+                float hi = ei.cls.halfWidth(), hj = ej.cls.halfWidth();
+                float a0 = ang[i] + (float) (Math.PI / 2), a1 = ang[j] - (float) (Math.PI / 2);
+                if (q == k - 1) a1 += (float) (2 * Math.PI);
+                int steps = Math.max(1, (int) Math.ceil((a1 - a0) / 0.5f));
+                for (int t = 0; t <= steps; t++) {
+                    float f = t / (float) steps, an = a0 + (a1 - a0) * f, rad = hi + (hj - hi) * f;
+                    ring[m * 3] = n.x + (float) Math.cos(an) * rad;
+                    ring[m * 3 + 1] = n.y;
+                    ring[m * 3 + 2] = n.z + (float) Math.sin(an) * rad;
+                    kerb[m] = true;
+                    m++;
+                }
+                continue;
+            }
+            float[] c = kerbHit(R[i], dir[i], L[j], dir[j]);
+            if (c == null) continue;
+            if (cityNode) {
+                ring[m * 3] = c[0]; ring[m * 3 + 1] = (R[i][1] + L[j][1]) * 0.5f; ring[m * 3 + 2] = c[1]; kerb[m] = true; m++;
+            } else {
+                for (int t = 1; t <= 4; t++) {
+                    float f = t / 5f, g = 1 - f;
+                    ring[m * 3] = g * g * R[i][0] + 2 * g * f * c[0] + f * f * L[j][0];
+                    ring[m * 3 + 1] = R[i][1] + (L[j][1] - R[i][1]) * f;
+                    ring[m * 3 + 2] = g * g * R[i][2] + 2 * g * f * c[1] + f * f * L[j][2];
+                    kerb[m] = true;
+                    m++;
+                }
+            }
+        }
+        n.ring = java.util.Arrays.copyOf(ring, m * 3);
+        n.kerb = java.util.Arrays.copyOf(kerb, m);
+        float r = 0f;
+        for (int v = 0; v < m; v++) r = Math.max(r, (float) Math.hypot(ring[v * 3] - n.x, ring[v * 3 + 2] - n.z));
+        n.ringRadius = r;
+    }
+
+    /** Where two kerb lines meet, behind the corners (toward the junction); null if they don't. */
+    private static float[] kerbHit(float[] pp, float[] d, float[] q, float[] e2) {
+        float den = d[0] * e2[1] - d[1] * e2[0];
+        if (Math.abs(den) < 1e-4f) return null;
+        float t = ((q[0] - pp[0]) * e2[1] - (q[2] - pp[2]) * e2[0]) / den;
+        if (t > 0.5f) return null;
+        return new float[]{pp[0] + d[0] * t, pp[2] + d[1] * t};
+    }
+
+    /** True if (x,z) is inside a junction outline, or within {@code margin} of it. */
+    public boolean inJunction(float x, float z, float margin) {
+        int cx = (int) Math.floor(x / 64f), cz = (int) Math.floor(z / 64f);
+        for (int dz = -1; dz <= 1; dz++)
+            for (int dx = -1; dx <= 1; dx++) {
+                List<RoadNode> l = nodeChunks.get(((long) (cx + dx) << 32) ^ ((cz + dz) & 0xFFFFFFFFL));
+                if (l == null) continue;
+                for (RoadNode n : l) {
+                    if (n.ring == null) continue;
+                    float ddx = x - n.x, ddz = z - n.z;
+                    if (ddx * ddx + ddz * ddz > (n.ringRadius + margin) * (n.ringRadius + margin)) continue;
+                    if (insideRing(n.ring, x, z) || ringDistance(n.ring, x, z) < margin) return true;
+                }
+            }
+        return false;
+    }
+
+    /** True if (x,z) is within {@code margin} of a junction's outline radius (near enough to need care). */
+    public boolean nearJunction(float x, float z, float margin) {
+        int cx = (int) Math.floor(x / 64f), cz = (int) Math.floor(z / 64f);
+        for (int dz = -1; dz <= 1; dz++)
+            for (int dx = -1; dx <= 1; dx++) {
+                List<RoadNode> l = nodeChunks.get(((long) (cx + dx) << 32) ^ ((cz + dz) & 0xFFFFFFFFL));
+                if (l == null) continue;
+                for (RoadNode n : l) {
+                    float r = (n.ring != null ? n.ringRadius : 30f) + margin;
+                    if (n.kind == RoadNode.Kind.CITY) continue;
+                    float ddx = x - n.x, ddz = z - n.z;
+                    if (ddx * ddx + ddz * ddz < r * r) return true;
+                }
+            }
+        return false;
+    }
+
+    private static boolean insideRing(float[] r, float x, float z) {
+        int m = r.length / 3;
+        boolean in = false;
+        for (int i = 0, j = m - 1; i < m; j = i++) {
+            float xi = r[i * 3], zi = r[i * 3 + 2], xj = r[j * 3], zj = r[j * 3 + 2];
+            if ((zi > z) != (zj > z) && x < (xj - xi) * (z - zi) / (zj - zi) + xi) in = !in;
+        }
+        return in;
+    }
+
+    private static float ringDistance(float[] r, float x, float z) {
+        int m = r.length / 3;
+        float best = Float.MAX_VALUE;
+        for (int i = 0; i < m; i++) {
+            int j = (i + 1) % m;
+            float ax = r[i * 3], az = r[i * 3 + 2], vx = r[j * 3] - ax, vz = r[j * 3 + 2] - az;
+            float l2 = vx * vx + vz * vz;
+            float t = l2 > 0f ? Math.max(0f, Math.min(1f, ((x - ax) * vx + (z - az) * vz) / l2)) : 0f;
+            float qx = ax + vx * t - x, qz = az + vz * t - z;
+            best = Math.min(best, qx * qx + qz * qz);
+        }
+        return (float) Math.sqrt(best);
+    }
+
+    /**
+     * True if (x,z) is on (or within {@code margin} of) any paved surface: a road outside the
+     * city other than {@code except}, a city street, or a junction.
+     */
+    public boolean onAsphalt(float x, float z, float margin, int except) {
+        int c = cellIndex(x, z);
+        if (c >= 0) {
+            for (int k = cellStart[c]; k < cellStart[c + 1]; k++) {
+                int it = cellItems[k];
+                int eid = it >>> 16;
+                if (eid == except) continue;
+                RoadEdge e = edges.get(eid);
+                int i = it & 0xFFFF;
+                if (e.bridge[i]) continue;
+                if (pieceDist(e, i, x, z) < e.cls.halfWidth() + margin) return true;
+            }
+        }
+        return inJunction(x, z, margin);
+    }
+
+    /** How a terrain cell next to roads is drawn: 0 normally, 1 not at all (road verges cover it), 2 finely around the paving. */
+    public int cellMode(float cx, float cz) {
+        int c = cellIndex(cx, cz);
+        int near = -1;
+        boolean other = false, ramp = false;
+        int[] reach = new int[8];
+        int nr = 0;
+        if (c >= 0) {
+            for (int k = cellStart[c]; k < cellStart[c + 1]; k++) {
+                int it = cellItems[k];
+                RoadEdge e = edges.get(it >>> 16);
+                if (e.cls.city) continue;
+                int i = it & 0xFFFF;
+                if (e.bridge[i]) continue;
+                float d = pieceDist(e, i, cx, cz), hw = e.cls.halfWidth();
+                if (d < hw + 5.8f) {
+                    if (near >= 0 && near != e.id) other = true;
+                    near = e.id;
+                    if (e.cls == RoadClass.RAMP) ramp = true;
+                }
+                if (d < hw + CORRIDOR_WIDTH + 6f && nr < reach.length) {
+                    boolean seen = false;
+                    for (int q = 0; q < nr; q++) if (reach[q] == e.id) seen = true;
+                    if (!seen) reach[nr++] = e.id;
+                }
+            }
+        }
+        boolean nearJ = nearJunction(cx, cz, CORRIDOR_WIDTH + 6f);
+        if (near < 0) return nearJ && inJunction(cx, cz, 6f) ? 2 : 0;
+        for (int q = 0; q < nr; q++) if (reach[q] != near) other = true;
+        if (other || nearJ || ramp) return 2;
+        return 1;
+    }
+
+    /** True if another road (or a junction) comes close to this piece, so its verges need clipping. */
+    public boolean crowded(RoadEdge self, int piece) {
+        float mx = (self.x[piece] + self.x[piece + 1]) * 0.5f, mz = (self.z[piece] + self.z[piece + 1]) * 0.5f;
+        float reach = self.cls.halfWidth() + CORRIDOR_WIDTH + 6f;
+        if (nearJunction(mx, mz, reach)) return true;
+        int c = cellIndex(mx, mz);
+        if (c < 0) return false;
+        for (int k = cellStart[c]; k < cellStart[c + 1]; k++) {
+            int it = cellItems[k];
+            if ((it >>> 16) == self.id) continue;
+            RoadEdge e = edges.get(it >>> 16);
+            if (pieceDist(e, it & 0xFFFF, mx, mz) < reach + e.cls.halfWidth()) return true;
+        }
+        return false;
+    }
+
+    private final HashMap<Long, List<RoadNode>> nodeChunks = new HashMap<>();
+
+    private void indexNodes() {
+        for (RoadNode n : nodes) {
+            if (n.dead || n.edges.length == 0) continue;
+            long k = ((long) Math.floorDiv((int) Math.floor(n.x), 64) << 32) ^ (Math.floorDiv((int) Math.floor(n.z), 64) & 0xFFFFFFFFL);
+            nodeChunks.computeIfAbsent(k, kk -> new ArrayList<>()).add(n);
+        }
+    }
+
+    /** Junction nodes whose centre lies in the 64 m chunk (cx, cz). */
+    public List<RoadNode> nodesInChunk(int cx, int cz) {
+        List<RoadNode> l = nodeChunks.get(((long) cx << 32) ^ (cz & 0xFFFFFFFFL));
+        return l == null ? java.util.Collections.emptyList() : l;
     }
 
     private float clearance(RoadEdge e, RoadNode n) {
@@ -763,7 +1257,7 @@ public final class RoadNetwork {
         if (x > city.cityX0 && x < city.cityX1 && z > city.cityZ0 && z < city.cityZ1) return nat;
         int c = cellIndex(x, z);
         if (c < 0) return nat;
-        float bestW = 0f, bestY = nat;
+        float bestW = 0f, bestY = nat, bestD = Float.MAX_VALUE;
         for (int k = cellStart[c]; k < cellStart[c + 1]; k++) {
             int it = cellItems[k];
             RoadEdge e = edges.get(it >>> 16);
@@ -781,7 +1275,8 @@ public final class RoadNetwork {
             float yr = e.y[i] + (e.y[i + 1] - e.y[i]) * t;
             float bank = Math.max(5f, Math.min(48f, 5f + Math.abs(nat - yr) * 1.5f));
             float w = d <= hw ? 1f : 1f - smooth01((d - hw) / bank);
-            if (w > bestW || (w == 1f && bestW == 1f && yr > bestY)) { bestW = w; bestY = yr - 0.03f; }
+            // strongest influence wins; on the road itself the nearest piece decides the height
+            if (w > bestW + 1e-4f || (w >= bestW - 1e-4f && d < bestD)) { bestW = w; bestY = yr - 0.03f; bestD = d; }
         }
         return nat + (bestY - nat) * bestW;
     }
@@ -814,6 +1309,46 @@ public final class RoadNetwork {
             RoadEdge e = edges.get(it >>> 16);
             float d = pieceDist(e, it & 0xFFFF, x, z) - e.cls.halfWidth();
             best = Math.min(best, d);
+        }
+        return best;
+    }
+
+    /**
+     * True if (x,z) lies in the cut-and-fill corridor drawn along a rural road (within its
+     * half width + 3 m), where the plain terrain grid is replaced by road-aligned verges.
+     */
+    public boolean corridorCovers(float x, float z) {
+        int c = cellIndex(x, z);
+        if (c < 0) return false;
+        for (int k = cellStart[c]; k < cellStart[c + 1]; k++) {
+            int it = cellItems[k];
+            RoadEdge e = edges.get(it >>> 16);
+            if (e.cls.city || e.cls == RoadClass.RAMP) continue;
+            int i = it & 0xFFFF;
+            if (e.bridge[i]) continue;
+            if (pieceDist(e, i, x, z) < e.cls.halfWidth() + CORRIDOR_SKIP) {
+                // keep the plain ground around junctions, where several roads' verges meet
+                float sm = e.s[i];
+                if (sm < e.clearA + 18f || sm > e.len - e.clearB - 18f) return false;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Terrain cells whose centre is this close to a road edge are replaced by the corridor verges. */
+    public static final float CORRIDOR_SKIP = 3f, CORRIDOR_WIDTH = 12f;
+
+    /** Distance from (x,z) to the nearest centreline of the given class (capped). */
+    public float classDistance(float x, float z, RoadClass cls, float cap) {
+        int c = cellIndex(x, z);
+        if (c < 0) return cap;
+        float best = cap;
+        for (int k = cellStart[c]; k < cellStart[c + 1]; k++) {
+            int it = cellItems[k];
+            RoadEdge e = edges.get(it >>> 16);
+            if (e.cls != cls) continue;
+            best = Math.min(best, pieceDist(e, it & 0xFFFF, x, z));
         }
         return best;
     }

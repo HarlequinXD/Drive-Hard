@@ -6,8 +6,10 @@ package com.harlequinxd.drivehard.core.road;
  */
 public enum RoadClass {
     //        lanes laneW median shoulder speed prio city  smooth step grade
-    STREET(   1, 3.5f, 0.25f, 0f,   12f, 1, true,   0f, 0f, 1f),
-    AVENUE(   2, 3.5f, 1.3f,  0f,   14f, 2, true,   0f, 0f, 1f),
+    STREET(   1, 3.5f, 0.25f, 2.75f, 12f, 1, true,   0f, 0f, 1f),
+    AVENUE(   2, 3.5f, 1.3f,  2.7f, 14f, 2, true,   0f, 0f, 1f),
+    /** Narrow farm access lane (two-way, unmarked). */
+    LANE(     1, 1.8f, 0f,    0.4f,  8f, 0, false,  30f, 5f, 0.14f),
     COUNTRY(  1, 3.0f, 0.1f,  0.8f, 16f, 2, false, 90f, 10f, 0.09f),
     HIGHWAY(  2, 3.25f, 0.3f, 1.5f, 21f, 3, false, 170f, 10f, 0.07f),
     FREEWAY(  2, 3.5f, 1.4f,  2.5f, 27f, 5, false, 340f, 10f, 0.05f),

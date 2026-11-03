@@ -94,7 +94,7 @@ public final class Traffic {
         if (!net.nearest(qx, qz, 25f, hit)) return;
         RoadEdge e = net.edges.get((int) hit[0]);
         float s = hit[1];
-        if (e.len < 30f || s < e.clearA + 16f || s > e.len - e.clearB - 16f) return;
+        if (e.cls == RoadClass.LANE || e.len < 30f || s < e.clearA + 16f || s > e.len - e.clearB - 16f) return;
         int dir = e.oneWay || rnd.nextBoolean() ? 1 : -1;
         int lane = rnd.nextInt(e.cls.lanes);
         float off = e.laneOffset(lane);
@@ -304,6 +304,7 @@ public final class Traffic {
             if (id == e.id) continue;
             RoadEdge ne = net.edges.get(id);
             if (!ne.canLeave(node.id)) continue;
+            if (ne.cls == RoadClass.LANE) continue;                               // farm lanes are private
             int nd = ne.dirFrom(node.id);
             ne.point(ne.sAt(node.id), tmp2);
             float ox = tmp2[3] * nd, oz = tmp2[4] * nd;

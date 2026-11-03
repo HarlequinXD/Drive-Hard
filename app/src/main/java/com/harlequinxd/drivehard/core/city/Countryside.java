@@ -162,34 +162,15 @@ public final class Countryside {
     private void place() {
         Random rnd = new Random(seed * 7L + 3);
         float[] p = new float[5];
-        // farmsteads along country roads and highways
-        for (RoadEdge e : roads.edges) {
-            if (e.cls != RoadClass.COUNTRY && e.cls != RoadClass.HIGHWAY) continue;
-            float s = 120f + rnd.nextFloat() * 300f;
-            while (s < e.len - 120f) {
-                e.point(s, p);
-                if (farmland(p[0], p[1], p[2]) || rnd.nextInt(4) == 0) {
-                    int side = rnd.nextBoolean() ? 1 : -1;
-                    float lx = p[4] * side, lz = -p[3] * side;     // toward the chosen side
-                    float off = e.cls.halfWidth() + 16f + rnd.nextFloat() * 10f;
-                    float cx = p[0] + lx * off, cz = p[1] + lz * off;
-                    // face the road along the dominant axis
-                    int face = Math.abs(lx) > Math.abs(lz) ? (lx > 0 ? 2 : 3) : (lz > 0 ? 0 : 1);
-                    boolean wide = face < 2;
-                    float hu = 15f, hv = 13f;
-                    float x0 = cx - (wide ? hu : hv), x1 = cx + (wide ? hu : hv), z0 = cz - (wide ? hv : hu), z1 = cz + (wide ? hv : hu);
-                    if (buildable(x0, z0, x1, z1, 4f) && reserve(x0, z0, x1, z1)) {
-                        Site st = new Site();
-                        st.x0 = x0; st.z0 = z0; st.x1 = x1; st.z1 = z1;
-                        st.kind = FARM; st.face = face; st.seed = rnd.nextInt();
-                        float ro = e.cls.halfWidth() + 0.5f;
-                        st.rx = p[0] + lx * ro; st.rz = p[1] + lz * ro;
-                        add(st);
-                        farmCount++;
-                    }
-                }
-                s += 260f + rnd.nextFloat() * 520f;
-            }
+        // farmsteads: placed with the road network, each with its own access lane
+        for (float[] f : roads.farms) {
+            Site st = new Site();
+            st.x0 = f[0]; st.z0 = f[1]; st.x1 = f[2]; st.z1 = f[3];
+            st.kind = FARM; st.face = (int) f[4]; st.seed = (int) f[5];
+            st.rx = Float.NaN;
+            reserve(st.x0, st.z0, st.x1, st.z1);
+            add(st);
+            farmCount++;
         }
         // villages: houses around the junction
         for (RoadNode v : roads.villages) {
@@ -268,7 +249,6 @@ public final class Countryside {
         // gravel yard and a driveway out to the road
         float[] yd = local(s, w * 0.25f, 4f, w * 0.75f, 14f);
         yard(gb, yd[0], yd[1], yd[2], yd[3], lib.gravel);
-        driveway(gb, s, w);
         // farmhouse at the back of the yard, barn to one side, greenhouse on the other
         float hx = w * 0.5f + (r.nextFloat() - 0.5f) * 4f;
         float[] hs = local(s, hx - 6.5f, 14f, hx + 6.5f, 23f);

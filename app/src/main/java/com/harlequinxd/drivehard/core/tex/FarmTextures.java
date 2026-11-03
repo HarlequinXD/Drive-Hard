@@ -172,4 +172,43 @@ public final class FarmTextures {
             for (int x = x0; x < x0 + wpx; x++) m.px[y * m.w + x] = mix(c, m.px[y * m.w + x], 0.12f);
         }
     }
+
+    /**
+     * The last stretch of a road before a junction ("mouth"), u across the whole road (0..1 =
+     * right..left edge for traffic arriving), v along it (1 = junction side). Optional zebra
+     * crossing next to the junction and a stop line across the arriving half.
+     *
+     * @param width     road width in metres
+     * @param length    mouth length in metres
+     * @param arriving  width of the arriving half that gets the stop line (metres from the centre)
+     * @param zebra     paint a pedestrian crossing (city streets)
+     */
+    public static Texture mouth(Texture asphalt, float width, float length, float arriving, boolean zebra, boolean stop) {
+        int w = 128, h = 64;
+        Img m = new Img(w, h);
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                int sx = (int) (x * width / w / 2f * asphalt.w) & (asphalt.w - 1);
+                int sy = (int) (y * length / h / 2f * asphalt.h) & (asphalt.h - 1);
+                m.px[y * w + x] = asphalt.px[sy * asphalt.w + sx];
+            }
+        int white = rgb(236, 236, 228);
+        float pxPerM = h / length;
+        if (zebra) {
+            // stripes 0.45 m wide every 0.9 m, 0.6..3.6 m from the junction edge
+            int y0 = h - Math.round(3.6f * pxPerM), y1 = h - Math.round(0.6f * pxPerM);
+            float stripe = 0.45f / width * w, period = 0.9f / width * w;
+            for (float x = period * 0.5f; x < w - 1; x += period)
+                for (int y = y0; y < y1; y++)
+                    for (int xx = (int) x; xx < Math.min(w, (int) (x + stripe)); xx++) m.px[y * w + xx] = mix(white, m.px[y * w + xx], 0.1f);
+        }
+        if (stop) {
+            float d0 = zebra ? 4.3f : 0.3f, d1 = zebra ? 4.75f : 0.75f;
+            int y0 = h - Math.round(d1 * pxPerM), y1 = h - Math.round(d0 * pxPerM);
+            int x0 = w / 2 + 1, x1 = Math.min(w, Math.round((0.5f + arriving / width) * w));
+            for (int y = Math.max(0, y0); y < Math.min(h, y1); y++)
+                for (int x = x0; x < x1; x++) m.px[y * w + x] = mix(white, m.px[y * w + x], 0.1f);
+        }
+        return m.texture();
+    }
 }

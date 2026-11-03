@@ -20,10 +20,10 @@ import java.util.Arrays;
  */
 public final class SoftRenderer {
     public static final int L_WATER = 0, L_GROUND = 1, L_DECAL = 2, L_RAISED = 3, L_SHADOW = 4, L_OBJECT = 5, LAYERS = 6;
-    public static final int MODE_OPAQUE = 0, MODE_ALPHA = 1, MODE_SHADOW = 2;
+    public static final int MODE_OPAQUE = 0, MODE_ALPHA = 1, MODE_SHADOW = 2, MODE_BLEND = 3;
     private static final int BUCKETS = 4096;
     private static final float BUCKET_SCALE = 24f;     // buckets per metre (~170 m range)
-    private static final int VA = 6;                    // per screen vertex: x y u v light fog
+    private static final int VA = 7;                    // per screen vertex: x y u v light fog coverage
     private static final int MAX_PRIMS = 60000;
 
     public final int W, H;
@@ -51,6 +51,8 @@ public final class SoftRenderer {
     private boolean spriteMode;
     /** Current polygon sorts by its farthest vertex (see {@link Geo#FLAG_SORT_FAR}). */
     private boolean sortFar;
+    /** Coverage of the polygon being submitted (blended overlays); 1 otherwise. */
+    private final float[] curAlpha = {1f, 1f, 1f, 1f};
 
     // ordering table + primitive pool
     private final int[] head = new int[LAYERS * BUCKETS];
@@ -250,8 +252,11 @@ public final class SoftRenderer {
                 wl[k] = g.light[i * 4 + k];
             }
             sortFar = (fl & Geo.FLAG_SORT_FAR) != 0;
+            boolean blend = (fl & Geo.FLAG_BLEND) != 0 && g.alpha != null;
+            if (blend) for (int k = 0; k < 4; k++) curAlpha[k] = g.alpha[i * 4 + k];
             submit(wp, wuv, wl, g.vertexCount(i), g.tex[i], g.layer(i),
-                    (fl & Geo.FLAG_ALPHA) != 0 ? MODE_ALPHA : MODE_OPAQUE, g.bias[i], (fl & Geo.FLAG_NO_SUBDIV) == 0);
+                    blend ? MODE_BLEND : ((fl & Geo.FLAG_ALPHA) != 0 ? MODE_ALPHA : MODE_OPAQUE), g.bias[i], (fl & Geo.FLAG_NO_SUBDIV) == 0);
+            if (blend) for (int k = 0; k < 4; k++) curAlpha[k] = 1f;
             sortFar = false;
         }
     }
@@ -332,6 +337,14 @@ public final class SoftRenderer {
     public void submit(float[] p, float[] uvT, float[] l, int nv, int texId, int layer, int mode, float bias, boolean subdiv) {
         int allNear = 1, allFar = 1;
         float zsum = 0f, zmax = -Float.MAX_VALUE;
+        // Rebase texture coordinates near zero: the rasteriser steps u/v in 16.16 fixed point, which
+        // overflows past 32768 texels (world-mapped textures far from the origin). Textures wrap, so
+        // shifting by whole texture sizes changes nothing visible.
+        Texture tx = textures[texId];
+        float minU = Float.MAX_VALUE, minV = Float.MAX_VALUE;
+        for (int k = 0; k < nv; k++) { minU = Math.min(minU, uvT[k * 2]); minV = Math.min(minV, uvT[k * 2 + 1]); }
+        float shU = minU < 0f || minU >= tx.w ? (float) Math.floor(minU / tx.w) * tx.w : 0f;
+        float shV = minV < 0f || minV >= tx.h ? (float) Math.floor(minV / tx.h) * tx.h : 0f;
         for (int k = 0; k < nv; k++) {
             float dx = p[k * 3] - ex, dy = p[k * 3 + 1] - ey, dz = p[k * 3 + 2] - ez;
             float vx = dx * rx + dy * ry + dz * rz;
@@ -339,7 +352,7 @@ public final class SoftRenderer {
             float vz = dx * fx + dy * fy + dz * fz;
             int o = k * VA;
             vq[o] = vx; vq[o + 1] = vy; vq[o + 2] = vz;
-            vq[o + 3] = uvT[k * 2]; vq[o + 4] = uvT[k * 2 + 1]; vq[o + 5] = l[k];
+            vq[o + 3] = uvT[k * 2] - shU; vq[o + 4] = uvT[k * 2 + 1] - shV; vq[o + 5] = l[k]; vq[o + 6] = curAlpha[k];
             if (vz >= near) allNear = 0;
             if (vz <= far) allFar = 0;
             zsum += vz;
@@ -460,6 +473,7 @@ public final class SoftRenderer {
             scr[o + 2] = in[o + 3]; scr[o + 3] = in[o + 4]; scr[o + 4] = in[o + 5];
             float f = (z - fogStart) * fogK;
             scr[o + 5] = f < 0f ? 0f : (f > 1f ? 1f : f);
+            scr[o + 6] = in[o + 6];
             if (sx >= 0) offL = 0;
             if (sx <= W) offR = 0;
             if (sy >= 0) offT = 0;
@@ -512,6 +526,9 @@ public final class SoftRenderer {
         u0 -= ub; u1 -= ub; u2 -= ub; v0 -= vb; v1 -= vb; v2 -= vb;
         float l0 = A[i0 + 4], l1 = A[i1 + 4], l2 = A[i2 + 4];
         float f0 = A[i0 + 5], f1 = A[i1 + 5], f2 = A[i2 + 5];
+        float a0 = A[i0 + 6], a1 = A[i1 + 6], a2 = A[i2 + 6];
+        float dadx = ((a1 - a0) * dy2 - (a2 - a0) * dy1) * id, dady = ((a2 - a0) * dx1 - (a1 - a0) * dx2) * id;
+        int dA = (int) (dadx * 65536f);
 
         float dudx = ((u1 - u0) * dy2 - (u2 - u0) * dy1) * id, dudy = ((u2 - u0) * dx1 - (u1 - u0) * dx2) * id;
         float dvdx = ((v1 - v0) * dy2 - (v2 - v0) * dy1) * id, dvdy = ((v2 - v0) * dx1 - (v1 - v0) * dx2) * id;
@@ -547,6 +564,7 @@ public final class SoftRenderer {
             int V = (int) ((v0 + dvdx * ox + dvdy * oy) * 65536f);
             int L = (int) ((l0 + dldx * ox + dldy * oy) * 65536f);
             int F = (int) ((f0 + dfdx * ox + dfdy * oy) * 65536f);
+            int AL = (int) ((a0 + dadx * ox + dady * oy) * 65536f);
             int row = y * width;
             int db = (y & 3) << 2;
             if (mode == MODE_SHADOW) {
@@ -562,9 +580,11 @@ public final class SoftRenderer {
                 }
                 continue;
             }
-            boolean alpha = mode == MODE_ALPHA;
-            for (int x = xs; x < xe; x++, U += dU, V += dV, L += dL, F += dF) {
+            boolean alpha = mode == MODE_ALPHA, blend = mode == MODE_BLEND;
+            for (int x = xs; x < xe; x++, U += dU, V += dV, L += dL, F += dF, AL += dA) {
                 int c;
+                // blended overlays: ordered-dither the coverage (PS1-style stipple blend)
+                if (blend && (AL >> 12) <= BAYER[db | (x & 3)]) continue;
                 if (alpha) {   // sprites/foliage: clamp v (atlases may be non power-of-two tall)
                     int ty = V >> 16;
                     ty = ty < 0 ? 0 : (ty > hmax ? hmax : ty);

@@ -13,6 +13,8 @@ public final class Geo {
     public static final int FLAG_DETAIL = 4;
     /** Sort by the polygon's farthest point instead of its average (terrain under standing objects). */
     public static final int FLAG_SORT_FAR = 8;
+    /** Dither-blended overlay: drawn over the polygon beneath with a per-vertex coverage (0..1). */
+    public static final int FLAG_BLEND = 16;
 
     public int count;
     /** Tall object batch (building): eligible for terrain occlusion culling. */
@@ -22,6 +24,8 @@ public final class Geo {
     public float[] light = new float[4 * 64];
     public float[] nrm = new float[3 * 64];
     public float[] bias = new float[64];
+    /** Per-vertex coverage for blended overlays (allocated on first use). */
+    public float[] alpha;
     public int[] tex = new int[64];
     /** bits 0-2: vertex count (3/4), bits 4-7: layer, bits 8+: flags */
     public int[] meta = new int[64];
@@ -38,6 +42,7 @@ public final class Geo {
         bias = Arrays.copyOf(bias, n);
         tex = Arrays.copyOf(tex, n);
         meta = Arrays.copyOf(meta, n);
+        if (alpha != null) alpha = Arrays.copyOf(alpha, n * 4);
     }
 
     public int vertexCount(int i) { return meta[i] & 7; }
@@ -79,6 +84,15 @@ public final class Geo {
         tex[i] = texId;
         bias[i] = depthBias;
         meta[i] = nv | (layer << 4) | (flags << 8);
+        return i;
+    }
+
+    /** Adds a dither-blended overlay polygon with per-vertex coverage {@code a} (0..1). */
+    public int addBlend(float[] p, float[] t, float[] l, float[] a, int texId, int layer, int flags, float depthBias) {
+        int i = add(p, t, l, texId, layer, flags | FLAG_BLEND, depthBias, true);
+        if (alpha == null || alpha.length < tex.length * 4) alpha = alpha == null ? new float[tex.length * 4] : Arrays.copyOf(alpha, tex.length * 4);
+        int nv = p.length / 3;
+        for (int k = 0; k < 4; k++) alpha[i * 4 + k] = a[Math.min(k, nv - 1)];
         return i;
     }
 }

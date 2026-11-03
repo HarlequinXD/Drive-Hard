@@ -26,9 +26,18 @@ software renderer, no engine.
   interchanges and one-way slip roads, coastal highways, and ~3,800 km of highways and winding
   country roads linking ~180 villages. Country roads that cross get a junction; roads that cross
   a freeway go over it on a bridge with piers. Terrain is cut and filled to each road's profile
-  (embankments and cuttings). Roads are drawn as lane-wide strips following the spline, with
-  the lane markings painted into lane textures, freeway median barriers and guardrails, stop
-  lines on minor roads, and utility poles with wires along country roads.
+  (embankments and cuttings). All roads, city streets included, are drawn
+  from the graph: lane-wide strips following the spline (markings painted into lane textures),
+  trimmed at each junction, where one junction surface joins every road that meets there with
+  curved kerb returns; road mouths carry stop lines (and zebra crossings in the city). Roads
+  leaving a junction at grazing angles are bent apart so junctions get a proper shape. Farm
+  lanes branch off at T-junctions. Outside the city each road gets cut-and-fill verges down
+  to the terrain, and the terrain grid is cut around all paving so grass never overlaps
+  asphalt and nothing grows on a road. Freeways have median barriers and guardrails; slip
+  roads taper off the kerb lane; country roads have utility poles with wires.
+- **Ground blending:** neighbouring ground types (grass, hill grass, paddies, cabbage, soil,
+  tea, sand) blend across their shared edges with dithered overlays, and the ground is
+  vertex-shaded with soft lighter/darker patches.
 - **Countryside.** Rice paddies (flooded, green or golden by district) with grass levees,
   cabbage fields, ploughed soil and fallow parcels on the lowland, tea rows on gentle slopes,
   cedar forest on the mountains. ~2,700 farmsteads along the roads (old farmhouse, timber barn,

@@ -23,6 +23,12 @@ public final class RoadNode {
     public int[] edges = new int[0];
     /** Merged away during construction; ignore. */
     public boolean dead;
+    /** Junction surface outline (x, y, z triples, in order), or null where there is none. */
+    public float[] ring;
+    /** Radius of the ring around the node centre. */
+    public float ringRadius;
+    /** Per ring vertex: true if the segment from this vertex to the next is a kerb return (not a road mouth). */
+    public boolean[] kerb;
 
     RoadNode(int id, float x, float z, float y, Kind kind) {
         this.id = id; this.x = x; this.z = z; this.y = y; this.kind = kind;
