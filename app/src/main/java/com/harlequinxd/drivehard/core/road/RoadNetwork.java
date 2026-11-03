@@ -662,7 +662,7 @@ public final class RoadNetwork {
     private final class Router {
         final int n = 512;
         final float cell = Terrain.ISLAND_SIZE / n;
-        final float[] h = new float[n * n], inland = new float[n * n];
+        final float[] h = new float[n * n], inland = new float[n * n], steep = new float[n * n];
         final byte[] used = new byte[n * n];
         final float[] g = new float[n * n];
         final int[] from = new int[n * n], stamp = new int[n * n];
@@ -677,6 +677,12 @@ public final class RoadNetwork {
                     float d = -terrain.coastOver(x, z);
                     inland[j * n + i] = d;
                     h[j * n + i] = d > -100f ? terrain.natural(x, z) : -50f;
+                    // local steepness (40 m scale): roads keep off cliffs and steep hillsides
+                    if (d > -100f) {
+                        float gx = (terrain.natural(x + 40f, z) - terrain.natural(x - 40f, z)) / 80f;
+                        float gz = (terrain.natural(x, z + 40f) - terrain.natural(x, z - 40f)) / 80f;
+                        steep[j * n + i] = (float) Math.sqrt(gx * gx + gz * gz);
+                    }
                 }
             markArea(city.cityX0 - 20f, city.cityZ0 - 20f, city.cityX1 + 20f, city.cityZ1 + 20f, 100);
         }
@@ -714,6 +720,10 @@ public final class RoadNetwork {
             float gmax = cls == RoadClass.FREEWAY ? 0.035f : (cls == RoadClass.HIGHWAY ? 0.06f : 0.09f);
             float q = grade / gmax;
             float c = 1f + q * q * 2.5f + (q > 2f ? (q - 2f) * 30f : 0f);
+            // steep ground: a road there would be a shelf cut into a cliff; cliffs are impassable
+            float st = steep[b];
+            if (st > 0.55f && !end) return Float.POSITIVE_INFINITY;
+            if (st > 0.15f) c += (st - 0.15f) * (cls == RoadClass.FREEWAY ? 60f : 35f);
             if (d < 350f) c += 1.5f;                                      // keep off the shore
             if (ringRouting && d > 2500f) c += (d - 2500f) / 1200f;      // the coastal road stays coastal
             if (cls == RoadClass.FREEWAY) c += Math.max(0f, h[b] - 60f) / 120f;
@@ -1774,8 +1784,10 @@ public final class RoadNetwork {
             float l2 = vx * vx + vz * vz;
             float t = l2 > 0f ? ((x - e.x[i]) * vx + (z - e.z[i]) * vz) / l2 : 0f;
             // an embankment ends in a vertical abutment where its bridge begins: no fill under the deck
-            if (t > 1f && i + 1 < e.bridge.length && e.bridge[i + 1]) continue;
-            if (t < 0f && i > 0 && e.bridge[i - 1]) continue;
+            // (the fill runs on 6 m under the deck end so the road meets the deck level)
+            float segL = (float) Math.sqrt(l2);
+            if (t > 1f && i + 1 < e.bridge.length && e.bridge[i + 1] && (t - 1f) * segL > 6f) continue;
+            if (t < 0f && i > 0 && e.bridge[i - 1] && -t * segL > 6f) continue;
             t = Math.max(0f, Math.min(1f, t));
             float qx = e.x[i] + vx * t - x, qz = e.z[i] + vz * t - z;
             float d = (float) Math.sqrt(qx * qx + qz * qz);
@@ -1785,7 +1797,8 @@ public final class RoadNetwork {
             // cuttings and embankments have steep sides (rock cuts, built-up fills), not gentle hills:
             // a 1.5 m shoulder, then about 60 degrees down to (or up from) the natural ground
             float dh = Math.abs(nat - yr);
-            float shoulder = 1.5f, bank = Math.max(1.5f, Math.min(24f, dh * 0.6f));
+            // the verge is wide enough that the 8 m height map keeps the whole road surface flat
+            float shoulder = 6f, bank = Math.max(3f, Math.min(30f, dh * 0.8f));
             if (d > hw + shoulder + bank + 0.5f) continue;
             float u = (d - hw - shoulder) / bank;
             float w = u <= 0f ? 1f : 1f - smooth01(Math.min(1f, u));
