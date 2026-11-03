@@ -285,6 +285,11 @@ public final class GameView extends SurfaceView implements SurfaceHolder.Callbac
         c.drawText(String.format(Locale.US, "DRIVE HARD  %.0f/%d fps%s  %.1f ms  %dx%d  %d tris  %s",
                 fps, fpsCap, thermal.level() > 0 ? " (hot " + thermal.level() + ")" : "", frameMs, g.renderer.W, g.renderer.H, g.renderer.statPrims, g.mode.name()),
                 10 * d, 18 * d, text);
+        // clock, day, season and weather
+        com.harlequinxd.drivehard.core.Environment e = g.env;
+        text.setTextSize(15 * d);
+        c.drawText(String.format(Locale.US, "%s  Day %d  %s  %s", e.clock(), e.day(), e.season().label, e.shown().label),
+                10 * d, 38 * d, text);
     }
 
     // ------------------------------------------------------------------ place names

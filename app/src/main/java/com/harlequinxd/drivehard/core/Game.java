@@ -66,6 +66,8 @@ public final class Game {
     public SoftRenderer renderer;
     private final float[] move = new float[2];
     public float time;
+    /** Time of day, season and weather. */
+    public final Environment env;
     private float rotateTimer;
 
     /** PS1-style draw distances (metres). */
@@ -80,6 +82,7 @@ public final class Game {
     public static final long DEFAULT_SEED = 20261103L;
 
     public Game(long seed, Progress progress) {
+        env = new Environment(seed);
         if (progress != null) progress.step("Painting textures");
         lib = new TextureLibrary(seed);
         if (progress != null) progress.step("Baking sprites");
@@ -146,6 +149,7 @@ public final class Game {
         renderer.ground = city.groundSource();
         renderer.setFogColor(0xBCD8EA);
         renderer.setZenithColor(0x3E86D0);
+        renderer.env = env;
     }
 
     // ------------------------------------------------------------------ styles
@@ -189,6 +193,7 @@ public final class Game {
     public void update(float dt, float stickX, float stickY, float dYaw, float dPitch, boolean jump,
                        float steer, float gas, float reverse, boolean carButton) {
         time += dt;
+        env.update(dt);
         cache.update();
         updatePlace(dt);
         // keep active styles alive and slowly rotate in new ones so all 100 appear over time
@@ -474,6 +479,7 @@ public final class Game {
         if (vehicle != null) drawVehicle(r, vehicle);
         if (mode != Mode.DRIVING) drawPlayer(r);
         r.flush();
+        r.weatherOverlay();
     }
 
     private void drawVehicle(SoftRenderer r, Vehicle v) {

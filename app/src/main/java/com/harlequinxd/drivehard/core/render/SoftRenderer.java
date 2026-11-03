@@ -1,5 +1,7 @@
 package com.harlequinxd.drivehard.core.render;
 
+import com.harlequinxd.drivehard.core.Environment;
+
 import java.util.Arrays;
 
 /**
@@ -114,7 +116,43 @@ public final class SoftRenderer {
 
     // ------------------------------------------------------------------ frame
 
+    /** Time of day and weather (null: fixed daylight). */
+    public com.harlequinxd.drivehard.core.Environment env;
+    /** Scene light per channel, 256 = daylight (from the environment). */
+    private int tR = 256, tG = 256, tB = 256;
+    private float dryness;
+    private int lutKey = Integer.MIN_VALUE;
+    /** The painted ground's 15-bit colours after season and light: 24-bit, quantised to 15-bit. */
+    private final int[] groundLut = new int[32768];
+    // sky elements for this frame
+    private float sunX, sunY, sunZ = 1f, moonX, moonY, moonZ, sunVis, moonVis, stars, rainbow, cover, cloudOX, cloudOZ;
+    private int cloudLit, cloudShade;
+    private boolean nightLights;
+    /** Fog, rain and haze veil the sky (sun, clouds) toward the horizon colour. */
+    private float skyHaze;
+    private int litShare;
+
     public void begin() {
+        Environment e0 = env;
+        if (e0 != null) {
+            tR = e0.tintR; tG = e0.tintG; tB = e0.tintB;
+            dryness = e0.dryness;
+            setFogColor(e0.horizon);
+            setZenithColor(e0.zenith);
+            fogStart = 45f * e0.fogScale;
+            fogEnd = 116f * e0.fogScale;
+            sunX = e0.sunX; sunY = e0.sunY; sunZ = e0.sunZ; sunVis = e0.sunVis;
+            moonX = e0.moonX; moonY = e0.moonY; moonZ = e0.moonZ; moonVis = e0.moonVis;
+            stars = e0.stars; rainbow = e0.rainbow; cover = e0.cloudCover;
+            cloudLit = e0.cloudLit; cloudShade = e0.cloudShade;
+            cloudOX = (float) ((e0.hours * 60.0 * e0.windX) % 100000.0);
+            cloudOZ = (float) ((e0.hours * 60.0 * e0.windZ) % 100000.0);
+            nightLights = e0.night > 0.3f;
+            skyHaze = Math.max(0f, Math.min(1f, (0.85f - e0.fogScale) / 0.55f));
+            litShare = (int) (e0.windowsLit * 256f);
+        }
+        int key = (tR << 20) ^ (tG << 10) ^ tB ^ ((int) (dryness * 50f) << 27);
+        if (key != lutKey) { lutKey = key; buildGroundLut(); }
         Arrays.fill(head, -1);
         primCount = 0;
         statPolys = 0;
@@ -123,6 +161,7 @@ public final class SoftRenderer {
 
     /** Fills the background with a dithered sky gradient matching the fog colour at the horizon. */
     private final int[] sky = new int[4 * 4096];
+    private final float[] skyR = new float[4096], skyG = new float[4096], skyB = new float[4096];
 
     public void drawSky() {
         for (int y = 0; y < H; y++) {
@@ -135,6 +174,7 @@ public final class SoftRenderer {
                 // below the horizon (past the draw distance) the fogged ground is fog coloured
                 r = fogR; g = fogG; b = fogB;
             }
+            skyR[y] = r; skyG[y] = g; skyB[y] = b;
             int row = y * W;
             int dy = (y & 3) << 2;
             int c0 = q(r, g, b, BAYER[dy] >> 1), c1 = q(r, g, b, BAYER[dy + 1] >> 1);
@@ -282,13 +322,105 @@ public final class SoftRenderer {
         return tc.t.mips[k][(((pz >> 3) * (n >> 3) + (px >> 3)) << 6) | ((pz & 7) << 3) | (px & 7)];
     }
 
-    /** 15-bit colour to the framebuffer's ARGB (exactly what the dithered path produces without fog). */
-    private static final int[] RGB555 = new int[32768];
-    static {
+    /** Season (dry grass turns straw coloured) and scene light applied to the 15-bit ground colours. */
+    private void buildGroundLut() {
+        float dk = dryness * 0.6f;
         for (int c = 0; c < 32768; c++) {
             int r = (c >> 10) & 31, g = (c >> 5) & 31, b = c & 31;
-            RGB555[c] = 0xFF000000 | ((r << 3 | r >> 2) << 16) | ((g << 3 | g >> 2) << 8) | (b << 3 | b >> 2);
+            float R = r << 3 | r >> 2, G = g << 3 | g >> 2, B = b << 3 | b >> 2;
+            if (dk > 0f && G > R && G > B) {
+                float k = Math.min(1f, (G - Math.max(R, B)) / 40f) * dk;
+                R += (G * 0.95f - R) * k;
+                G -= G * 0.1f * k;
+                B -= B * 0.35f * k;
+            }
+            int ri = Math.min(255, (int) (R * tR) >> 8), gi = Math.min(255, (int) (G * tG) >> 8), bi = Math.min(255, (int) (B * tB) >> 8);
+            ri >>= 3; gi >>= 3; bi >>= 3;
+            groundLut[c] = 0xFF000000 | ((ri << 3 | ri >> 2) << 16) | ((gi << 3 | gi >> 2) << 8) | (bi << 3 | bi >> 2);
         }
+    }
+
+    /** Cloud density, 256x256, tiles (about 24 m per texel). */
+    private static final float[] CLOUDS = new float[256 * 256];
+    static {
+        for (int y = 0; y < 256; y++)
+            for (int x = 0; x < 256; x++) {
+                float n = com.harlequinxd.drivehard.core.tex.Noise.fbm(x, y, 256, 256, 9127) * 0.7f
+                        + com.harlequinxd.drivehard.core.tex.Noise.value(x, y, 256, 256, 64, 64, 9131) * 0.3f;
+                CLOUDS[y * 256 + x] = n;
+            }
+    }
+    private static final float CLOUD_H = 900f, CLOUD_SCALE = 1f / 24f;
+
+    /**
+     * One sky pixel: the gradient, then stars, moon, sun with its glow, a rainbow and the cloud
+     * layer (a plane 900 m up, drifting with the wind).
+     */
+    private int skyPixel(int x, int y, float dx, float dz, float hl2, float az) {
+        float r = skyR[y], g = skyG[y], b = skyB[y];
+        float s = (hy - (y + 0.5f)) / focal;
+        if (s > 0f) {
+            float inv = 1f / (float) Math.sqrt(hl2 + s * s);
+            float vx = dx * inv, vy = s * inv, vz = dz * inv;
+            if (stars > 0f && vy > 0.06f) {
+                int hs = com.harlequinxd.drivehard.core.tex.Noise.hash((int) (az * 300f), (int) (vy * 300f), 77);
+                if ((hs & 1023) < 4) {
+                    float k = stars * (120 + ((hs >>> 24) & 127));
+                    r += k; g += k; b += k * 0.9f;
+                }
+            }
+            if (moonVis > 0f) {
+                float d = vx * moonX + vy * moonY + vz * moonZ;
+                if (d > 0.99935f) { r += (230 - r) * moonVis; g += (232 - g) * moonVis; b += (220 - b) * moonVis; }
+                else if (d > 0.995f) { float k = (d - 0.995f) / 0.00435f * 40f * moonVis; r += k; g += k; b += k; }
+            }
+            if (sunVis > 0f) {
+                float d = vx * sunX + vy * sunY + vz * sunZ;
+                if (d > 0.9991f) { r += (255 - r) * sunVis; g += (250 - g) * sunVis; b += (228 - b) * sunVis; }
+                else if (d > 0.96f) { float k = (d - 0.96f) / 0.0391f; k = k * k * 130f * sunVis; r += k; g += k * 0.85f; b += k * 0.55f; }
+            }
+            if (rainbow > 0f) {
+                float d = -(vx * sunX + vy * sunY + vz * sunZ);
+                if (d > 0.733f && d < 0.778f) {
+                    float f = (d - 0.733f) / 0.045f;               // 0 outside (red) .. 1 inside (violet)
+                    float k = rainbow * 0.32f * (1f - Math.abs(f - 0.5f) * 1.2f);
+                    float cr, cg, cb;
+                    if (f < 0.2f) { cr = 255; cg = 40; cb = 30; }
+                    else if (f < 0.35f) { cr = 255; cg = 150; cb = 20; }
+                    else if (f < 0.5f) { cr = 250; cg = 240; cb = 40; }
+                    else if (f < 0.66f) { cr = 40; cg = 220; cb = 60; }
+                    else if (f < 0.82f) { cr = 40; cg = 90; cb = 255; }
+                    else { cr = 150; cg = 50; cb = 220; }
+                    r += (cr - r) * k; g += (cg - g) * k; b += (cb - b) * k;
+                }
+            }
+            if (cover > 0.02f && s > 0.012f) {
+                float t = (CLOUD_H - ey) / s;
+                float wx = ex + dx * t + cloudOX, wz = ez + dz * t + cloudOZ;
+                float n = CLOUDS[(((int) (wz * CLOUD_SCALE)) & 255) << 8 | (((int) (wx * CLOUD_SCALE)) & 255)];
+                float th = 1f - cover;
+                float a = (n - th * 0.85f - 0.08f) / 0.2f;
+                if (a > 0f) {
+                    if (a > 1f) a = 1f;
+                    a *= Math.min(1f, 1.5f - t / 14000f);
+                    if (cover > 0.9f) a = Math.max(a, (cover - 0.9f) * 10f);   // a full grey deck
+                    if (a > 0f) {
+                        float sh = Math.min(1f, (n - th * 0.85f) * 2.2f);
+                        int cl = cloudLit, cs = cloudShade;
+                        float cr = ((cl >> 16) & 255) + ((((cs >> 16) & 255) - ((cl >> 16) & 255)) * sh);
+                        float cg = ((cl >> 8) & 255) + ((((cs >> 8) & 255) - ((cl >> 8) & 255)) * sh);
+                        float cb = (cl & 255) + (((cs & 255) - (cl & 255)) * sh);
+                        r += (cr - r) * a; g += (cg - g) * a; b += (cb - b) * a;
+                    }
+                }
+            }
+        }
+        if (skyHaze > 0f) {
+            float k = skyHaze * (s > 0f ? Math.max(0.35f, 1f - s * 0.9f) : 1f);
+            r += (fogR - r) * k; g += (fogG - g) * k; b += (fogB - b) * k;
+        }
+        int d = BAYER[((y & 3) << 2) | (x & 3)] >> 1;
+        return q(Math.min(255, (int) r), Math.min(255, (int) g), Math.min(255, (int) b), d);
     }
 
     /** Column-major scratch (x * H + y): each column is written contiguously, then transposed. */
@@ -352,9 +484,17 @@ public final class SoftRenderer {
                 cur = next;
                 sPrev = hy - (nh - ey) * focal / t;
             }
-            for (int y = 0; y < ybuf; y++) {
-                colZ[base + y] = 0f;
-                colFb[base + y] = sk[y * 4 + (x & 3)];
+            if (env == null) {
+                for (int y = 0; y < ybuf; y++) {
+                    colZ[base + y] = 0f;
+                    colFb[base + y] = sk[y * 4 + (x & 3)];
+                }
+            } else if (ybuf > 0) {
+                float hl2 = dx * dx + dz * dz, az = (float) Math.atan2(dx, dz);
+                for (int y = 0; y < ybuf; y++) {
+                    colZ[base + y] = 0f;
+                    colFb[base + y] = skyPixel(x, y, dx, dz, hl2, az);
+                }
             }
         }
     }
@@ -389,13 +529,11 @@ public final class SoftRenderer {
             float px = ex + dx * dr, pz = ez + dz * dr;
             int k = base + y;
             if (sec == null) {
-                int c = groundColor(tc, px, pz, mip);
-                if (dr <= fs) cf[k] = RGB555[c];          // the map is already 15-bit: no shading needed
+                int c = groundLut[groundColor(tc, px, pz, mip)];   // season and light already applied
+                if (dr <= fs) cf[k] = c;
                 else {
-                    int r = (c >> 10) & 31, g = (c >> 5) & 31, b = c & 31;
-                    r = r << 3 | r >> 2; g = g << 3 | g >> 2; b = b << 3 | b >> 2;
                     int fv = (int) Math.min(256f, (dr - fs) * fogK * 256f);
-                    cf[k] = shade(0xFF000000 | (r << 16) | (g << 8) | b, 256, fv, fr, fg, fbb, BAYER[((y & 3) << 2) | (x & 3)] >> 1);
+                    cf[k] = shadeRaw(c, 256, fv, fr, fg, fbb, BAYER[((y & 3) << 2) | (x & 3)] >> 1);
                 }
             } else {
                 // roof covering, tiles lined up with the slope
@@ -426,11 +564,14 @@ public final class SoftRenderer {
         float izw = 1f / t * 0.995f;
         Sectors.Tiles tl = w.tiles;
         Sectors.Sector sec = w.front;
+        int seed = nightLights ? Float.floatToIntBits(w.x0 * 3.1f + w.z0 * 1.7f + w.uOff) : 0;
         for (int y = ybuf - 1; y >= ys; y--) {
             float wy = ey + (hy - (y + 0.5f)) * k;        // world height of this row on the wall
-            int c = wallTexel(tl, sec.base, u + w.uOff, wy, tl.len > 0f ? tl.len : w.len);
+            int c = wallTexel(tl, sec.base, u + w.uOff, wy, tl.len > 0f ? tl.len : w.len, seed);
             int q = base + y;
-            colFb[q] = shade(c, lv, fv, fogR, fogG, fogB, BAYER[((y & 3) << 2) | (x & 3)] >> 1);
+            int d = BAYER[((y & 3) << 2) | (x & 3)] >> 1;
+            // lit windows and shopfronts glow at night: not darkened by the scene light
+            colFb[q] = (c >>> 24) == 0xFE ? shadeRaw(c, 256, fv >> 1, fogR, fogG, fogB, d) : shade(c, lv, fv, fogR, fogG, fogB, d);
             colZ[q] = izw;
         }
         return ys;
@@ -450,7 +591,7 @@ public final class SoftRenderer {
     }
 
     /** Colour of a wall at (u along its face, height y): foundation, plain wall or the tile of its storey. */
-    private int wallTexel(Sectors.Tiles tl, float base, float u, float y, float len) {
+    private int wallTexel(Sectors.Tiles tl, float base, float u, float y, float len, int seed) {
         float yr = y - base;
         if (yr < 0f) return sampleWrap(tl.found, u * 0.5f, -y * 0.5f);
         int st;
@@ -469,8 +610,12 @@ public final class SoftRenderer {
         byte kind = tl.kind[st][cidx];
         float fu = u - cidx * tw;
         switch (kind) {
-            case Sectors.FULL:
-                return sampleClamp(tl.tex[st][cidx], fu / tw, 1f - fy / sh);
+            case Sectors.FULL: {
+                int c = sampleClamp(tl.tex[st][cidx], fu / tw, 1f - fy / sh);
+                if (seed == 0) return c;
+                if (st == 0 && tl.litGround) return 0xFE000000 | (c & 0xFFFFFF);   // shops stay open
+                return lit(c, st, cidx, seed);
+            }
             case Sectors.WINDOW: case Sectors.SMALL: case Sectors.DOOR: case Sectors.GARDEN: {
                 float ow, oy0, oy1;
                 if (kind == Sectors.WINDOW) { ow = Math.min(tl.winW, tw - 0.5f); oy0 = tl.sill; oy1 = tl.sill + tl.winH; }
@@ -483,13 +628,28 @@ public final class SoftRenderer {
                     int c = sampleClamp(tl.tex[st][cidx], (fu - ou0) / ow, 1f - (fy - oy0) / (oy1 - oy0));
                     // set into the wall: a darker reveal round the opening
                     float edge = Math.min(Math.min(fu - ou0, ou0 + ow - fu), Math.min(fy - oy0, oy1 - fy));
-                    return edge < 0.07f ? Img2.darken(c) : c;
+                    if (edge < 0.07f) return Img2.darken(c);
+                    return seed != 0 && kind != Sectors.DOOR ? lit(c, st, cidx, seed) : c;
                 }
                 return sampleWrap(plain, u / tl.matScale, -y / tl.matScale);
             }
             default:
                 return sampleWrap(plain, u / tl.matScale, -y / tl.matScale);
         }
+    }
+
+    /** A window texel at night: glass of a lit room glows warm (marked 0xFE: no scene light). */
+    private int lit(int c, int st, int col, int seed) {
+        int h = com.harlequinxd.drivehard.core.tex.Noise.hash(col, st, seed) & 255;
+        if (h >= litShare) return c;
+        int r = (c >> 16) & 255, g = (c >> 8) & 255, b = c & 255;
+        int l = (r * 3 + g * 6 + b) / 10;
+        boolean glass = b > r + 10 || l < 80;
+        if (!glass) return c;
+        float k = 0.55f + l / 255f * 0.6f;
+        boolean cool = (h & 7) == 0;                       // a few rooms lit by a television
+        int lr = (int) ((cool ? 170 : 255) * k), lg = (int) ((cool ? 200 : 215) * k), lb = (int) ((cool ? 255 : 140) * k);
+        return 0xFE000000 | (Math.min(255, lr) << 16) | (Math.min(255, lg) << 8) | Math.min(255, lb);
     }
 
     /** Tiny colour helpers for the wall tiles. */
@@ -952,8 +1112,70 @@ public final class SoftRenderer {
         }
     }
 
-    /** Lights, fogs and reduces a texel to 15-bit colour with ordered dither. */
-    private static int shade(int c, int lv, int fv, int fr, int fg, int fbb, int d) {
+    /**
+     * Rain streaks over the finished frame (falling, slanted by the wind) and the lightning bolt
+     * in the sky during thunderstorms. Call after {@link #flush}.
+     */
+    public void weatherOverlay() {
+        Environment e0 = env;
+        if (e0 == null) return;
+        int[] out = fb;
+        if (e0.boltTime > 0f) {
+            java.util.Random br = new java.util.Random(e0.boltSeed);
+            float bx = W * (0.15f + br.nextFloat() * 0.7f);
+            int yEnd = (int) Math.min(H - 1, hy + 4);
+            for (int y = 0; y < yEnd; y++) {
+                if ((y & 3) == 0) bx += (br.nextFloat() - 0.5f) * 6f;
+                int x = (int) bx;
+                for (int k = -1; k <= 1; k++) {
+                    int xx = x + k;
+                    if (xx < 0 || xx >= W || zbuf[y * W + xx] != 0f) continue;
+                    out[y * W + xx] = k == 0 ? 0xFFF4F6FF : 0xFFB0B8E0;
+                }
+            }
+        }
+        float rain = e0.rain;
+        if (rain <= 0.02f) return;
+        int n = (int) (rain * 420f);
+        float t = time;
+        int slant = e0.windX > 0 ? 1 : -1;
+        for (int i = 0; i < n; i++) {
+            int h1 = com.harlequinxd.drivehard.core.tex.Noise.hash(i, 1, 5), h2 = com.harlequinxd.drivehard.core.tex.Noise.hash(i, 2, 5);
+            float speed = 260f + (h2 & 127);
+            int len = 4 + (h1 >>> 28);
+            int y0 = (int) (((h2 >>> 8) & 1023) + t * speed) % (H + 24) - 12;
+            int x0 = ((h1 & 0xFFFF) * W) >> 16;
+            x0 = (int) ((x0 - slant * t * 40f) % W);
+            if (x0 < 0) x0 += W;
+            for (int j = 0; j < len; j++) {
+                int y = y0 + j, x = x0 + slant * ((y0 + j) / 4) % 3;
+                if (y < 0 || y >= H || x < 0 || x >= W) continue;
+                int k = y * W + x, d = out[k];
+                int r = (((d >> 16) & 255) * 5 + 200 * 3) >> 3, g = (((d >> 8) & 255) * 5 + 208 * 3) >> 3, b = ((d & 255) * 5 + 222 * 3) >> 3;
+                out[k] = 0xFF000000 | (r << 16) | (g << 8) | b;
+            }
+        }
+    }
+
+    /** Lights (with the scene light), fogs and reduces a texel to 15-bit colour with ordered dither. */
+    private int shade(int c, int lv, int fv, int fr, int fg, int fbb, int d) {
+        int r = (((c >> 16) & 255) * lv * tR) >> 16;
+        int g = (((c >> 8) & 255) * lv * tG) >> 16;
+        int b = ((c & 255) * lv * tB) >> 16;
+        if (r > 255) r = 255;
+        if (g > 255) g = 255;
+        if (b > 255) b = 255;
+        r += ((fr - r) * fv) >> 8;
+        g += ((fg - g) * fv) >> 8;
+        b += ((fbb - b) * fv) >> 8;
+        r = (r + d) >> 3; if (r > 31) r = 31;
+        g = (g + d) >> 3; if (g > 31) g = 31;
+        b = (b + d) >> 3; if (b > 31) b = 31;
+        return 0xFF000000 | (((r << 3) | (r >> 2)) << 16) | (((g << 3) | (g >> 2)) << 8) | ((b << 3) | (b >> 2));
+    }
+
+    /** As {@link #shade} without the scene light (light sources, pre-lit colours). */
+    private static int shadeRaw(int c, int lv, int fv, int fr, int fg, int fbb, int d) {
         int r = (((c >> 16) & 255) * lv) >> 8;
         int g = (((c >> 8) & 255) * lv) >> 8;
         int b = ((c & 255) * lv) >> 8;

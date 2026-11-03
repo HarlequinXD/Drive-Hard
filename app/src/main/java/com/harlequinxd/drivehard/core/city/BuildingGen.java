@@ -121,6 +121,7 @@ final class BuildingGen {
             if (ground == -1 || ground == -2) {
                 int units = Math.max(1, Math.round(len / 5.5f));
                 t.storey(0, units, Sectors.FULL, 0);
+                t.litGround = true;
                 for (int u = 0; u < units; u++)
                     t.tex[0][u] = ground == -2 ? (u == units / 2 ? lib.lobbies[r.nextInt(lib.lobbies.length)] : lib.facades(Kind.GLASS)[0])
                             : shopSet[r.nextInt(shopSet.length)];

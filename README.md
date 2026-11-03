@@ -31,6 +31,15 @@ software renderer, no engine.
   mis-sorts; a draw-layer ordering table still settles coplanar ties (shadows, decals).
   15-bit dithered colour, fog, near-plane clipping, draw distances, multi-threaded column
   (ground) and band (polygons) rendering. The game runs at 30 fps (a software renderer at 60 fps overheats phones); when Android reports the phone heating up (thermal status / headroom) it drops to 24 then 20 fps with fewer render threads, and it asks for sustained-performance clocks.
+- **Day and night, seasons and weather.** A full day passes in 24 minutes (one game hour a
+  minute). The sky, sun light and fog colour follow the clock: dawn glow, blue noon, golden
+  sunset, dusk, and a starry night with the moon. At night windows light up room by room (warm
+  lamps, the odd blue television), and shopfronts stay lit. The year has two seasons of four days:
+  the **wet season** (showers, rain, afternoon thunderstorms with lightning and bolts in the
+  sky, overcast days, morning fog, rainbows after the rain) and the **dry season** (clear and
+  fair-weather days, dusty haze, the grass and paddocks browning toward its end). Weather spells
+  last one to four hours and fade into each other; clouds are a drifting layer 900 m up; rain
+  falls as streaks across the screen. The HUD shows the clock, day, season and weather.
 - **Culling:** per-chunk and per-batch frustum culling, BSP/bounding-box culling of wall rays,
   per-polygon backface/distance culling, per-sprite frustum culling, and terrain occlusion
   culling (buildings and sprites hidden behind hills are skipped via heightfield ray tests).
