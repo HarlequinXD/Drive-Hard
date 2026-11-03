@@ -5,8 +5,9 @@ generated modern Japanese island city with a PS1 low-poly look. Written in plain
 software renderer, no engine.
 
 ## Current state
-- **Mode 7 ground + 3D models and sprites (no OpenGL).** CPU renderer into a ~240p
-  framebuffer, scaled up with nearest-neighbour. The ground is not geometry: the island is a
+- **Mode 7 ground + 3D models and sprites (no OpenGL).** CPU renderer into a 360x240
+  framebuffer (the Game Boy Advance's 3:2 shape), scaled up with nearest-neighbour to fill the
+  screen height. The ground is not geometry: the island is a
   flat, top-down **painted map** (streamed in 64 m tiles at 12.5 cm per texel (512x512, 15-bit colour, with mipmaps)) plus
   a height map, projected **Mode 7 style**, one screen column at a time (a height-mapped Mode 7,
   like voxel-space engines), so hills rise out of the map and hide what lies behind them. The
@@ -18,7 +19,8 @@ software renderer, no engine.
   build a 2D blueprint: masses with storeys, walls tiled per storey with **wall, window,
   door, shopfront and facade tiles**, roofs made of sloped sectors (two for a gable, four for
   a hip, a hipped skirt with a gable wall above for irimoya, one for a mono-pitch, a deck in a
-  parapet ring for flat roofs), roof plant and towers as smaller sectors on top. Each chunk
+  parapet ring for flat roofs), roof plant and towers as smaller sectors on top. Property walls (block walls and hedges round
+  house lots, with gate openings) and drink vending machines (a lit front tile) are sectors too. Each chunk
   keeps a **BSP tree** over its walls; every screen column's ray walks the trees front to back
   as it marches the Mode 7 ground, so walls and roofs are drawn in the same pass as the
   terrain and stand on it (walls run down to the actual ground, foundation below the floor).
@@ -85,26 +87,22 @@ software renderer, no engine.
   gable ends are plain wall material.
 - **City (modern Japan):** street grid following the terrain, vehicles keep left, signals on
   the far-left corner, crosswalks, curbs, sidewalks. Districts: a central business district
-  of office towers and department stores around the main station, an entertainment quarter of
+  of office towers and department stores in the centre, an entertainment quarter of
   narrow multi-tenant bar buildings with vertical signboards, pachinko parlours, karaoke and
   clubs, mixed streets of apartment mansions and shophouses, suburbs of detached houses with
   tiled gable roofs, block walls and garden trees plus small apartment blocks, and a seaside
   strip of warehouses. Fire stations, police boxes (koban), convenience stores, drink vending
   machines, concrete utility poles with sagging overhead wires, parks and coin parking.
-- **Railway:** an elevated line runs east-west through the city on a concrete viaduct with two
-  tracks and three stations (MINATO-CHUO, SAKURAGAOKA, HIGASHI-HAMA): side platforms with
-  canopies and name boards, glass station halls at street level, izakaya and ramen shops
-  tucked under the tracks. Two four-car trains run the line, stopping at each station.
 - **Textures:** ~810 generated at startup, including **520 shopfronts** across 59 kinds of
   business (ramen, udon, sushi, izakaya, yakitori, kissaten, bakeries, bars, snack bars,
   clubs, karaoke, game centres, convenience stores, drugstores, 100-yen shops, greengrocers,
   fishmongers, butchers, tofu, sake, florists, bookshops, electronics, fashion, kimono,
   barbers, coin laundries, estate agents, clinics, dentists, banks, cram schools, cycle shops,
   capsule hotels and more) with invented names and pseudo-kanji signage, plus apartment,
-  office, glass, zakkyo, house and warehouse facades, tiled roofs and train liveries.
+  office, glass, zakkyo, house and warehouse facades, tiled roofs.
 - **Sprites, front-on with no tilt:** everything is baked from procedural 3D models seen
   straight from the side and drawn as upright billboards that only rotate about the vertical
-  axis — the player (idle/walk/run/jump, 8 directions), plants (8 directions), street lamps,
+  axis — the player (idle/walk/run/jump, 8 directions), plants (one view: they look alike from every side), street lamps,
   traffic signals, utility poles, beach umbrellas, cars (16 directions) and pedestrians.
 - **Japanese flora (12 species):** sakura, ginkgo, zelkova, black pine, Japanese maple, bamboo,
   cedar, camphor, azalea, hydrangea, boxwood and camellia — ginkgo-lined avenues, zelkova and
@@ -143,7 +141,7 @@ app/src/main/java/com/harlequinxd/drivehard/
     city/      City (layout + chunk generator), Terrain, ChunkManager (streaming), Chunk,
                BuildingGen, HouseGen (procedural houses), TownGen (town-centre buildings),
                SectorBuilder (building blueprints to sectors: masses, roof pieces, wall tiles),
-               Railway (viaduct, stations, trains), Countryside (fields, farms, town lots), GroundPainter (paints the map tiles), GeoBuilder, TrafficLights
+               Countryside (fields, farms, town lots), GroundPainter (paints the map tiles), GeoBuilder, TrafficLights
     road/      RoadNetwork (spline road graph, terrain shaping, spatial index), RoadEdge,
                RoadNode, RoadClass, Town + PlaceNames (named towns and regions), RoadMesh (bridge decks, barriers, poles)
     tex/       TextureLibrary, JpTextures (shops, facades, signs), Kanji, PixelFont, Noise, Img

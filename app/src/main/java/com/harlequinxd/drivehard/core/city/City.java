@@ -1,5 +1,7 @@
 package com.harlequinxd.drivehard.core.city;
 
+import com.harlequinxd.drivehard.core.render.Sectors;
+
 import com.harlequinxd.drivehard.core.game.Box;
 import com.harlequinxd.drivehard.core.game.World;
 import com.harlequinxd.drivehard.core.model.Flora;
@@ -27,8 +29,7 @@ import static com.harlequinxd.drivehard.core.render.SoftRenderer.L_WATER;
  * builds the geometry, collision boxes and sprite props of any 64 m chunk on demand, so the
  * {@link ChunkManager} can stream the island in and out of memory.
  *
- * +X is east (toward the beach), +Z is south. The elevated railway runs east-west through
- * the middle block row; vehicles keep left.
+ * +X is east (toward the beach), +Z is south; vehicles keep left.
  */
 public final class City extends World {
     /** Everything on the ground is painted flat: no kerbs. */
@@ -49,13 +50,12 @@ public final class City extends World {
     public final boolean[] avenueX = new boolean[nbx + 1], avenueZ = new boolean[nbz + 1];
     public float cityX0, cityX1, cityZ0, cityZ1;
     public float spawnX, spawnZ;
-    /** Block row carrying the railway viaduct, and the central block column. */
-    public final int jRail = nbz / 2, iCentre = nbx / 2;
-    public final Railway railway;
+    /** The central block row and column. */
+    public final int jCentre = nbz / 2, iCentre = nbx / 2;
     /** Every road on the island as a spline graph (city grid included). */
     public final RoadNetwork roads;
     public final Countryside countryside;
-    final int[] shopsCentral, shopsEnt, shopsMixed, shopsSuburb, shopsSeaside, shopsKonbini, shopsPachinko, shopsUnderTrack;
+    final int[] shopsCentral, shopsEnt, shopsMixed, shopsSuburb, shopsSeaside, shopsKonbini, shopsPachinko;
 
     public City(TextureLibrary lib, long seed) {
         this.lib = lib;
@@ -63,7 +63,6 @@ public final class City extends World {
         layout(new Random(seed));
         terrain = new Terrain((int) seed, cityX0, cityZ0, cityX1, cityZ1);
         traffic = new TrafficLights(nbx + 1, (int) seed);
-        railway = new Railway(this);
         roads = new RoadNetwork(this, terrain, seed);
         terrain.roads = roads;
         shopsCentral = shopSet("CAFE", "BAKERY", "CAKES", "FASHION", "SHOES", "ELECTRONICS", "BOOKS", "BANK", "TRAVEL",
@@ -78,7 +77,6 @@ public final class City extends World {
         shopsSeaside = shopSet("SUSHI", "SAKANA", "CAFE", "BAR", "IZAKAYA", "SAKE", "TEMPURA", "CLOSED", "CYCLE");
         shopsKonbini = shopSet("DAILY MART", "HAPPY 24", "LUCKY STORE");
         shopsPachinko = shopSet("PACHINKO", "GAME CENTER");
-        shopsUnderTrack = shopSet("IZAKAYA", "YAKITORI", "RAMEN", "SOBA", "BAR", "GYOZA", "KISSATEN", "BENTO", "SNACK");
         countryside = new Countryside(this, lib, seed);
         streetPaint = streetPaint();
         chunks = new ChunkManager(this);
@@ -222,7 +220,6 @@ public final class City extends World {
                 float mx = (rx1[i] + rx0[i + 1]) * 0.5f, mz = (rz1[j] + rz0[j + 1]) * 0.5f;
                 if (in(mx, mz, x0, z0, x1, z1)) block(ch, gb, i, j);
             }
-        railway.generate(ch, gb, x0, z0, x1, z1);
         // a fresh mesh builder per chunk: chunks are generated on several threads
         new RoadMesh(roads, lib, terrain).generate(ch, gb, cx, cz, x0, z0, x1, z1);
         countryside.generate(ch, gb, cx, cz);
@@ -531,11 +528,10 @@ public final class City extends World {
 
     // ------------------------------------------------------------------ zones, blocks & lots
 
-    public enum Zone { CENTRAL, ENTERTAINMENT, MIXED, SUBURB, SEASIDE, RAIL }
+    public enum Zone { CENTRAL, ENTERTAINMENT, MIXED, SUBURB, SEASIDE }
 
     public Zone zone(int i, int j) {
-        if (j == jRail) return Zone.RAIL;
-        int di = Math.abs(i - iCentre), dj = Math.abs(j - jRail);
+        int di = Math.abs(i - iCentre), dj = Math.abs(j - jCentre);
         if (i >= nbx - 1) return Zone.SEASIDE;
         if (di <= 1 && dj <= 1) return Zone.CENTRAL;
         if (di <= 2 && dj <= 2) return Zone.ENTERTAINMENT;
@@ -570,15 +566,10 @@ public final class City extends World {
         Ctx c = new Ctx(ch, gb, rnd);
         streetFurniture(c, bx0, bz0, bx1, bz1, zone);
         float ix0 = bx0 + s, ix1 = bx1 - s, iz0 = bz0 + s, iz1 = bz1 - s;
-        if (zone == Zone.RAIL) {
-            railBlock(c, i, ix0, iz0, ix1, iz1);
-            gb.end();
-            return;
-        }
         float depth = iz1 - iz0;
         boolean twoRows = depth >= 30f;
         float zMid = twoRows ? iz0 + Math.round(depth * (0.45f + rnd.nextFloat() * 0.1f)) : iz1;
-        lotRow(c, ix0, iz0, ix1, zMid, true, !twoRows, zone, isFireBlock(i, j), i == iCentre && j == jRail + 1);
+        lotRow(c, ix0, iz0, ix1, zMid, true, !twoRows, zone, isFireBlock(i, j), i == iCentre && j == jCentre + 1);
         if (twoRows) lotRow(c, ix0, zMid, ix1, iz1, false, true, zone, false, false);
         gb.end();
     }
@@ -588,7 +579,7 @@ public final class City extends World {
     private void streetFurniture(Ctx c, float bx0, float bz0, float bx1, float bz1, Zone zone) {
         Flora tree;
         switch (zone) {
-            case CENTRAL: case RAIL: tree = Flora.GINKGO; break;
+            case CENTRAL: tree = Flora.GINKGO; break;
             case MIXED: tree = c.rnd.nextInt(3) == 0 ? null : (c.rnd.nextBoolean() ? Flora.ZELKOVA : Flora.SAKURA); break;
             case SEASIDE: tree = Flora.BLACK_PINE; break;
             default: tree = null; break;
@@ -615,7 +606,7 @@ public final class City extends World {
                 }
             }
             if (poles) utilityPoles(c, side, a - 3f, b + 3f, bx0, bz0, bx1, bz1);
-            if (zone != Zone.RAIL && c.rnd.nextInt(100) < 45) {
+            if (c.rnd.nextInt(100) < 45) {
                 float t = a + c.rnd.nextFloat() * (b - a);
                 vendingMachine(c, side, t, bx0, bz0, bx1, bz1);
             }
@@ -673,16 +664,39 @@ public final class City extends World {
         float hw = 0.5f, hd = 0.37f;
         boolean horiz = side < 2;
         float x0 = p[0] - (horiz ? hw : hd), x1 = p[0] + (horiz ? hw : hd), z0 = p[1] - (horiz ? hd : hw), z1 = p[1] + (horiz ? hd : hw);
-        int front = lib.vending[c.rnd.nextInt(lib.vending.length)];
-        GeoBuilder gb = c.gb;
-        int[] tex = {lib.metal, lib.metal, lib.metal, lib.metal};
-        int frontIdx = side == 0 ? 0 : side == 1 ? 1 : side == 2 ? 2 : 3;   // N S W E
-        tex[frontIdx] = front;
-        float[][] edges = {{x1, z0, x0, z0}, {x0, z1, x1, z1}, {x0, z0, x0, z1}, {x1, z1, x1, z0}};
-        for (int e = 0; e < 4; e++)
-            gb.wall(edges[e][0], edges[e][1], edges[e][2], edges[e][3], y, top, tex[e], 0f, 1f, 0f, 1f, L_OBJECT, -0.1f, 1f);
-        gb.floor(x0, z0, x1, z1, top, lib.metal, 1f, 1f, L_OBJECT, 0.9f, -0.1f);
+        // a sector: metal all round, the lit front (one tile) facing the street
+        Sectors.Tiles metal = SectorBuilder.plain(lib.metal, lib.metal);
+        metal.matScale = 1f;
+        Sectors.Tiles front = new Sectors.Tiles(1);
+        front.mat = front.matUp = front.found = lib.metal;
+        front.groundH = front.storeyH = 1.83f;
+        front.storey(0, 1, Sectors.FULL, lib.vending[c.rnd.nextInt(lib.vending.length)]);
+        Sectors.Tiles[] t4 = {metal, metal, metal, metal};
+        t4[side] = front;                                     // N S W E
+        sectorBox(c.ch, x0, z0, x1, z1, y, top, t4, lib.metal);
         c.ch.boxes.add(new Box(x0, y - 1f, z0, x1, top, z1));
+    }
+
+    /** A box as a sector: walls tiled per side (N, S, W, E), flat top. */
+    void sectorBox(Chunk ch, float x0, float z0, float x1, float z1, float base, float top, Sectors.Tiles[] sides, int topTex) {
+        SectorBuilder sb = new SectorBuilder(ch.sectors);
+        SectorBuilder.Face[] f = new SectorBuilder.Face[4];
+        for (int k = 0; k < 4; k++) {
+            float[] e = BuildingGen.edge(k, x0, z0, x1, z1);
+            f[k] = sb.face(e[0], e[1], e[2], e[3], sides[k]);
+        }
+        sb.piece(new float[]{x0, z0, x1, z0, x1, z1, x0, z1}, top, 0f, 0f, base, topTex, 1f, -1f, f, sides[0]);
+    }
+
+    /** A property wall (block wall or hedge) as a sector, standing on the ground. */
+    void propertyWall(Chunk ch, float x0, float z0, float x1, float z1, float h, int tex) {
+        if (x1 - x0 < 0.05f || z1 - z0 < 0.05f) return;
+        float g0 = terrain.height(x0, z0), g1 = terrain.height(x1, z1);
+        float base = Math.min(g0, g1), top = Math.max(g0, g1) + h;
+        Sectors.Tiles t = SectorBuilder.plain(tex, tex);
+        t.matScale = tex == lib.blockWall ? 1.2f : 2f;
+        sectorBox(ch, x0, z0, x1, z1, base - 0.1f, top, new Sectors.Tiles[]{t, t, t, t}, tex == lib.blockWall ? lib.concrete : tex);
+        ch.boxes.add(new Box(x0, base - 1f, z0, x1, top, z1));
     }
 
     void lampAt(Chunk ch, float x, float z, float yaw) {
@@ -806,6 +820,12 @@ public final class City extends World {
         float gate0 = x0 + (x1 - x0) * (0.3f + rnd.nextFloat() * 0.3f), gate1 = gate0 + 1.8f;
         blockWall(c, x0, wz, gate0, wz, faceN);
         blockWall(c, gate1, wz, x1, wz, faceN);
+        // side and back walls round the property
+        float t = 0.08f, zf = faceN ? z0 + 0.25f : z0 + 0.1f, zb = faceN ? z1 - 0.1f : z1 - 0.25f;
+        propertyWall(c.ch, x0 + 0.1f, zf, x0 + 0.1f + 2 * t, zb, 1.2f, lib.blockWall);
+        propertyWall(c.ch, x1 - 0.1f - 2 * t, zf, x1 - 0.1f, zb, 1.2f, lib.blockWall);
+        float zw = faceN ? z1 - 0.1f - 2 * t : z0 + 0.1f;
+        propertyWall(c.ch, x0 + 0.3f, zw, x1 - 0.3f, zw + 2 * t, 1.2f, lib.blockWall);
         // garden planting
         Flora[] garden = {Flora.BLACK_PINE, Flora.MAPLE, Flora.CAMELLIA, Flora.BOXWOOD, Flora.HYDRANGEA, Flora.AZALEA};
         float gz = faceN ? z0 + 1.3f : z1 - 1.3f;
@@ -819,9 +839,7 @@ public final class City extends World {
 
     private void blockWall(Ctx c, float ax, float z, float bx, float z2, boolean faceN) {
         if (bx - ax < 0.3f) return;
-        float y = terrain.height((ax + bx) * 0.5f, z) + CURB, h = 1.2f, t = 0.08f;
-        c.gb.box(ax, y - 0.1f, z - t, bx, y + h, z + t, lib.blockWall, lib.concrete, 0.5f, 0.5f / 0.6f, L_OBJECT, 0f, 0);
-        c.ch.boxes.add(new Box(ax, y - 1f, z - t, bx, y + h, z + t));
+        propertyWall(c.ch, ax, z - 0.08f, bx, z + 0.08f, 1.2f, lib.blockWall);
     }
 
     private void parking(Ctx c, float x0, float z0, float x1, float z1) {
@@ -839,38 +857,6 @@ public final class City extends World {
                 if (c.rnd.nextInt(3) > 0) plantAt(c.ch, trees[c.rnd.nextInt(trees.length)], x + c.rnd.nextFloat() * 2f, y, z + c.rnd.nextFloat() * 2f);
                 else plantAt(c.ch, shrubs[c.rnd.nextInt(shrubs.length)], x, y, z);
             }
-    }
-
-    // ------------------------------------------------------------------ railway corridor
-
-    /** Blocks under the elevated line: a station with a plaza, or shops tucked under the tracks. */
-    private void railBlock(Ctx c, int i, float ix0, float iz0, float ix1, float iz1) {
-        float zc = railway.zc;
-        int station = railway.stationForBlock(i);
-        GeoBuilder gb = c.gb;
-        if (station >= 0) {
-            gb.floorAreaT(ix0, iz0, ix1, iz1, CURB, lib.pavers, 2f, 2f, L_RAISED, 8f, 0, 0f);
-            railway.stationBuilding(c.ch, gb, station, ix0 + 3f, zc - 9f, ix1 - 3f, zc + 9f, shopsCentral);
-            for (float x = ix0 + 4f; x < ix1 - 3f; x += 12f) {
-                plantAt(c.ch, Flora.ZELKOVA, x, terrain.height(x, iz0 + 3f) + CURB, iz0 + 3f);
-                plantAt(c.ch, Flora.ZELKOVA, x, terrain.height(x, iz1 - 3f) + CURB, iz1 - 3f);
-            }
-            return;
-        }
-        // coin parking strips along the streets, shops under the viaduct
-        float nz = zc - 6f, sz = zc + 6f;
-        gb.floorAreaT(ix0, iz0, ix1, nz, CURB, lib.parking, 2.5f, 5f, L_RAISED, 8f, 0, 0f);
-        gb.floorAreaT(ix0, sz, ix1, iz1, CURB, lib.parking, 2.5f, 5f, L_RAISED, 8f, 0, 0f);
-        gb.floorAreaT(ix0, nz, ix1, sz, CURB, lib.concrete, 2f, 2f, L_RAISED, 8f, 0, 0f);
-        float x = ix0 + 1f;
-        while (x < ix1 - 4f) {
-            float w = Math.min(ix1 - 1f - x, 6f + c.rnd.nextInt(3));
-            if (w < 4f) break;
-            boolean[] stN = {true, false, false, false}, stS = {false, true, false, false};
-            new BuildingGen(this, lib, gb, c.rnd, c.ch).build(BuildingGen.Type.KONBINI, x, nz, x + w, zc - 1.1f, stN, stN, shopsUnderTrack);
-            new BuildingGen(this, lib, gb, c.rnd, c.ch).build(BuildingGen.Type.KONBINI, x, zc + 1.1f, x + w, sz, stS, stS, shopsUnderTrack);
-            x += w + 0.4f;
-        }
     }
 
     void plantAtTerrain(Chunk ch, Flora f, float x, float z) {

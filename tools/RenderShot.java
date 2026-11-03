@@ -32,15 +32,7 @@ public class RenderShot {
         shot(g, "shot_spawn.png");
 
         float ix = (c.rx0[4] + c.rx1[4]) * 0.5f, iz = (c.rz0[5] + c.rz1[5]) * 0.5f;
-        int jr = c.jRail, ic = c.iCentre;
-        float stX = c.railway.stationX[1];
-        tour(g, "shot_station.png", stX + 6f, c.rz0[jr + 1] - 1.5f, 0.25f, 10, 9f);
-        tour(g, "shot_viaduct.png", (c.rx1[2] + c.rx0[3]) * 0.5f, c.rz0[jr + 1] + 3f, -0.6f, 8, 8f);
-        // let the trains run for a while, then follow one from street level
-        for (int k = 0; k < 60 * 40; k++) c.railway.update(1 / 60f);
-        com.harlequinxd.drivehard.core.city.Railway.Train tr = c.railway.trains.get(0);
-        tour(g, "shot_train.png", tr.x + 30f, c.rz0[jr + 1] - 2f, -0.9f, 6, 7f);
-        tour(g, "shot_platform.png", stX, c.railway.zc + 16f, 0.2f, 32, 26f);
+        int jr = c.jCentre, ic = c.iCentre;
         tour(g, "shot_signals.png", c.rx1[3] + 3f, c.rz1[3] + 9f, 0.5f, 14, 9f);
         tour(g, "shot_traffic.png", c.rx1[3] + 2f, c.rz1[2] + 2f, (float) Math.toRadians(-140), 24, 14f);
         tour(g, "shot_entertainment.png", (c.rx1[ic + 2] + c.rx0[ic + 3]) * 0.5f, c.rz1[jr + 2] + 1.5f, 3.14f, 12, 7f);
@@ -57,7 +49,7 @@ public class RenderShot {
                 c.chunks.generatedTotal, c.chunks.unloadedTotal);
 
         // timing at downtown
-        g.player.x = (c.rx0[c.iCentre] + c.rx1[c.iCentre]) * 0.5f; g.player.z = (c.rz1[c.jRail - 1] + c.rz0[c.jRail]) * 0.5f;
+        g.player.x = (c.rx0[c.iCentre] + c.rx1[c.iCentre]) * 0.5f; g.player.z = (c.rz1[c.jCentre - 1] + c.rz0[c.jCentre]) * 0.5f;
         g.cam.pitch = (float) Math.toRadians(20); g.cam.distance = 6f;
         c.chunks.loadAllNow(g.player.x, g.player.z);
         int frames = 120;

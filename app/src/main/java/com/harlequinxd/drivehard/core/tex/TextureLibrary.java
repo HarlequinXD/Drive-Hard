@@ -33,7 +33,7 @@ public final class TextureLibrary {
     /** City lane textures and junction mouths (stop lines, zebra crossings). */
     public final int laneStreet, laneAvInner, laneAvOuter, mouthStreet, mouthAvenue, mouthCountry, mouthHighway, mouthLane;
     public final int laneCountry, laneHwInner, laneHwOuter, laneHwMedian, laneFwInner, laneFwOuter, laneRamp, laneTown, walkStrip, mouthTown;
-    public final int trainSideA, trainSideB, trainFrontA, trainFrontB, track, platform, blockWall;
+    public final int blockWall;
     public final List<String> shopNames = new ArrayList<>();
     public static final String[] STATIONS = {"MINATO-CHUO", "SAKURAGAOKA", "HIGASHI-HAMA"};
 
@@ -96,12 +96,6 @@ public final class TextureLibrary {
         for (int i = 0; i < STATIONS.length; i++) stationSigns[i] = add(JpTextures.stationSign(STATIONS[i], s++));
         koban = new int[]{add(JpTextures.koban(s++)), add(JpTextures.koban(s++))};
         fireDoors = new int[]{add(JpTextures.fireDoors(s++)), add(JpTextures.fireDoors(s++))};
-        trainSideA = add(JpTextures.trainSide(0x2E9A4A));
-        trainSideB = add(JpTextures.trainSide(0xF07820));
-        trainFrontA = add(JpTextures.trainFront(0x2E9A4A));
-        trainFrontB = add(JpTextures.trainFront(0xF07820));
-        track = add(JpTextures.track());
-        platform = add(JpTextures.platform());
         blockWall = add(JpTextures.blockWall(s++));
         paddyWater = add(FarmTextures.paddy(0, seed));
         paddyGreen = add(FarmTextures.paddy(1, seed));

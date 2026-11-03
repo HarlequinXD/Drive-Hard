@@ -27,7 +27,8 @@ import java.util.Locale;
  */
 public final class GameView extends SurfaceView implements SurfaceHolder.Callback, Runnable {
     private static final String TAG = "DriveHard";
-    private static final int LOW_H = 240;
+    /** The game is rendered at 360x240: the Game Boy Advance's 3:2 shape at 240 lines. */
+    private static final int LOW_H = 240, LOW_W = 360;
 
     private final TouchControls controls;
     private final MapOverlay mapView;
@@ -151,11 +152,14 @@ public final class GameView extends SurfaceView implements SurfaceHolder.Callbac
             if (sizeChanged || frame == null) {
                 if (surfW <= 0 || surfH <= 0) { sleep(16); continue; }
                 sizeChanged = false;
-                int lw = Math.max(2, Math.round(LOW_H * (float) surfW / surfH)) & ~1;
+                int lw = LOW_W;
                 g.setResolution(lw, LOW_H);
                 renderThreads = -1;
                 frame = Bitmap.createBitmap(lw, LOW_H, Bitmap.Config.ARGB_8888);
-                dst.set(0, 0, surfW, surfH);
+                // scale the 3:2 frame up to fill the height, centred (black bars at the sides)
+                int dw = Math.min(surfW, Math.round(surfH * 1.5f)), dh = Math.round(dw / 1.5f);
+                int dx = (surfW - dw) / 2, dy = (surfH - dh) / 2;
+                dst.set(dx, dy, dx + dw, dy + dh);
             }
             long now = System.nanoTime();
             pace(g);
@@ -168,7 +172,8 @@ public final class GameView extends SurfaceView implements SurfaceHolder.Callbac
                 Canvas c = lockCanvas();
                 if (c != null) {
                     try {
-                        c.drawBitmap(frame, null, dst, blit);
+                        c.drawColor(Color.BLACK);
+                c.drawBitmap(frame, null, dst, blit);
                         mapView.drawFull(c, g, surfW, surfH);
                     } finally {
                         getHolder().unlockCanvasAndPost(c);
@@ -196,6 +201,7 @@ public final class GameView extends SurfaceView implements SurfaceHolder.Callbac
             Canvas c = lockCanvas();
             if (c == null) continue;
             try {
+                c.drawColor(Color.BLACK);
                 c.drawBitmap(frame, null, dst, blit);
                 drawHud(c, g);
             } finally {

@@ -211,7 +211,6 @@ public final class Game {
         city.chunks.update(player.x, player.z);
         city.chunks.ensureAround(player.x, player.z);
         traffic.update(dt, time, player.x, player.z);
-        city.railway.update(dt);
         pedestrians.update(dt, time, player.x, player.z);
         for (Vehicle v : parked) v.update(dt, 0f, 0f, 0f, city, v);
         trafficObstacles.clear();
@@ -468,10 +467,6 @@ public final class Game {
                 batchesDrawn++;
             }
             drawSprites(c, r, terrain);
-        }
-        for (com.harlequinxd.drivehard.core.city.Railway.Train t : city.railway.trains) {
-            if (Math.abs(t.x - r.ex) - t.halfLen() > r.far + 20f) continue;
-            r.drawGeoOffset(t.geo, t.x, t.y(), t.z);
         }
         drawTraffic(r);
         drawPedestrians(r);

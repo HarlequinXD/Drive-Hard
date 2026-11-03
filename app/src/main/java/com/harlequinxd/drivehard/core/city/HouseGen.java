@@ -514,7 +514,14 @@ final class HouseGen {
             }
             boxLocal(c0, v0, c1, v1, base + 2.3f, base + 2.42f, lib.vinyl, lib.vinyl);
         }
-        // front fence with an opening for the drive and the path: low wall sectors
+        // property walls: block walls down both sides and across the back, and along the front a
+        // block wall or hedge (or nothing) with an opening for the drive and the path
+        Sectors.Tiles bw = SectorBuilder.plain(lib.blockWall, lib.blockWall);
+        bw.matScale = 1.2f;
+        float fb = base - 0.15f, bt = 0.15f;
+        sb.block(0.2f, 0.4f, 0.2f + bt, D - 0.2f - bt, fb, fb + 1.2f, lib.concrete, bw);
+        sb.block(W - 0.2f - bt, 0.4f, W - 0.2f, D - 0.2f - bt, fb, fb + 1.2f, lib.concrete, bw);
+        sb.block(0.2f, D - 0.2f - bt, W - 0.2f, D - 0.2f, fb, fb + 1.2f, lib.concrete, bw);
         if (d.fence > 0) {
             int tex = d.fence == 1 ? lib.blockWall : lib.hedge;
             float h = d.fence == 1 ? 0.95f : 1.15f, t = d.fence == 1 ? 0.15f : 0.6f;
@@ -526,13 +533,9 @@ final class HouseGen {
             gap0 = Math.max(0.3f, gap0); gap1 = Math.min(W - 0.3f, gap1);
             Sectors.Tiles ft = SectorBuilder.plain(tex, tex);
             ft.matScale = d.fence == 1 ? 1.2f : 2f;
-            float fb = base - 0.15f;
-            if (gap0 > 0.6f) sb.block(0.2f, 0.2f, gap0, 0.2f + t, fb, fb + h, tex, ft);
-            if (gap1 < W - 0.6f) sb.block(gap1, 0.2f, W - 0.2f, 0.2f + t, fb, fb + h, tex, ft);
-            if (d.fence == 1) {   // side walls along the boundary
-                sb.block(0.2f, 0.2f + t, 0.2f + t, D * 0.7f, fb, fb + h, tex, ft);
-                sb.block(W - 0.2f - t, 0.2f + t, W - 0.2f, D * 0.7f, fb, fb + h, tex, ft);
-            }
+            int cap = d.fence == 1 ? lib.concrete : tex;
+            if (gap0 > 0.6f) sb.block(0.2f, 0.2f, gap0, 0.2f + t, fb, fb + h, cap, ft);
+            if (gap1 < W - 0.6f) sb.block(gap1, 0.2f, W - 0.2f, 0.2f + t, fb, fb + h, cap, ft);
         }
     }
 

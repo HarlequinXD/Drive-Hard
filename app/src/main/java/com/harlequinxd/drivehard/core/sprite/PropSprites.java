@@ -6,17 +6,19 @@ import com.harlequinxd.drivehard.core.model.PropModels;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Bakes the world prop sprites (8 view directions each). */
+/** Bakes the world prop sprites (plants: one view; props: 8 view directions; cars: 16). */
 public final class PropSprites {
     private PropSprites() {}
 
     public static final int PALM_VARIANTS = 3;
 
-    /** All variants of a plant species, 8 directions. */
+    /** All variants of a plant species, one view each: plants look the same from every side. */
     public static SpriteSheet flora(com.harlequinxd.drivehard.core.model.Flora f) {
         List<List<Part>> v = new ArrayList<>();
         for (int i = 0; i < f.variants; i++) v.add(f.model(i));
-        return baker(f.frameW, f.frameH, f.anchorX, f.anchorY, f.ppm).bakeStatic(v);
+        SpriteBaker b = baker(f.frameW, f.frameH, f.anchorX, f.anchorY, f.ppm);
+        b.directions = 1;
+        return b.bakeStatic(v);
     }
 
     /** One of the 100 car styles at 16 view angles. */
@@ -45,6 +47,7 @@ public final class PropSprites {
         List<List<Part>> v = new ArrayList<>();
         for (int i = 0; i < PALM_VARIANTS; i++) v.add(PropModels.palm(1000 + i * 77));
         SpriteBaker b = baker(240, 256, 120, 250, 20f);
+        b.directions = 1;
         return b.bakeStatic(v);
     }
 
