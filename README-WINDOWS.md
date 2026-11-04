@@ -6,9 +6,9 @@ This is a **complete Windows-only repository**, not an overlay. The game simulat
 
 Extract the ZIP, open the `Drive-Hard-main` directory, and upload its **contents** to the root of your `HarlequinXD/Drive-Hard` repository. Keep the directory structure, especially `.github/workflows/build-windows.yml`. The `.github` folder may be hidden by your file manager. For a clean replacement, delete the existing GitHub repository files first or use Git locally to replace the tree; uploading a ZIP as one file does not create a workflow. Remove any existing `.github/workflows/build-apk.yml` if it remains from an older revision.
 
-Commit to the `main` branch. GitHub Actions automatically runs **Build Windows EXE** on pushes to `main`; it can also be run via Actions → Build Windows EXE → Run workflow.
+Commit to the `main` branch. GitHub Actions automatically runs **Build Lightweight Windows Game** on pushes to `main`; it can also be run from Actions → Build Lightweight Windows Game → Run workflow.
 
-Once the build succeeds, download the `DriveHard-Windows` artifact, unzip it, then unzip `DriveHard-Windows.zip`. Launch `DriveHard/DriveHard.exe`. Keep the adjacent `app` and `runtime` directories with the EXE. No Java installation is needed on the target PC.
+Once the build succeeds, open its GitHub Actions run and download the `DriveHard-Lightweight-Windows` artifact from the Artifacts section at the bottom. Extract it, then launch `DriveHard.exe` with `DriveHard.jar` and the `lib` folder kept alongside it. This lightweight package requires Java 17 or newer installed on the target PC.
 
 ## Controls
 
@@ -32,7 +32,8 @@ The Android UI, Android manifest, and APK workflow are removed. The Windows vers
 ## Island map and fast travel (Windows)
 - The minimap is always visible in the top-right corner while playing.
 - Press **Xbox View/Select/Back** (or **M**) to open or close the full island map.
-- Pan the map cursor with the **left stick** (or WASD/arrow keys).
+- Pan with **left stick** (or WASD/arrow keys); on PC, **left-drag** the map.
+- Zoom with the **mouse wheel**, on-screen **+ / -** buttons, keyboard **+ / -** or Page Up/Down, or controller triggers.
 - Move the cursor over a yellow town/city marker and press **A** (or Enter) to open the fast-travel confirmation.
 - Press **A** again to fast travel; **B** (or Escape) cancels the menu or closes the map.
 - Fast travel uses the existing island map locations and streams the destination area. It is disabled while entering/exiting a car.
