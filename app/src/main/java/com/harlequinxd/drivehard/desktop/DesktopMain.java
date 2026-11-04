@@ -152,7 +152,7 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
                         mapViewX-=dragX*mapUnitsPerPixel;
                         mapViewZ-=dragY*mapUnitsPerPixel;
                         if(dragX!=0f || dragY!=0f) { mapCursorX=mapViewX; mapCursorZ=mapViewZ; }
-                        float speed=(g.map.extent/mapZoom)*(controllerPanning?12000f:12f)*dt;
+                        float speed=(g.map.extent/mapZoom)*(controllerPanning?6000f:12f)*dt;
                         mapCursorX=Math.max(g.map.x0,Math.min(g.map.x0+g.map.extent,mapCursorX+panX*speed));
                         mapCursorZ=Math.max(g.map.z0,Math.min(g.map.z0+g.map.extent,mapCursorZ+panZ*speed));
                         if(controllerPanning) {
