@@ -111,7 +111,7 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
                 boolean cancel=down(KeyEvent.VK_ESCAPE)||(connected&&pad.button(XboxInput.B));
                 if(select&&!lastSelect) {
                     mapOpen=!mapOpen; travelMenu=false; selectedDestination=null;
-                    if(mapOpen) { mapCursorX=g.mapX(); mapCursorZ=g.mapZ(); mapViewX=mapCursorX; mapViewZ=mapCursorZ; mapZoom=1.2f; }
+                    if(mapOpen) { mapCursorX=g.mapX(); mapCursorZ=g.mapZ(); mapViewX=mapCursorX; mapViewZ=mapCursorZ; mapZoom=2.2f; }
                 }
                 lastSelect=select;
                 if(mapOpen) {
@@ -152,7 +152,7 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
                         mapViewX-=dragX*mapUnitsPerPixel;
                         mapViewZ-=dragY*mapUnitsPerPixel;
                         if(dragX!=0f || dragY!=0f) { mapCursorX=mapViewX; mapCursorZ=mapViewZ; }
-                        float speed=(g.map.extent/mapZoom)*7f*dt;
+                        float speed=(g.map.extent/mapZoom)*(controllerPanning?12000f:12f)*dt;
                         mapCursorX=Math.max(g.map.x0,Math.min(g.map.x0+g.map.extent,mapCursorX+panX*speed));
                         mapCursorZ=Math.max(g.map.z0,Math.min(g.map.z0+g.map.extent,mapCursorZ+panZ*speed));
                         if(controllerPanning) {
@@ -222,7 +222,7 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
     private static float mapPanAxis(float input) {
         float magnitude=Math.abs(input);
         if(magnitude<0.04f) return 0f;
-        return Math.copySign(0.55f+0.45f*magnitude,input);
+        return Math.copySign(magnitude*magnitude,input);
     }
     private float toInternalX(int x) {
         int dw=Math.min(getWidth(),(int)((long)getHeight()*W/H));
