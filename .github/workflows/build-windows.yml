@@ -34,10 +34,10 @@ jobs:
           New-Item -ItemType Directory -Force -Path 'app/build/windows-dist' | Out-Null
           jpackage --type app-image --name DriveHard --input app/build/windows-input --main-jar $jar.Name --main-class com.harlequinxd.drivehard.desktop.DesktopMain --dest app/build/windows-dist --java-options '-Xmx3g'
           if ($LASTEXITCODE -ne 0) { throw 'jpackage failed' }
-          Compress-Archive -Path 'app/build/windows-dist/DriveHard' -DestinationPath 'DriveHard-Windows.zip' -Force
       - name: Upload Windows EXE
         uses: actions/upload-artifact@v4
         with:
           name: DriveHard-Windows
-          path: DriveHard-Windows.zip
+          path: app/build/windows-dist/DriveHard/
           if-no-files-found: error
+
