@@ -2,6 +2,8 @@
 
 A PS1-inspired open-world driving and exploration game with a shared Java game engine and CPU software renderer.
 
+Procedural buildings, property walls, bridges and vending machines render as textured polygons; only the terrain uses the height-mapped ground renderer.
+
 ## Android
 
 The Android app is in `android-app/`; it reuses the platform-independent engine in `app/src/main/java/.../core/` and provides touch controls, a touch-operated minimap and island map, and fast travel.

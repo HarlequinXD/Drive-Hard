@@ -232,6 +232,9 @@ public final class City extends World {
         countryside.generate(ch, gb, cx, cz);
         countryside.fences(ch, gb, x0, z0, x1, z1);
         gb.end();
+        gb.begin(false);
+        SectorBuilder.toMeshes(ch.sectors, gb);
+        gb.end();
         ch.finish();
         return ch;
     }
@@ -242,10 +245,6 @@ public final class City extends World {
             @Override public com.harlequinxd.drivehard.core.render.Ground.Tile tile(int cx, int cz) {
                 Chunk c = chunks.get(cx, cz);
                 return c == null ? null : c.ground;
-            }
-            @Override public com.harlequinxd.drivehard.core.render.Sectors sectors(int cx, int cz) {
-                Chunk c = chunks.get(cx, cz);
-                return c == null ? null : c.sectors;
             }
             @Override public float height(float x, float z) { return Math.max(-0.05f, terrain.height(x, z)); }
             @Override public int color(float x, float z) { return GroundPainter.farColor(terrain, x, z); }
@@ -671,7 +670,7 @@ public final class City extends World {
         float hw = 0.5f, hd = 0.37f;
         boolean horiz = side < 2;
         float x0 = p[0] - (horiz ? hw : hd), x1 = p[0] + (horiz ? hw : hd), z0 = p[1] - (horiz ? hd : hw), z1 = p[1] + (horiz ? hd : hw);
-        // a sector: metal all round, the lit front (one tile) facing the street
+        // A metal shell with a textured front facing the street.
         Sectors.Tiles metal = SectorBuilder.plain(lib.metal, lib.metal);
         metal.matScale = 1f;
         Sectors.Tiles front = new Sectors.Tiles(1);
@@ -684,7 +683,7 @@ public final class City extends World {
         c.ch.boxes.add(new Box(x0, y - 1f, z0, x1, top, z1));
     }
 
-    /** A box as a sector: walls tiled per side (N, S, W, E), flat top. */
+    /** A box with walls tiled per side (N, S, W, E) and a flat top. */
     void sectorBox(Chunk ch, float x0, float z0, float x1, float z1, float base, float top, Sectors.Tiles[] sides, int topTex) {
         SectorBuilder sb = new SectorBuilder(ch.sectors);
         SectorBuilder.Face[] f = new SectorBuilder.Face[4];
@@ -695,7 +694,7 @@ public final class City extends World {
         sb.piece(new float[]{x0, z0, x1, z0, x1, z1, x0, z1}, top, 0f, 0f, base, topTex, 1f, -1f, f, sides[0]);
     }
 
-    /** A property wall (block wall or hedge) as a sector, standing on the ground. */
+    /** A property wall (block wall or hedge) standing on the ground. */
     void propertyWall(Chunk ch, float x0, float z0, float x1, float z1, float h, int tex) {
         if (x1 - x0 < 0.05f || z1 - z0 < 0.05f) return;
         float g0 = terrain.height(x0, z0), g1 = terrain.height(x1, z1);

@@ -203,8 +203,7 @@ public final class RoadMesh {
         boolean gore = cls == RoadClass.RAMP && rampOverlap();
         if (city) return;        // city streets are painted flat into the ground map
         if (b - a > 0.05f && bridge) {
-            // bridge decks are slabs in the sector renderer (no polygons): one per lane band,
-            // with the road below passing underneath
+            // Temporary deck solids are meshed at chunk finalization; the road below remains visible.
             float vBase = (float) Math.floor(s0 / 64f) * 64f;
             float laneBase = (float) Math.floor(s0 / 320f) * 320f;
             for (float[] bd : bands(cls)) {

@@ -22,11 +22,9 @@ import static com.harlequinxd.drivehard.core.render.SoftRenderer.L_OBJECT;
  * styles, balcony, porch canopy, carport and front fence. There are {@value #SUBURB_DESIGNS}
  * suburban designs and {@value #FARM_DESIGNS} farmhouse designs; any lot picks one by hash.</p>
  *
- * <p>Houses are not polygons: each is a set of sectors built from the ground up by
- * {@link SectorBuilder}. A mass's walls are tile faces (per storey: plain wall, window, door,
- * garden window) and its roof is made of sloped sectors: two for a gable, four for a hip, a
- * hipped lower part with a gable wall above for irimoya, one for a mono-pitch, a deck inside
- * a parapet ring for a flat roof. Gable ends and parapets are plain wall material.</p>
+ * <p>Each house is a set of procedural masses built by {@link SectorBuilder}. Their facades
+ * become textured wall polygons (plain wall, windows, doors and garden windows), while roof
+ * surfaces become polygons for gables, hips, mono-pitches and flat parapet roofs.</p>
  */
 final class HouseGen {
     static final int SUBURB_DESIGNS = 250, FARM_DESIGNS = 150;
@@ -295,7 +293,7 @@ final class HouseGen {
      * (0=N, 1=S, 2=W, 3=E). With {@code lot} the house sits inside the lot with a garden, carport
      * and fence; otherwise it fills the rectangle.
      */
-    void build(Design d, float x0, float z0, float x1, float z1, int face, float base, boolean lot) {
+    void build(Design d, float x0, float z0, float x1, float z1, int face, float base, boolean lot, boolean westNeighbor) {
         lx0 = x0; lz0 = z0; lx1 = x1; lz1 = z1;
         this.face = face;
         float W = face < 2 ? x1 - x0 : z1 - z0, D = face < 2 ? z1 - z0 : x1 - x0;
@@ -382,7 +380,7 @@ final class HouseGen {
         List<Mass> order = new ArrayList<>(masses);
         order.sort((p, q) -> q.floors - p.floors);
         for (Mass m : order) mass(d, m, m == main, base);
-        extras(d, main, base, lot, W, D, lay);
+        extras(d, main, base, lot, W, D, lay, westNeighbor);
         for (Mass m : masses) {
             float ax = Math.min(wx(m.u0, m.v0), wx(m.u1, m.v1)), bx = Math.max(wx(m.u0, m.v0), wx(m.u1, m.v1));
             float az = Math.min(wz(m.u0, m.v0), wz(m.u1, m.v1)), bz = Math.max(wz(m.u0, m.v0), wz(m.u1, m.v1));
@@ -511,7 +509,7 @@ final class HouseGen {
 
     // ------------------------------------------------------------------ extras
 
-    private void extras(Design d, Mass main, float base, boolean lot, float W, float D, float[] lay) {
+    private void extras(Design d, Mass main, float base, boolean lot, float W, float D, float[] lay, boolean westNeighbor) {
         // a/c outdoor unit beside the house
         {
             float u = main.u0 - 0.45f;
@@ -533,9 +531,17 @@ final class HouseGen {
         Sectors.Tiles bw = SectorBuilder.plain(lib.blockWall, lib.blockWall);
         bw.matScale = 1.2f;
         float fb = base - 0.15f, bt = 0.15f;
-        sb.block(0.2f, 0.4f, 0.2f + bt, D - 0.2f - bt, fb, fb + 1.2f, lib.concrete, bw);
-        sb.block(W - 0.2f - bt, 0.4f, W - 0.2f, D - 0.2f - bt, fb, fb + 1.2f, lib.concrete, bw);
-        sb.block(0.2f, D - 0.2f - bt, W - 0.2f, D - 0.2f, fb, fb + 1.2f, lib.concrete, bw);
+        if (face == 0) {
+            if (!westNeighbor) sb.block(-bt * 0.5f, 0.2f, bt * 0.5f, D - 0.2f, fb, fb + 1.2f, lib.concrete, bw);
+            sb.block(W - bt * 0.5f, 0.2f, W + bt * 0.5f, D - 0.2f, fb, fb + 1.2f, lib.concrete, bw);
+        } else if (face == 1) {
+            sb.block(-bt * 0.5f, 0.2f, bt * 0.5f, D - 0.2f, fb, fb + 1.2f, lib.concrete, bw);
+            if (!westNeighbor) sb.block(W - bt * 0.5f, 0.2f, W + bt * 0.5f, D - 0.2f, fb, fb + 1.2f, lib.concrete, bw);
+        } else {
+            sb.block(-bt * 0.5f, 0.2f, bt * 0.5f, D - 0.2f, fb, fb + 1.2f, lib.concrete, bw);
+            sb.block(W - bt * 0.5f, 0.2f, W + bt * 0.5f, D - 0.2f, fb, fb + 1.2f, lib.concrete, bw);
+        }
+        sb.block(0f, D - 0.35f, W, D - 0.2f, fb, fb + 1.2f, lib.concrete, bw);
         if (d.fence > 0) {
             int tex = d.fence == 1 ? lib.blockWall : lib.hedge;
             float h = d.fence == 1 ? 0.95f : 1.15f, t = d.fence == 1 ? 0.15f : 0.6f;
@@ -548,8 +554,8 @@ final class HouseGen {
             Sectors.Tiles ft = SectorBuilder.plain(tex, tex);
             ft.matScale = d.fence == 1 ? 1.2f : 2f;
             int cap = d.fence == 1 ? lib.concrete : tex;
-            if (gap0 > 0.6f) sb.block(0.2f, 0.2f, gap0, 0.2f + t, fb, fb + h, cap, ft);
-            if (gap1 < W - 0.6f) sb.block(gap1, 0.2f, W - 0.2f, 0.2f + t, fb, fb + h, cap, ft);
+            if (gap0 > 0.6f) sb.block(0f, 0.2f, gap0, 0.2f + t, fb, fb + h, cap, ft);
+            if (gap1 < W - 0.6f) sb.block(gap1, 0.2f, W, 0.2f + t, fb, fb + h, cap, ft);
         }
     }
 

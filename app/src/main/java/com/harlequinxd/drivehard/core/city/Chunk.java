@@ -21,7 +21,7 @@ public final class Chunk {
     public final List<Box> boxes = new ArrayList<>();
     /** This chunk's tile of the painted Mode 7 ground map. */
     public com.harlequinxd.drivehard.core.render.Ground.Tile ground;
-    /** Buildings: Build-style sectors and walls with a BSP tree, drawn by the ground ray caster. */
+    /** Temporary procedural surface descriptions, converted to meshes before the chunk is published. */
     public final com.harlequinxd.drivehard.core.render.Sectors sectors = new com.harlequinxd.drivehard.core.render.Sectors();
     public float[] sprites = new float[SPRITE_STRIDE * 16];
     public int spriteCount;
@@ -53,11 +53,6 @@ public final class Chunk {
             if (b.minZ < minZ) minZ = b.minZ;
             if (b.maxX > maxX) maxX = b.maxX;
             if (b.maxZ > maxZ) maxZ = b.maxZ;
-        }
-        sectors.build();
-        if (!sectors.isEmpty()) {
-            minX = Math.min(minX, sectors.minX); minZ = Math.min(minZ, sectors.minZ);
-            maxX = Math.max(maxX, sectors.maxX); maxZ = Math.max(maxZ, sectors.maxZ);
         }
         float x0 = cx * ChunkManager.SIZE, z0 = cz * ChunkManager.SIZE;
         minX = Math.min(minX, x0); minZ = Math.min(minZ, z0);

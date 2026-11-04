@@ -4,12 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Buildings as a 2.5D sector map, in the manner of Doom and Build: no polygons. Each chunk
- * holds sectors (convex footprints whose floor is a plane: a flat or sloped roof, raised above
- * the ground) and walls (linedefs round each sector, textured in tiles per storey: plain wall,
- * windows, doors, shopfronts). A BSP tree over the walls answers "which walls does this ray
- * cross, nearest first" for the column renderer, which draws the walls and roofs together
- * with the Mode 7 ground.
+ * Temporary procedural surface descriptions. Chunk generation converts roof planes, tiled walls
+ * and bridge solids into static polygon meshes before the chunk is published.
  */
 public final class Sectors {
 
@@ -121,12 +117,7 @@ public final class Sectors {
         }
     }
 
-    /**
-     * A slab: a solid between two planes over a convex footprint, standing free of the ground
-     * (bridge decks, parapets, piers). Unlike a sector it has an underside, so the ground and
-     * roads pass underneath; the column renderer draws its top, sides and underside where a
-     * screen row's ray first meets it, and keeps marching the ground beneath it.
-     */
+    /** A temporary solid between two planes over a convex footprint (bridge decks, parapets, piers). */
     public static final class Slab {
         public final float[] poly;
         final float[] enx, enz, ed;

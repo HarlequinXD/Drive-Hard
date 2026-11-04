@@ -1,4 +1,6 @@
 import com.harlequinxd.drivehard.core.city.City;
+import com.harlequinxd.drivehard.core.city.Chunk;
+import com.harlequinxd.drivehard.core.city.ChunkManager;
 import com.harlequinxd.drivehard.core.city.TrafficLights;
 import com.harlequinxd.drivehard.core.game.OrbitCamera;
 import com.harlequinxd.drivehard.core.game.Player;
@@ -82,8 +84,10 @@ public class SimTest {
         check("signals cycle green/yellow/red", seen == 7);
 
         // streaming: chunks generated deterministically
-        int polys1 = c.generate(10, 6).polyCount, polys2 = c.generate(10, 6).polyCount;
+        Chunk generated = c.generate(10, 6);
+        int polys1 = generated.polyCount, polys2 = c.generate(10, 6).polyCount;
         check("chunk generation deterministic", polys1 == polys2 && polys1 > 0);
+        check("chunk surfaces are emitted as polygon meshes", !generated.batches.isEmpty() && noRaycastSurfaces(generated));
         // ---- traffic: cars keep moving, turn, and never run a red light
         com.harlequinxd.drivehard.core.sim.Traffic tr = new com.harlequinxd.drivehard.core.sim.Traffic(c, r -> r.nextInt(100));
         tr.spawnMin = 5f; tr.spawnMax = 400f; tr.despawn = 2000f; tr.target = 40;
@@ -112,6 +116,20 @@ public class SimTest {
 
         // ---- island & road network
         com.harlequinxd.drivehard.core.road.RoadNetwork net = c.roads;
+        boolean bridgeFound = false;
+        for (com.harlequinxd.drivehard.core.road.RoadEdge edge : net.edges) {
+            for (int i = 0; i < edge.bridge.length; i++) {
+                if (!edge.bridge[i]) continue;
+                float bx = (edge.x[i] + edge.x[i + 1]) * 0.5f, bz = (edge.z[i] + edge.z[i + 1]) * 0.5f;
+                Chunk bridge = c.generate(ChunkManager.chunkOf(bx), ChunkManager.chunkOf(bz));
+                bridgeFound = true;
+                check("bridge decks, parapets and piers use polygon meshes",
+                        !bridge.batches.isEmpty() && noRaycastSurfaces(bridge));
+                break;
+            }
+            if (bridgeFound) break;
+        }
+        check("procedural world contains a bridge to verify", bridgeFound);
         System.out.printf("island %.0f km, roads: freeway %.0f km, highway %.0f km, country %.0f km, %d villages, %d farmsteads (net built in %.0f ms)%n",
                 (c.terrain.islandX1 - c.terrain.islandX0) / 1000f, net.lengthKm(com.harlequinxd.drivehard.core.road.RoadClass.FREEWAY),
                 net.lengthKm(com.harlequinxd.drivehard.core.road.RoadClass.HIGHWAY), net.lengthKm(com.harlequinxd.drivehard.core.road.RoadClass.COUNTRY),
@@ -337,5 +355,9 @@ public class SimTest {
     static void check(String n, boolean ok) {
         System.out.println((ok ? "ok   " : "FAIL ") + n);
         if (!ok) fails++;
+    }
+
+    static boolean noRaycastSurfaces(Chunk chunk) {
+        return chunk.sectors.sectors.isEmpty() && chunk.sectors.walls.isEmpty() && chunk.sectors.slabs.isEmpty();
     }
 }

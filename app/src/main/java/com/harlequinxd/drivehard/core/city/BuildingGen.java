@@ -14,9 +14,9 @@ import static com.harlequinxd.drivehard.core.render.SoftRenderer.L_OBJECT;
  * Builds Japanese buildings inside a footprint: office towers, department stores, multi-tenant
  * bar buildings (with vertical signboards), apartment mansions, shophouses, convenience stores,
  * pachinko parlours, detached houses with tiled gable roofs, small apartments, fire stations,
- * police boxes and warehouses. Buildings are sectors (see {@link SectorBuilder}): facades are
- * walls tiled per storey with facade, shopfront and lobby tiles, roofs are flat decks inside a
- * parapet or pitched sectors; only signs, masts and similar props are polygons.
+ * police boxes and warehouses. Buildings are emitted as polygon meshes from the procedural
+ * footprints in {@link SectorBuilder}: facades are tiled per storey with facade, shopfront and
+ * lobby textures, and roofs are flat decks, parapets or pitched surfaces.
  */
 final class BuildingGen {
     static final int N = 0, S = 1, W = 2, E = 3;
@@ -312,14 +312,14 @@ final class BuildingGen {
     private void houseDesign(boolean farm, int design, float x0, float z0, float x1, float z1, float base, boolean[] street, boolean lot) {
         int face = N;
         for (int s = 0; s < 4; s++) if (street[s]) { face = s; break; }
-        new HouseGen(lib, gb, ch, r).build(HouseGen.design(lib, farm, design), x0, z0, x1, z1, face, base, lot);
+        new HouseGen(lib, gb, ch, r).build(HouseGen.design(lib, farm, design), x0, z0, x1, z1, face, base, lot, false);
     }
 
     /** A house design on a whole lot (garden, carport, fence), for village and town streets. */
-    void lotHouse(boolean farm, int design, float x0, float z0, float x1, float z1, int face) {
+    void lotHouse(boolean farm, int design, float x0, float z0, float x1, float z1, int face, boolean westNeighbor) {
         gb.begin(true);
         float base = foundationLot(x0, z0, x1, z1);
-        new HouseGen(lib, gb, ch, r).build(HouseGen.design(lib, farm, design), x0, z0, x1, z1, face, base, true);
+        new HouseGen(lib, gb, ch, r).build(HouseGen.design(lib, farm, design), x0, z0, x1, z1, face, base, true, westNeighbor);
         gb.end();
     }
 

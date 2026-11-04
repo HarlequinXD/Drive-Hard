@@ -48,6 +48,7 @@ public final class Countryside {
     static final class Site {
         float x0, z0, x1, z1;
         int kind, face, seed, design;
+        boolean westNeighbor;
         float rx, rz;   // driveway end at the road edge
         /** Painted ground areas {x0, z0, x1, z1, texture}. */
         List<float[]> ground;
@@ -498,6 +499,7 @@ public final class Countryside {
     /** Lots of 11-15 m along a row; each gets a house design (sometimes a small apartment block). */
     private void houseRow(float x0, float z0, float x1, float z1, int face, Random rnd, boolean apartments) {
         float x = x0;
+        Site previous = null;
         while (x1 - x > 9.5f) {
             float w = 11f + rnd.nextFloat() * 4f;
             if (x1 - x - w < 9.5f) w = x1 - x;
@@ -518,7 +520,11 @@ public final class Countryside {
                 st.design = rnd.nextInt(HouseGen.SUBURB_DESIGNS);
                 st.ground = lotGround(st);
             }
+            if (st.kind == LOT && previous != null && previous.kind == LOT && Math.abs(previous.x1 - st.x0) < 0.01f) {
+                st.westNeighbor = true;
+            }
             add(st);
+            previous = st.kind == LOT ? st : null;
         }
     }
 
@@ -613,7 +619,8 @@ public final class Countryside {
                 break;
             }
             case LOT:
-                new BuildingGen(city, lib, gb, r, ch).lotHouse(false, s.design, s.x0, s.z0, s.x1, s.z1, s.face);
+                new BuildingGen(city, lib, gb, r, ch).lotHouse(false, s.design, s.x0, s.z0, s.x1, s.z1, s.face,
+                        s.westNeighbor);
                 garden(ch, s, r);
                 break;
             case SHOP:
