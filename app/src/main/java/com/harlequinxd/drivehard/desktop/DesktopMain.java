@@ -132,7 +132,7 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
                         }
                         float panX=mapPanAxis(clamp(padX+((down(KeyEvent.VK_D)||down(KeyEvent.VK_RIGHT))?1:0)-((down(KeyEvent.VK_A)||down(KeyEvent.VK_LEFT))?1:0)));
                         float panZ=mapPanAxis(clamp(padZ+((down(KeyEvent.VK_S)||down(KeyEvent.VK_DOWN))?1:0)-((down(KeyEvent.VK_W)||down(KeyEvent.VK_UP))?1:0)));
-                        boolean controllerPanning=connected&&(Math.abs(padX)>0.04f||Math.abs(padZ)>0.04f);
+                        float controllerPanStrength=connected?clamp(Math.max(Math.abs(padX),Math.abs(padZ)),0f,1f):0f;
                         float zoomIn=Math.max(connected?pad.rt():0f,connected&&pad.button(XboxInput.RIGHT_SHOULDER)?1f:0f)+((down(KeyEvent.VK_EQUALS)||down(KeyEvent.VK_ADD)||down(KeyEvent.VK_PAGE_UP)||down(KeyEvent.VK_CLOSE_BRACKET))?1:0);
                         float zoomOut=Math.max(connected?pad.lt():0f,connected&&pad.button(XboxInput.LEFT_SHOULDER)?1f:0f)+((down(KeyEvent.VK_MINUS)||down(KeyEvent.VK_SUBTRACT)||down(KeyEvent.VK_PAGE_DOWN)||down(KeyEvent.VK_OPEN_BRACKET))?1:0);
                         int wheelSteps=mapWheelSteps.getAndSet(0);
@@ -152,17 +152,11 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
                         mapViewX-=dragX*mapUnitsPerPixel;
                         mapViewZ-=dragY*mapUnitsPerPixel;
                         if(dragX!=0f || dragY!=0f) { mapCursorX=mapViewX; mapCursorZ=mapViewZ; }
-                        float speed=(g.map.extent/mapZoom)*(controllerPanning?6000f:12f)*dt;
+                        float speed=(g.map.extent/mapZoom)*(12f+5988f*controllerPanStrength)*dt;
                         mapCursorX=Math.max(g.map.x0,Math.min(g.map.x0+g.map.extent,mapCursorX+panX*speed));
                         mapCursorZ=Math.max(g.map.z0,Math.min(g.map.z0+g.map.extent,mapCursorZ+panZ*speed));
-                        if(controllerPanning) {
-                            mapViewX=mapCursorX;
-                            mapViewZ=mapCursorZ;
-                        } else {
-                            float follow=Math.min(1f,dt*12f);
-                            mapViewX+=(mapCursorX-mapViewX)*follow;
-                            mapViewZ+=(mapCursorZ-mapViewZ)*follow;
-                        }
+                        mapViewX=mapCursorX;
+                        mapViewZ=mapCursorZ;
                         clampMapView(g);
                         if(confirm&&!lastConfirm) {
                             MapData.Label nearest=null; float best=12f*mapUnitsPerPixel;
