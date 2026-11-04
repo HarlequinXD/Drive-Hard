@@ -27,7 +27,7 @@ Then use JDK 17's `jpackage` to create an app-image from `app/build/windows-inpu
 
 ## Build notes
 
-The Android UI, Android manifest, and APK workflow are removed. The Windows version retains software rendering (not OpenGL). Controller support uses the JNA dependency to call Windows XInput. This package has been source-compiled and the core simulation tests passed in a Linux Java environment; the actual Windows GitHub Actions EXE packaging has **not** been run here.
+The Windows frontend retains software rendering (not OpenGL). Controller support uses the JNA dependency to call Windows XInput. The Android app is a separate `android-app` module and does not change this Windows package or include Swing/JNA. The actual Windows GitHub Actions EXE packaging has **not** been run here.
 
 ## Island map and fast travel (Windows)
 - The minimap is always visible in the top-right corner while playing.

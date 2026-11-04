@@ -1,3 +1,5 @@
-pluginManagement { repositories { gradlePluginPortal(); mavenCentral() } }
+pluginManagement { repositories { google(); gradlePluginPortal(); mavenCentral() } }
 rootProject.name = 'DriveHard'
 include ':app'
+include ':android-app'
+project(':android-app').projectDir = file('android-app')

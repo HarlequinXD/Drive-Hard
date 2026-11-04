@@ -1,6 +1,7 @@
 package com.harlequinxd.drivehard.core.road;
 
 import java.util.HashSet;
+import java.util.Locale;
 import java.util.Random;
 import java.util.Set;
 
@@ -29,7 +30,7 @@ public final class PlaceNames {
         String root = ROOTS[r.nextInt(ROOTS.length)], end = ENDS[r.nextInt(ENDS.length)];
         // avoid doubled syllables and vowel clashes ("Kawakawa", "Ao" + "o")
         for (int k = 0; k < 20; k++) {
-            String lr = root.toLowerCase();
+            String lr = root.toLowerCase(Locale.ROOT);
             boolean clash = isVowel(root.charAt(root.length() - 1)) && isVowel(end.charAt(0));
             boolean doubled = lr.endsWith(end) || lr.endsWith(end.substring(0, Math.min(2, end.length())));
             if (!clash && !doubled) break;
