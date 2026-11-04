@@ -203,6 +203,37 @@ public class SimTest {
         check("pedestrians cross streets", crossings > 5);
         check("pedestrians stay on the ground", badCrossings == 0);
 
+        for (com.harlequinxd.drivehard.core.road.Town.Size size : new com.harlequinxd.drivehard.core.road.Town.Size[]{
+                com.harlequinxd.drivehard.core.road.Town.Size.TOWN, com.harlequinxd.drivehard.core.road.Town.Size.VILLAGE}) {
+            com.harlequinxd.drivehard.core.road.Town settlement = null;
+            for (var town : c.roads.towns)
+                if (town.size == size && town.grid != null) { settlement = town; break; }
+            boolean seenInSettlement = false;
+            boolean walkedFootpath = false;
+            if (settlement != null) {
+                com.harlequinxd.drivehard.core.sim.Pedestrians locals =
+                        new com.harlequinxd.drivehard.core.sim.Pedestrians(c, r -> r.nextInt(100));
+                locals.spawnMax = 125f; locals.target = 40;
+                float walkInner=com.harlequinxd.drivehard.core.road.RoadClass.TOWN.laneW;
+                float walkOuter=com.harlequinxd.drivehard.core.road.RoadClass.TOWN.halfWidth();
+                for (int i = 0; i < 60 * 10; i++) {
+                    locals.update(dt, i * dt, settlement.centre.x, settlement.centre.z);
+                    for (var pedestrian : locals.peds) {
+                        boolean inSettlement = c.roads.townAt(pedestrian.x, pedestrian.z, 0f) == settlement;
+                        if (!inSettlement) continue;
+                        seenInSettlement = true;
+                        if (pedestrian.state == com.harlequinxd.drivehard.core.sim.Pedestrians.CROSS) continue;
+                        float lineDistance = Float.MAX_VALUE;
+                        for (float x : settlement.gx) lineDistance = Math.min(lineDistance, Math.abs(pedestrian.x - x));
+                        for (float z : settlement.gz) lineDistance = Math.min(lineDistance, Math.abs(pedestrian.z - z));
+                        walkedFootpath |= lineDistance >= walkInner && lineDistance <= walkOuter;
+                    }
+                }
+            }
+            check("pedestrians appear in " + size.name().toLowerCase(), seenInSettlement);
+            check("pedestrians use " + size.name().toLowerCase() + " footpaths", walkedFootpath);
+        }
+
         vehicleTest();
 
         System.out.println(fails == 0 ? "ALL OK" : fails + " FAILED");

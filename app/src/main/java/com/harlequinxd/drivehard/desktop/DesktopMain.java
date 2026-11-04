@@ -26,6 +26,7 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
     private volatile boolean running = true;
     private volatile boolean fullscreen;
     private JFrame window;
+    private Rectangle windowedBounds;
     private boolean lastJump,lastCar,lastFullscreen;
     private volatile boolean imageReady;
     private volatile boolean controllerConnected;
@@ -82,7 +83,7 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
             view.window = frame;
             frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
             frame.addWindowListener(new WindowAdapter() {
-                @Override public void windowClosed(WindowEvent e) { view.running=false; }
+                @Override public void windowClosing(WindowEvent e) { view.running=false; }
             });
             frame.setContentPane(view);
             frame.pack(); frame.setLocationRelativeTo(null); frame.setVisible(true);
@@ -236,13 +237,22 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
     }
     private boolean down(int k) {return keys.contains(k);}
     private void toggleFullscreen() {
-        GraphicsDevice device=GraphicsEnvironment.getLocalGraphicsEnvironment().getDefaultScreenDevice();
+        Rectangle previousBounds=window.getBounds();
+        Rectangle screenBounds=window.getGraphicsConfiguration().getBounds();
         window.dispose();
         fullscreen=!fullscreen;
         window.setUndecorated(fullscreen);
         window.setResizable(!fullscreen);
-        if(fullscreen) device.setFullScreenWindow(window);
-        else {device.setFullScreenWindow(null);window.setSize(1200,800);window.setLocationRelativeTo(null);window.setVisible(true);}
+        if(fullscreen) {
+            windowedBounds=previousBounds;
+            window.setBounds(screenBounds);
+        } else {
+            window.setBounds(windowedBounds!=null?windowedBounds:new Rectangle(0,0,1200,800));
+            if(windowedBounds==null) window.setLocationRelativeTo(null);
+            windowedBounds=null;
+        }
+        window.setVisible(true);
+        window.toFront();
         requestFocusInWindow();
     }
     @Override protected void paintComponent(Graphics g) {
