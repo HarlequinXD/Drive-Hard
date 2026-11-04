@@ -15,6 +15,7 @@ import javax.swing.*;
 public final class DesktopMain extends JPanel implements KeyListener, Runnable {
     private static final int W=480, H=320;
     private static final float MIN_MAP_ZOOM=0.5f, MAX_MAP_ZOOM=12f;
+    private static final float MAP_STICK_DEADZONE=0.02f, MAP_STICK_MIN_SPEED=0.35f;
     private final Set<Integer> keys = ConcurrentHashMap.newKeySet();
     private final AtomicInteger mapWheelSteps = new AtomicInteger(), mapZoomClicks = new AtomicInteger();
     private final AtomicInteger mapDragX = new AtomicInteger(), mapDragY = new AtomicInteger();
@@ -130,8 +131,8 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
                             if(pad.button(XboxInput.DPAD_UP)) padZ-=1f;
                             if(pad.button(XboxInput.DPAD_DOWN)) padZ+=1f;
                         }
-                        float panX=clamp(padX+((down(KeyEvent.VK_D)||down(KeyEvent.VK_RIGHT))?1:0)-((down(KeyEvent.VK_A)||down(KeyEvent.VK_LEFT))?1:0));
-                        float panZ=clamp(padZ+((down(KeyEvent.VK_S)||down(KeyEvent.VK_DOWN))?1:0)-((down(KeyEvent.VK_W)||down(KeyEvent.VK_UP))?1:0));
+                        float panX=clamp(mapPanAxis(padX)+((down(KeyEvent.VK_D)||down(KeyEvent.VK_RIGHT))?1:0)-((down(KeyEvent.VK_A)||down(KeyEvent.VK_LEFT))?1:0));
+                        float panZ=clamp(mapPanAxis(padZ)+((down(KeyEvent.VK_S)||down(KeyEvent.VK_DOWN))?1:0)-((down(KeyEvent.VK_W)||down(KeyEvent.VK_UP))?1:0));
                         float zoomIn=Math.max(connected?pad.rt():0f,connected&&pad.button(XboxInput.RIGHT_SHOULDER)?1f:0f)+((down(KeyEvent.VK_EQUALS)||down(KeyEvent.VK_ADD)||down(KeyEvent.VK_PAGE_UP)||down(KeyEvent.VK_CLOSE_BRACKET))?1:0);
                         float zoomOut=Math.max(connected?pad.lt():0f,connected&&pad.button(XboxInput.LEFT_SHOULDER)?1f:0f)+((down(KeyEvent.VK_MINUS)||down(KeyEvent.VK_SUBTRACT)||down(KeyEvent.VK_PAGE_DOWN)||down(KeyEvent.VK_OPEN_BRACKET))?1:0);
                         int wheelSteps=mapWheelSteps.getAndSet(0);
@@ -212,6 +213,13 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
     }
     private static float clamp(float x) {return Math.max(-1f,Math.min(1f,x));}
     private static float clamp(float x,float min,float max) {return Math.max(min,Math.min(max,x));}
+    private static float mapPanAxis(float input) {
+        float magnitude=Math.abs(input);
+        if(magnitude<=MAP_STICK_DEADZONE) return 0f;
+        float strength=(magnitude-MAP_STICK_DEADZONE)/(1f-MAP_STICK_DEADZONE);
+        float response=MAP_STICK_MIN_SPEED+(1f-MAP_STICK_MIN_SPEED)*strength;
+        return Math.copySign(response,input);
+    }
     private float toInternalX(int x) {
         int dw=Math.min(getWidth(),(int)((long)getHeight()*W/H));
         return dw<=0?-1f:(x-(getWidth()-dw)/2f)*W/dw;
