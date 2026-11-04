@@ -21,15 +21,15 @@ public final class XboxInput {
         public Gamepad Gamepad = new Gamepad();
     }
     public static final int A=0x1000, B=0x2000, X=0x4000, Y=0x8000, START=0x0010, BACK=0x0020;
+    public static final int LEFT_SHOULDER=0x0100, RIGHT_SHOULDER=0x0200;
     public static final int DPAD_UP=1, DPAD_DOWN=2, DPAD_LEFT=4, DPAD_RIGHT=8;
     private final XInput api;
     private final State state = new State();
     public XboxInput() {
         XInput found = null;
-        try { found = Native.load("xinput1_4", XInput.class); }
-        catch (Throwable ignored) {
-            try { found = Native.load("xinput9_1_0", XInput.class); }
-            catch (Throwable ignored2) { }
+        for (String library : new String[]{"xinput1_4", "xinput1_3", "xinput9_1_0"}) {
+            try { found = Native.load(library, XInput.class); break; }
+            catch (Throwable ignored) { }
         }
         api = found;
     }
@@ -37,7 +37,7 @@ public final class XboxInput {
         if (api == null) return false;
         for (int i=0; i<4; i++) {
             try { if (api.XInputGetState(i, state)==0) { state.read(); return true; } }
-            catch (Throwable ignored) { return false; }
+            catch (Throwable ignored) { }
         }
         return false;
     }

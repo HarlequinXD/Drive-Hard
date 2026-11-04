@@ -27,6 +27,7 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
     private JFrame window;
     private boolean lastJump,lastCar,lastFullscreen;
     private volatile boolean imageReady;
+    private volatile boolean controllerConnected;
     private float fps;
     private volatile boolean mapOpen, travelMenu;
     private volatile float mapCursorX, mapCursorZ;
@@ -103,6 +104,7 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
                 float dt=Math.min(.05f,(start-previous)/1_000_000_000f);
                 previous=start;
                 boolean connected=pad.poll();
+                controllerConnected=connected;
                 boolean select=down(KeyEvent.VK_M)||(connected&&pad.button(XboxInput.BACK));
                 boolean confirm=down(KeyEvent.VK_ENTER)||(connected&&pad.button(XboxInput.A));
                 boolean cancel=down(KeyEvent.VK_ESCAPE)||(connected&&pad.button(XboxInput.B));
@@ -119,11 +121,18 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
                             mapOpen=false; travelMenu=false;
                         }
                     } else {
-                        float panX=(connected?pad.lx():0f)+((down(KeyEvent.VK_D)||down(KeyEvent.VK_RIGHT))?1:0)-((down(KeyEvent.VK_A)||down(KeyEvent.VK_LEFT))?1:0);
-                        float panZ=-(connected?pad.ly():0f)+((down(KeyEvent.VK_S)||down(KeyEvent.VK_DOWN))?1:0)-((down(KeyEvent.VK_W)||down(KeyEvent.VK_UP))?1:0);
-                        // Fast cursor movement independent of the window size; zoom controls view scale.
-                        float zoomIn=(connected?pad.rt():0f)+((down(KeyEvent.VK_EQUALS)||down(KeyEvent.VK_ADD)||down(KeyEvent.VK_PAGE_UP)||down(KeyEvent.VK_CLOSE_BRACKET))?1:0);
-                        float zoomOut=(connected?pad.lt():0f)+((down(KeyEvent.VK_MINUS)||down(KeyEvent.VK_SUBTRACT)||down(KeyEvent.VK_PAGE_DOWN)||down(KeyEvent.VK_OPEN_BRACKET))?1:0);
+                        float padX=connected?pad.lx()+pad.rx():0f;
+                        float padZ=connected?-pad.ly()-pad.ry():0f;
+                        if(connected) {
+                            if(pad.button(XboxInput.DPAD_LEFT)) padX-=1f;
+                            if(pad.button(XboxInput.DPAD_RIGHT)) padX+=1f;
+                            if(pad.button(XboxInput.DPAD_UP)) padZ-=1f;
+                            if(pad.button(XboxInput.DPAD_DOWN)) padZ+=1f;
+                        }
+                        float panX=clamp(padX+((down(KeyEvent.VK_D)||down(KeyEvent.VK_RIGHT))?1:0)-((down(KeyEvent.VK_A)||down(KeyEvent.VK_LEFT))?1:0));
+                        float panZ=clamp(padZ+((down(KeyEvent.VK_S)||down(KeyEvent.VK_DOWN))?1:0)-((down(KeyEvent.VK_W)||down(KeyEvent.VK_UP))?1:0));
+                        float zoomIn=Math.max(connected?pad.rt():0f,connected&&pad.button(XboxInput.RIGHT_SHOULDER)?1f:0f)+((down(KeyEvent.VK_EQUALS)||down(KeyEvent.VK_ADD)||down(KeyEvent.VK_PAGE_UP)||down(KeyEvent.VK_CLOSE_BRACKET))?1:0);
+                        float zoomOut=Math.max(connected?pad.lt():0f,connected&&pad.button(XboxInput.LEFT_SHOULDER)?1f:0f)+((down(KeyEvent.VK_MINUS)||down(KeyEvent.VK_SUBTRACT)||down(KeyEvent.VK_PAGE_DOWN)||down(KeyEvent.VK_OPEN_BRACKET))?1:0);
                         int wheelSteps=mapWheelSteps.getAndSet(0);
                         int zoomClicks=mapZoomClicks.getAndSet(0);
                         mapZoom=Math.max(MIN_MAP_ZOOM,Math.min(MAX_MAP_ZOOM,mapZoom*(float)Math.exp((zoomIn-zoomOut)*2.4f*dt-wheelSteps*0.22f+zoomClicks*0.22f)));
@@ -322,12 +331,14 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
                 g.drawString("ISLAND MAP",7,14);
                 g.setColor(new Color(160,207,207));g.setFont(new Font(Font.MONOSPACED,Font.BOLD,9));
                 g.drawString(Math.round(mapZoom*100)+"%",W-92,14);
+                g.setColor(controllerConnected?new Color(112,225,171):new Color(217,150,129));
+                g.drawString(controllerConnected?"PAD OK":"PAD --",W-154,14);
                 g.setColor(new Color(59,92,99));g.drawRoundRect(W-48,3,18,14,2,2);g.drawRoundRect(W-25,3,18,14,2,2);
                 g.setColor(new Color(233,242,234));g.setFont(new Font(Font.MONOSPACED,Font.BOLD,11));
                 g.drawString("+",W-43,14);g.drawString("-",W-20,14);
                 g.setFont(new Font(Font.MONOSPACED,Font.PLAIN,9));
-                g.drawString("DRAG / LS / WASD PAN   WHEEL / RT-LT / +/- ZOOM",7,H-16);
-                g.drawString("A/ENTER FAST TRAVEL   B/ESC CANCEL",7,H-5);
+                g.drawString("LS / DPAD / WASD PAN   LB-RB / RT-LT / WHEEL ZOOM",7,H-16);
+                g.drawString("A / ENTER SELECT   B / ESC CLOSE",7,H-5);
                 if(travelMenu&&selectedDestination!=null) {
                     int bx=65,by=H/2-35,bw=W-130,bh=70;
                     g.setColor(new Color(7,17,29));g.fillRect(bx,by,bw,bh);
