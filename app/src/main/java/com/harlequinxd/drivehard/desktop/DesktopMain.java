@@ -28,6 +28,7 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
     private volatile float mapCursorX, mapCursorZ;
     private volatile MapData.Label selectedDestination;
     private boolean lastSelect, lastConfirm, lastCancel;
+    private float mapZoom=1f, mapViewX, mapViewZ;
     private BufferedImage mapImage;
     private volatile boolean mapImageReady;
 
@@ -74,7 +75,7 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
                 boolean cancel=down(KeyEvent.VK_ESCAPE)||(connected&&pad.button(XboxInput.B));
                 if(select&&!lastSelect) {
                     mapOpen=!mapOpen; travelMenu=false; selectedDestination=null;
-                    if(mapOpen) { mapCursorX=g.mapX(); mapCursorZ=g.mapZ(); }
+                    if(mapOpen) { mapCursorX=g.mapX(); mapCursorZ=g.mapZ(); mapViewX=mapCursorX; mapViewZ=mapCursorZ; mapZoom=1f; }
                 }
                 lastSelect=select;
                 if(mapOpen) {
@@ -87,9 +88,17 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
                     } else {
                         float panX=(connected?pad.lx():0f)+((down(KeyEvent.VK_D)||down(KeyEvent.VK_RIGHT))?1:0)-((down(KeyEvent.VK_A)||down(KeyEvent.VK_LEFT))?1:0);
                         float panZ=-(connected?pad.ly():0f)+((down(KeyEvent.VK_S)||down(KeyEvent.VK_DOWN))?1:0)-((down(KeyEvent.VK_W)||down(KeyEvent.VK_UP))?1:0);
-                        float speed=g.map.extent*0.28f*dt;
+                        // Fast cursor movement independent of the window size; zoom controls view scale.
+                        float zoomIn=(connected?pad.rt():0f)+((down(KeyEvent.VK_EQUALS)||down(KeyEvent.VK_ADD)||down(KeyEvent.VK_PAGE_UP))?1:0);
+                        float zoomOut=(connected?pad.lt():0f)+((down(KeyEvent.VK_MINUS)||down(KeyEvent.VK_SUBTRACT)||down(KeyEvent.VK_PAGE_DOWN))?1:0);
+                        mapZoom=Math.max(1f,Math.min(12f,mapZoom*(float)Math.exp((zoomIn-zoomOut)*2.4f*dt)));
+                        float speed=g.map.extent*0.85f*dt;
                         mapCursorX=Math.max(g.map.x0,Math.min(g.map.x0+g.map.extent,mapCursorX+panX*speed));
                         mapCursorZ=Math.max(g.map.z0,Math.min(g.map.z0+g.map.extent,mapCursorZ+panZ*speed));
+                        // Follow the cursor smoothly so zoomed-in maps can traverse the whole world.
+                        float follow=Math.min(1f,dt*12f);
+                        mapViewX+=(mapCursorX-mapViewX)*follow;
+                        mapViewZ+=(mapCursorZ-mapViewZ)*follow;
                         if(confirm&&!lastConfirm) {
                             MapData.Label nearest=null; float best=g.map.extent*0.045f;
                             for(MapData.Label label:g.map.labels) {
@@ -101,6 +110,7 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
                         }
                     }
                     lastConfirm=confirm;lastCancel=cancel;
+                    synchronized(image) { renderMapFrame(g); imageReady=true; }
                     repaint();
                     java.util.concurrent.locks.LockSupport.parkNanos(16_666_667L);
                     previous=System.nanoTime();
@@ -125,7 +135,11 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
                 lastJump=jump;lastCar=car;
                 g.render();
                 int[] pixels=((DataBufferInt)image.getRaster().getDataBuffer()).getData();
-                synchronized(image) { System.arraycopy(g.renderer.fb,0,pixels,0,pixels.length); imageReady=true; }
+                synchronized(image) {
+                    System.arraycopy(g.renderer.fb,0,pixels,0,pixels.length);
+                    renderMapFrame(g);
+                    imageReady=true;
+                }
                 repaint();
                 frames++;
                 if(start-stat>1_000_000_000L) {fps=frames*1_000_000_000f/(start-stat);frames=0;stat=start;}
@@ -161,63 +175,103 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
         int dw=Math.min(width,(int)((long)height*W/H)),dh=(int)((long)dw*H/W);
         int x=(width-dw)/2,y=(height-dh)/2;
         if(imageReady) synchronized(image) { g.drawImage(image,x,y,dw,dh,null); }
-        g.setColor(Color.WHITE);g.setFont(new Font(Font.MONOSPACED,Font.BOLD,13));
-        g.drawString("Drive Hard | "+Math.round(fps)+" FPS | Xbox: LS move / steer, RS camera, RT gas, LT brake, A jump, Y enter",12,22);
-        if(mapImageReady) {
-            if(mapOpen) drawMap(g,Math.max(18,width/12),Math.max(48,height/12),Math.min(width*5/6,height*5/6),true);
-            else drawMap(g,width-Math.max(145,width/5)-16,38,Math.max(145,width/5),false);
-        }
     }
-    private void drawMap(Graphics g,int x,int y,int size,boolean full) {
+    /** All HUD/map drawing occurs at the internal game resolution, then scales with the framebuffer. */
+    private void renderMapFrame(Game current) {
+        if(!mapImageReady) return;
+        Graphics2D gg=image.createGraphics();
+        try {
+            gg.setRenderingHint(RenderingHints.KEY_INTERPOLATION,RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+            gg.setRenderingHint(RenderingHints.KEY_ANTIALIASING,RenderingHints.VALUE_ANTIALIAS_OFF);
+            if(mapOpen) {
+                gg.setColor(new Color(9,15,23));gg.fillRect(0,0,W,H);
+                drawMap(gg,0,0,W,H,true);
+            } else {
+                // Small, player-centred neighbourhood map rather than the entire island.
+                drawMap(gg,W-111,8,103,103,false);
+            }
+        } finally { gg.dispose(); }
+    }
+    private void drawMap(Graphics2D gg,int x,int y,int width,int height,boolean full) {
         Game current=game;
-        if(current==null || mapImage==null || size<=0) return;
+        if(current==null || mapImage==null) return;
         MapData m=current.map;
-        Graphics2D gg=(Graphics2D)g.create();
-        gg.setColor(new Color(9,15,23,225));gg.fillRoundRect(x-7,y-7,size+14,size+(full?64:14),12,12);
-        gg.setClip(x,y,size,size);
-        gg.drawImage(mapImage,x,y,size,size,null);
-        double scale=size/(double)m.extent;
-        gg.setStroke(new BasicStroke(full?1.5f:1f));
-        for(MapData.Road road:m.roads) {
-            gg.setColor(road.cls.city?new Color(244,235,195):new Color(215,201,154));
-            for(int i=1;i<road.x.length;i++) {
-                int x0=x+(int)((road.x[i-1]-m.x0)*scale),z0=y+(int)((road.z[i-1]-m.z0)*scale);
-                int x1=x+(int)((road.x[i]-m.x0)*scale),z1=y+(int)((road.z[i]-m.z0)*scale);
-                gg.drawLine(x0,z0,x1,z1);
+        // The full map fills the entire internal 480x320 framebuffer.
+        // Zooming is performed in world-space and never in window pixels.
+        float cx=full?mapViewX:current.mapX();
+        float cz=full?mapViewZ:current.mapZ();
+        float visible=m.extent/(full?mapZoom:14f);
+        float worldWidth=visible;
+        float worldHeight=visible*height/(float)width;
+        // At zoom 1 show the whole island in the wide view (letterboxed by world aspect).
+        if(full) { worldHeight=m.extent/mapZoom; worldWidth=worldHeight*width/(float)height; }
+        float left=cx-worldWidth/2f,top=cz-worldHeight/2f;
+        Graphics2D g=(Graphics2D)gg.create();
+        try {
+            g.setColor(new Color(14,23,30));g.fillRect(x,y,width,height);
+            g.setClip(x,y,width,height);
+            // Draw relief using a source rectangle; nearest-neighbour preserves the GBA-style pixels.
+            int sx0=(int)Math.floor((left-m.x0)*MapData.SIZE/m.extent);
+            int sy0=(int)Math.floor((top-m.z0)*MapData.SIZE/m.extent);
+            int sx1=(int)Math.ceil((left+worldWidth-m.x0)*MapData.SIZE/m.extent);
+            int sy1=(int)Math.ceil((top+worldHeight-m.z0)*MapData.SIZE/m.extent);
+            // Draw full image mapped into world coordinates, with clipping handling map edges.
+            int ix=x+Math.round((m.x0-left)*width/worldWidth);
+            int iy=y+Math.round((m.z0-top)*height/worldHeight);
+            int iw=Math.max(1,Math.round(m.extent*width/worldWidth));
+            int ih=Math.max(1,Math.round(m.extent*height/worldHeight));
+            g.drawImage(mapImage,ix,iy,iw,ih,null);
+            for(MapData.Road road:m.roads) {
+                g.setColor(road.cls.city?new Color(244,235,195):new Color(215,201,154));
+                for(int i=1;i<road.x.length;i++) {
+                    int ax=x+Math.round((road.x[i-1]-left)*width/worldWidth);
+                    int ay=y+Math.round((road.z[i-1]-top)*height/worldHeight);
+                    int bx=x+Math.round((road.x[i]-left)*width/worldWidth);
+                    int by=y+Math.round((road.z[i]-top)*height/worldHeight);
+                    g.drawLine(ax,ay,bx,by);
+                }
             }
-        }
-        if(full) {
-            for(MapData.Label label:m.labels) {
-                if(label.rank==4)continue;
-                int lx=x+(int)((label.x-m.x0)*scale),lz=y+(int)((label.z-m.z0)*scale);
-                gg.setColor(new Color(255,217,85));gg.fillOval(lx-4,lz-4,8,8);
-                gg.setColor(Color.BLACK);gg.drawOval(lx-4,lz-4,8,8);
-                gg.setColor(Color.WHITE);gg.setFont(new Font(Font.SANS_SERIF,Font.BOLD,12));
-                gg.drawString(label.name,lx+8,lz-5);
+            if(full) {
+                for(MapData.Label label:m.labels) {
+                    if(label.rank==4)continue;
+                    int lx=x+Math.round((label.x-left)*width/worldWidth);
+                    int lz=y+Math.round((label.z-top)*height/worldHeight);
+                    g.setColor(new Color(255,217,85));g.fillRect(lx-2,lz-2,5,5);
+                    g.setColor(Color.BLACK);g.drawRect(lx-2,lz-2,5,5);
+                    g.setColor(Color.WHITE);g.setFont(new Font(Font.MONOSPACED,Font.BOLD,9));
+                    g.drawString(label.name,lx+5,lz-4);
+                }
+                int mx=x+Math.round((mapCursorX-left)*width/worldWidth);
+                int my=y+Math.round((mapCursorZ-top)*height/worldHeight);
+                g.setColor(Color.WHITE);
+                g.drawLine(mx-7,my,mx-2,my);g.drawLine(mx+2,my,mx+7,my);
+                g.drawLine(mx,my-7,mx,my-2);g.drawLine(mx,my+2,mx,my+7);
             }
-            int cx=x+(int)((mapCursorX-m.x0)*scale),cz=y+(int)((mapCursorZ-m.z0)*scale);
-            gg.setColor(Color.WHITE);gg.setStroke(new BasicStroke(2));
-            gg.drawLine(cx-11,cz,cx-3,cz);gg.drawLine(cx+3,cz,cx+11,cz);
-            gg.drawLine(cx,cz-11,cx,cz-3);gg.drawLine(cx,cz+3,cx,cz+11);
-            gg.drawOval(cx-3,cz-3,6,6);
-        }
-        int px=x+(int)((current.mapX()-m.x0)*scale),pz=y+(int)((current.mapZ()-m.z0)*scale);
-        gg.setColor(Color.BLACK);gg.fillOval(px-7,pz-7,14,14);
-        gg.setColor(new Color(75,220,255));gg.fillOval(px-5,pz-5,10,10);
-        gg.setClip(null);
-        if(full) {
-            gg.setColor(Color.WHITE);gg.setFont(new Font(Font.SANS_SERIF,Font.BOLD,15));
-            gg.drawString("ISLAND MAP  |  SELECT/M: close  |  Left stick/WASD: cursor  |  A/Enter: select",x,y+size+25);
-            if(travelMenu && selectedDestination!=null) {
-                int mw=Math.min(size-20,420),mh=120,mx=x+(size-mw)/2,my=y+(size-mh)/2;
-                gg.setColor(new Color(12,21,32,245));gg.fillRoundRect(mx,my,mw,mh,16,16);
-                gg.setColor(Color.WHITE);gg.setFont(new Font(Font.SANS_SERIF,Font.BOLD,20));
-                gg.drawString("Fast travel to " + selectedDestination.name + "?",mx+18,my+40);
-                gg.setFont(new Font(Font.SANS_SERIF,Font.PLAIN,14));
-                gg.drawString("A / Enter: Travel      B / Esc: Cancel",mx+18,my+80);
-            } else gg.drawString("Move the cursor onto a yellow location marker, then press A",x,y+size+48);
-        }
-        gg.dispose();
+            int px=x+Math.round((current.mapX()-left)*width/worldWidth);
+            int py=y+Math.round((current.mapZ()-top)*height/worldHeight);
+            g.setColor(Color.BLACK);g.fillRect(px-3,py-3,7,7);
+            g.setColor(new Color(75,220,255));g.fillRect(px-2,py-2,5,5);
+            g.setClip(null);
+            if(full) {
+                g.setColor(new Color(4,10,18,215));g.fillRect(0,0,W,20);g.fillRect(0,H-29,W,29);
+                g.setColor(Color.WHITE);g.setFont(new Font(Font.MONOSPACED,Font.BOLD,11));
+                g.drawString("ISLAND MAP   ZOOM "+Math.round(mapZoom*100)+"%",7,14);
+                g.setFont(new Font(Font.MONOSPACED,Font.PLAIN,9));
+                g.drawString("SELECT/M CLOSE   LS/WASD CURSOR   RT/LT OR +/- ZOOM",7,H-16);
+                g.drawString("A/ENTER FAST TRAVEL   B/ESC CANCEL",7,H-5);
+                if(travelMenu&&selectedDestination!=null) {
+                    int bx=65,by=H/2-35,bw=W-130,bh=70;
+                    g.setColor(new Color(7,17,29));g.fillRect(bx,by,bw,bh);
+                    g.setColor(Color.WHITE);g.drawRect(bx,by,bw,bh);
+                    g.setFont(new Font(Font.MONOSPACED,Font.BOLD,12));
+                    g.drawString("FAST TRAVEL: "+selectedDestination.name,bx+12,by+23);
+                    g.setFont(new Font(Font.MONOSPACED,Font.PLAIN,10));
+                    g.drawString("A CONFIRM     B CANCEL",bx+12,by+49);
+                }
+            } else {
+                g.setColor(Color.WHITE);g.drawRect(x,y,width-1,height-1);
+            }
+        } finally {g.dispose();}
     }
 
     @Override public void keyPressed(KeyEvent e) {keys.add(e.getKeyCode());}
