@@ -316,6 +316,27 @@ public final class Game {
     public float mapZ() { return vehicle != null && driving() ? vehicle.z : player.z; }
     public float mapHeading() { return vehicle != null && driving() ? vehicle.yaw : player.facing; }
 
+    /** Fast travel to a named location on the existing island map. Call on the game thread. */
+    public boolean fastTravel(com.harlequinxd.drivehard.core.map.MapData.Label destination) {
+        if (destination == null || mode == Mode.ENTERING || mode == Mode.EXITING) return false;
+        float x = destination.x, z = destination.z;
+        if (driving() && vehicle != null) {
+            vehicle.speed = 0f;
+            vehicle.x = x; vehicle.z = z;
+            vehicle.y = city.surface(x, z) + 0.5f;
+            player.x = x; player.z = z; player.y = vehicle.y;
+        } else {
+            player.x = x; player.z = z;
+            player.y = city.surface(x, z) + 0.3f;
+            player.vx = player.vy = player.vz = 0f;
+            player.onGround = false;
+        }
+        city.chunks.ensureAround(x, z);
+        placeTimer = 0f;
+        cam.update(x, player.y, z, 0.016f);
+        return true;
+    }
+
     // ------------------------------------------------------------------ where am I
 
     /** Name of the city, the town or village here ("" in open country), and the region. */

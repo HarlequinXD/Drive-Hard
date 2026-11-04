@@ -28,3 +28,11 @@ Then use JDK 17's `jpackage` to create an app-image from `app/build/windows-inpu
 ## Build notes
 
 The Android UI, Android manifest, and APK workflow are removed. The Windows version retains software rendering (not OpenGL). Controller support uses the JNA dependency to call Windows XInput. This package has been source-compiled and the core simulation tests passed in a Linux Java environment; the actual Windows GitHub Actions EXE packaging has **not** been run here.
+
+## Island map and fast travel (Windows)
+- The minimap is always visible in the top-right corner while playing.
+- Press **Xbox View/Select/Back** (or **M**) to open or close the full island map.
+- Pan the map cursor with the **left stick** (or WASD/arrow keys).
+- Move the cursor over a yellow town/city marker and press **A** (or Enter) to open the fast-travel confirmation.
+- Press **A** again to fast travel; **B** (or Escape) cancels the menu or closes the map.
+- Fast travel uses the existing island map locations and streams the destination area. It is disabled while entering/exiting a car.
