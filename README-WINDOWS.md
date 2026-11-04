@@ -33,7 +33,7 @@ The Android UI, Android manifest, and APK workflow are removed. The Windows vers
 - The minimap is always visible in the top-right corner while playing.
 - Press **Xbox View/Select/Back** (or **M**) to open or close the full island map.
 - Pan with **left stick** or **D-pad** (or WASD/arrow keys); on PC, **left-drag** the map.
-- Zoom with the **mouse wheel**, on-screen **+ / -** buttons, keyboard **+ / -** or Page Up/Down, or controller **LT/RT** and **LB/RB**.
+- Zoom with the **mouse wheel**, on-screen **+ / -** buttons, keyboard **+ / -** or Page Up/Down, or hold controller **LT/RT** or **LB/RB** for repeated zoom steps.
 - Move the cursor over a yellow town/city marker and press **A** (or Enter) to open the fast-travel confirmation.
 - Press **A** again to fast travel; **B** (or Escape) cancels the menu or closes the map.
 - Fast travel uses the existing island map locations and streams the destination area. It is disabled while entering/exiting a car.
