@@ -15,4 +15,4 @@ The Android app is in `android-app/`; it reuses the platform-independent engine 
 
 See [README-WINDOWS.md](README-WINDOWS.md) for Windows packaging and Xbox/keyboard controls. The desktop app and Android app are built independently; Android does not include the Swing desktop frontend or its JNA dependency.
 
-Build automation: `.github/workflows/build-android.yml` and `.github/workflows/build-windows.yml`.
+Build automation: `.github/workflows/android.yml` and `.github/workflows/build-windows.yml`.
