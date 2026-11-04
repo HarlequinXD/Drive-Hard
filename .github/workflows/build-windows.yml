@@ -1,43 +1,33 @@
-name: Build Windows EXE
-
+name: Build Lightweight Windows Game
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Install Java 17
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-      - name: Install Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.14.3'
-      - name: Compile desktop application
-        run: gradle :app:clean :app:prepareWindowsPackage --stacktrace --no-daemon
-      - name: Package DriveHard.exe with bundled Java runtime
-        shell: pwsh
-        run: |
-          $jar = Get-ChildItem 'app/build/windows-input/*.jar' | Where-Object { $_.Name -like 'app*.jar' -or $_.Name -like 'DriveHard*.jar' } | Select-Object -First 1
-          if (-not $jar) { throw 'Application jar missing in app/build/windows-input' }
-          New-Item -ItemType Directory -Force -Path 'app/build/windows-dist' | Out-Null
-          jpackage --type app-image --name DriveHard --input app/build/windows-input --main-jar $jar.Name --main-class com.harlequinxd.drivehard.desktop.DesktopMain --dest app/build/windows-dist --java-options '-Xmx3g'
-          if ($LASTEXITCODE -ne 0) { throw 'jpackage failed' }
-      - name: Upload Windows EXE
+      - name: Build game JAR and dependencies
+        run: gradle :app:clean :app:prepareLightweightWindows --stacktrace --no-daemon
+      - name: Enable native Windows C compiler
+        uses: ilammy/msvc-dev-cmd@v1
+      - name: Compile small EXE launcher
+        shell: cmd
+        run: cl /nologo /O2 /MT /W4 /DUNICODE /D_UNICODE /Fe:app\build\lightweight-windows\DriveHard.exe windows\launcher.c shell32.lib user32.lib
+      - name: Upload game without Java runtime or nested ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: DriveHard-Windows
-          path: app/build/windows-dist/DriveHard/
+          name: DriveHard-Lightweight-Windows
+          path: app/build/lightweight-windows/
           if-no-files-found: error
-
