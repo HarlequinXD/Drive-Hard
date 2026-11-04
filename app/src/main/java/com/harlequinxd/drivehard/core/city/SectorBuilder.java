@@ -28,10 +28,11 @@ final class SectorBuilder {
     /** A tiled wall face: world endpoints A to B (tiles counted from A) and its tiling. */
     static final class Face {
         final float ax, az, bx, bz;
+        final float len;
         final Sectors.Tiles tiles;
         Face(float ax, float az, float bx, float bz, Sectors.Tiles tiles) {
             this.ax = ax; this.az = az; this.bx = bx; this.bz = bz; this.tiles = tiles;
-            tiles.len = (float) Math.hypot(bx - ax, bz - az);
+            len = (float) Math.hypot(bx - ax, bz - az);
         }
     }
 
@@ -242,7 +243,7 @@ final class SectorBuilder {
     private static void wall(GeoBuilder gb, Sectors.Wall wall, float bottom0, float bottom1, float top0, float top1) {
         Sectors.Tiles tiles = wall.tiles;
         if (tiles == null || wall.len < 0.02f || Math.max(top0 - bottom0, top1 - bottom1) < 0.02f) return;
-        float faceLen = tiles.len > 0f ? tiles.len : wall.len;
+        float faceLen = wall.faceLen > 0f ? wall.faceLen : wall.len;
         int maxFloors = tiles.floors;
         float groundH = Math.max(0.1f, tiles.groundH), storeyH = Math.max(0.1f, tiles.storeyH);
         float pos0 = wall.uOff, pos1 = wall.uOff + wall.len;
@@ -282,13 +283,12 @@ final class SectorBuilder {
                             1f - (lo0 - rowBottom) / h, 1f - (lo1 - rowBottom) / h);
                 } else {
                     int mat = row == 0 ? tiles.mat : tiles.matUp;
-                    patch(gb, wall, ax, az, bx, bz, lo0, lo1, hi0, hi1, mat,
-                            a / tiles.matScale, b / tiles.matScale,
-                            -hi0 / tiles.matScale, -hi1 / tiles.matScale,
-                            -lo0 / tiles.matScale, -lo1 / tiles.matScale);
-                    if (row < maxFloors && kind != Sectors.PLAIN)
-                        opening(gb, wall, tiles, kind, tex, rowBottom, rowTop, col, tileW,
+                    if (row < maxFloors && kind != Sectors.PLAIN) {
+                        opening(gb, wall, tiles, kind, tex, mat, rowBottom, rowTop, col, tileW,
                                 ax, az, bx, bz, a, b, lo0, lo1, hi0, hi1);
+                    } else {
+                        materialPatch(gb, wall, ax, az, bx, bz, a, b, lo0, lo1, hi0, hi1, mat, tiles.matScale);
+                    }
                 }
             }
             rowBottom = rowTop;
@@ -296,7 +296,7 @@ final class SectorBuilder {
         }
     }
 
-    private static void opening(GeoBuilder gb, Sectors.Wall wall, Sectors.Tiles tiles, byte kind, int tex,
+    private static void opening(GeoBuilder gb, Sectors.Wall wall, Sectors.Tiles tiles, byte kind, int tex, int mat,
                                 float rowBottom, float rowTop, int col, float tileW, float ax, float az,
                                 float bx, float bz, float a, float b, float lo0, float lo1, float hi0, float hi1) {
         float ow, oy0, oy1;
@@ -305,34 +305,55 @@ final class SectorBuilder {
         else if (kind == Sectors.DOOR) { ow = Math.min(tiles.doorW, tileW - 0.3f); oy0 = 0f; oy1 = tiles.doorH; }
         else { ow = Math.min(1.8f, tileW - 0.5f); oy0 = 0.1f; oy1 = 2.1f; }
         oy1 = Math.min(oy1, rowTop - rowBottom);
-        if (ow <= 0.05f || oy1 <= oy0) return;
+        if (ow <= 0.05f || oy1 <= oy0) {
+            materialPatch(gb, wall, ax, az, bx, bz, a, b, lo0, lo1, hi0, hi1, mat, tiles.matScale);
+            return;
+        }
         float center = (col + 0.5f) * tileW;
         float open0 = center - ow * 0.5f, open1 = center + ow * 0.5f;
         float a0 = Math.max(a, open0), a1 = Math.min(b, open1);
-        if (a1 - a0 < 0.02f) return;
+        if (a1 - a0 < 0.02f) {
+            materialPatch(gb, wall, ax, az, bx, bz, a, b, lo0, lo1, hi0, hi1, mat, tiles.matScale);
+            return;
+        }
         float t0 = (a0 - a) / (b - a), t1 = (a1 - a) / (b - a);
-        float x0 = ax + (bx - ax) * t0, z0 = az + (bz - az) * t0;
-        float x1 = ax + (bx - ax) * t1, z1 = az + (bz - az) * t1;
+        float x0 = lerp(ax, bx, t0), z0 = lerp(az, bz, t0);
+        float x1 = lerp(ax, bx, t1), z1 = lerp(az, bz, t1);
+        float bot0 = lerp(lo0, lo1, t0), bot1 = lerp(lo0, lo1, t1);
+        float top0 = lerp(hi0, hi1, t0), top1 = lerp(hi0, hi1, t1);
         float y0 = rowBottom + oy0, y1 = rowBottom + oy1;
-        float y00 = Math.max(lo0, y0), y01 = Math.max(lo1, y0);
-        float y10 = Math.min(hi0, y1), y11 = Math.min(hi1, y1);
-        if (Math.max(y10 - y00, y11 - y01) < 0.02f) return;
-        patch(gb, wall, x0, z0, x1, z1, y00, y01, y10, y11, tex,
+        float openBot0 = Math.max(bot0, y0), openBot1 = Math.max(bot1, y0);
+        float openTop0 = Math.min(top0, y1), openTop1 = Math.min(top1, y1);
+        if (Math.max(openTop0 - openBot0, openTop1 - openBot1) < 0.02f) {
+            materialPatch(gb, wall, ax, az, bx, bz, a, b, lo0, lo1, hi0, hi1, mat, tiles.matScale);
+            return;
+        }
+        materialPatch(gb, wall, ax, az, lerp(ax, bx, t0), lerp(az, bz, t0),
+                a, a0, lo0, bot0, hi0, top0, mat, tiles.matScale);
+        materialPatch(gb, wall, lerp(ax, bx, t1), lerp(az, bz, t1), bx, bz,
+                a1, b, bot1, lo1, top1, hi1, mat, tiles.matScale);
+        materialPatch(gb, wall, x0, z0, x1, z1, a0, a1,
+                bot0, bot1, openBot0, openBot1, mat, tiles.matScale);
+        materialPatch(gb, wall, x0, z0, x1, z1, a0, a1,
+                openTop0, openTop1, top0, top1, mat, tiles.matScale);
+        patch(gb, wall, x0, z0, x1, z1, openBot0, openBot1, openTop0, openTop1, tex,
                 (a0 - open0) / ow, (a1 - open0) / ow,
-                1f - (y10 - y0) / (y1 - y0), 1f - (y11 - y0) / (y1 - y0),
-                1f - (y00 - y0) / (y1 - y0), 1f - (y01 - y0) / (y1 - y0), 0.08f);
+                1f - (openTop0 - y0) / (y1 - y0), 1f - (openTop1 - y0) / (y1 - y0),
+                1f - (openBot0 - y0) / (y1 - y0), 1f - (openBot1 - y0) / (y1 - y0));
     }
+
+    private static void materialPatch(GeoBuilder gb, Sectors.Wall wall, float ax, float az, float bx, float bz,
+                                      float u0, float u1, float bottom0, float bottom1, float top0, float top1,
+                                      int tex, float scale) {
+        patch(gb, wall, ax, az, bx, bz, bottom0, bottom1, top0, top1, tex,
+                u0 / scale, u1 / scale, -top0 / scale, -top1 / scale, -bottom0 / scale, -bottom1 / scale);
+    }
+
+    private static float lerp(float a, float b, float t) { return a + (b - a) * t; }
 
     private static void patch(GeoBuilder gb, Sectors.Wall wall, float ax, float az, float bx, float bz,
                               float bottom0, float bottom1, float top0, float top1, int tex,
                               float u0, float u1, float topV0, float topV1, float botV0, float botV1) {
-        patch(gb, wall, ax, az, bx, bz, bottom0, bottom1, top0, top1, tex, u0, u1,
-                topV0, topV1, botV0, botV1, 0f);
-    }
-
-    private static void patch(GeoBuilder gb, Sectors.Wall wall, float ax, float az, float bx, float bz,
-                              float bottom0, float bottom1, float top0, float top1, int tex,
-                              float u0, float u1, float topV0, float topV1, float botV0, float botV1, float offset) {
         if (tex < 0 || Math.max(top0 - bottom0, top1 - bottom1) < 0.01f) return;
         float nx = wall.nx, nz = wall.nz;
         if ((- (bz - az)) * nx + (bx - ax) * nz < 0f) {
@@ -343,9 +364,7 @@ final class SectorBuilder {
             t = topV0; topV0 = topV1; topV1 = t;
             t = botV0; botV0 = botV1; botV1 = t;
         }
-        float ox = nx * offset, oz = nz * offset;
-        float[] p = {ax + ox, bottom0, az + oz, bx + ox, bottom1, bz + oz,
-                bx + ox, top1, bz + oz, ax + ox, top0, az + oz};
+        float[] p = {ax, bottom0, az, bx, bottom1, bz, bx, top1, bz, ax, top0, az};
         float[] uv = {u0, botV0, u1, botV1, u1, topV1, u0, topV0};
         float[] light = {wall.light, wall.light, wall.light, wall.light};
         gb.quad(p, uv, light, tex, L_OBJECT, Geo.FLAG_NO_SUBDIV, 0f, true);
@@ -480,6 +499,7 @@ final class SectorBuilder {
                 if (dx * fdx + dz * fdz < 0f) { float t = x0; x0 = x1; x1 = t; t = z0; z0 = z1; z1 = t; }
                 w = new Sectors.Wall(x0, z0, x1, z1, nx, nz, s, null, f.tiles);
                 w.uOff = (float) Math.hypot(x0 - f.ax, z0 - f.az);
+                w.faceLen = f.len;
             } else {
                 w = new Sectors.Wall(x0, z0, x1, z1, nx, nz, s, null, inner);
             }

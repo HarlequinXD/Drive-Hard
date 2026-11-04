@@ -68,8 +68,6 @@ public final class Sectors {
         public float matScale = 2f;
         /** Height of the ground storey (shops are taller) and of the storeys above. */
         public float groundH = 3f, storeyH = 3f;
-        /** Length of the whole wall face the tile columns are laid along (pieces of it share it). */
-        public float len;
         public int floors;
         public int[] cols;
         public byte[][] kind;
@@ -105,6 +103,8 @@ public final class Sectors {
         /** The sector beyond this wall (null: open ground), for walls of sectors standing inside others. */
         public final Sector back;
         public final Tiles tiles;
+        /** Length of the original tiled face when this wall is a clipped piece of it. */
+        public float faceLen;
         public float light = 1f;
         /** Where this wall starts along its tiled face (a face cut into pieces keeps its tiling). */
         public float uOff;
@@ -113,6 +113,7 @@ public final class Sectors {
             this.x0 = x0; this.z0 = z0; this.x1 = x1; this.z1 = z1;
             this.nx = nx; this.nz = nz;
             this.len = (float) Math.hypot(x1 - x0, z1 - z0);
+            this.faceLen = this.len;
             this.front = front; this.back = back; this.tiles = tiles;
         }
     }

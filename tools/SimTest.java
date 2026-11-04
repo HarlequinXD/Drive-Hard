@@ -11,6 +11,7 @@ public class SimTest {
     static int fails = 0;
 
     public static void main(String[] a) {
+        check("polygons are sorted far-to-near by the ordering table", orderingTableSortsPolygons());
         City c = new City(new TextureLibrary(20261103L), 20261103L);
         float dt = 1f / 60f;
         OrbitCamera cam = new OrbitCamera();
@@ -370,5 +371,27 @@ public class SimTest {
         for (int i = 0; i < mesh.count * 3; i++)
             if (mesh.nrm[i] != 0f) return false;
         return true;
+    }
+
+    static boolean orderingTableSortsPolygons() {
+        var renderer = new com.harlequinxd.drivehard.core.render.SoftRenderer(64, 64);
+        renderer.textures = new com.harlequinxd.drivehard.core.render.Texture[]{
+                new com.harlequinxd.drivehard.core.render.Texture(1, 1, new int[]{0xffff0000}),
+                new com.harlequinxd.drivehard.core.render.Texture(1, 1, new int[]{0xff0000ff})
+        };
+        renderer.lookAt(0f, 0f, 0f, 0f, 0f, 1f);
+        renderer.begin();
+        renderer.drawSky();
+        float[] uv = {0, 0, 1, 0, 1, 1, 0, 1};
+        float[] light = {1, 1, 1, 1};
+        renderer.submit(new float[]{-1.2f, -0.9f, 3f, 1.2f, -0.9f, 3f, 1.2f, 0.9f, 3f, -1.2f, 0.9f, 3f},
+                uv, light, 4, 0, com.harlequinxd.drivehard.core.render.SoftRenderer.L_OBJECT,
+                com.harlequinxd.drivehard.core.render.SoftRenderer.MODE_OPAQUE, 0f, false);
+        renderer.submit(new float[]{-2.4f, -1.8f, 6f, 2.4f, -1.8f, 6f, 2.4f, 1.8f, 6f, -2.4f, 1.8f, 6f},
+                uv, light, 4, 1, com.harlequinxd.drivehard.core.render.SoftRenderer.L_OBJECT,
+                com.harlequinxd.drivehard.core.render.SoftRenderer.MODE_OPAQUE, 0f, false);
+        renderer.flush();
+        int center = renderer.fb[32 * renderer.W + 33];
+        return ((center >> 16) & 255) > (center & 255);
     }
 }

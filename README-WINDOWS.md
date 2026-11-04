@@ -27,7 +27,7 @@ Then use JDK 17's `jpackage` to create an app-image from `app/build/windows-inpu
 
 ## Build notes
 
-The Windows frontend retains software rendering (not OpenGL). Buildings, shared property walls, vending machines and bridges are emitted as polygon meshes; the height-mapped ground remains ray-marched. Controller support uses the JNA dependency to call Windows XInput. The Android app is a separate `android-app` module and does not change this Windows package or include Swing/JNA. The actual Windows GitHub Actions EXE packaging has **not** been run here.
+The Windows frontend retains software rendering (not OpenGL). Buildings, shared property walls, vending machines and bridges are emitted as polygon meshes and sorted through a PS1-style ordering table; there is no per-pixel Z-buffer, so terrain does not depth-occlude polygons. The height-mapped ground remains ray-marched. Controller support uses the JNA dependency to call Windows XInput. The Android app is a separate `android-app` module and does not change this Windows package or include Swing/JNA. The actual Windows GitHub Actions EXE packaging has **not** been run here.
 
 ## Island map and fast travel (Windows)
 - The minimap is always visible in the top-right corner while playing.

@@ -9,9 +9,8 @@ import java.util.Arrays;
  * perspective-correct texturing, and sprites drawn as scaled rectangle blits.
  *
  * <ul>
- * <li>The ground fills a per-pixel depth buffer (1/z) that polygons and sprites test and write.</li>
- * <li>Primitives are still linked into an ordering table (draw layers, depth buckets, bias), which
- *   decides coplanar ties: shadows over the ground, decals over walls.</li>
+ * <li>The ground is rendered as the background, and polygons and sprites are drawn far-to-near
+ *   through a PlayStation-style ordering table grouped by layer and depth.</li>
  * <li>Colour is reduced to 15-bit with 4x4 ordered dither; fog by view depth.</li>
  * </ul>
  */
@@ -53,6 +52,7 @@ public final class SoftRenderer {
     // ordering table + primitive pool
     private final int[] head = new int[LAYERS * BUCKETS];
     private final int[] next = new int[MAX_PRIMS];
+    private final float[] pdepth = new float[MAX_PRIMS];
     private final int[] ptex = new int[MAX_PRIMS];
     private final int[] pmode = new int[MAX_PRIMS];
     private final float[] P = new float[MAX_PRIMS * 3 * VA];
@@ -67,7 +67,6 @@ public final class SoftRenderer {
         W = w;
         H = h;
         fb = new int[w * h];
-        zbuf = new float[w * h];
         setFov(62f);
     }
 
@@ -202,11 +201,6 @@ public final class SoftRenderer {
 
     /** The painted ground map; null draws no ground (sky and polygons only). */
     public Ground.Source ground;
-    /**
-     * Per pixel, the inverse depth just behind the ground drawn there (0 where there is sky).
-     * Polygons whose 1/z is smaller are behind a hill and are skipped: the only depth test there is.
-     */
-    private final float[] zbuf;
     private final float[] mipD = new float[Ground.MIPS];
     private Ground.Tile[] snap = new Ground.Tile[0];
     private int snapX, snapZ, snapN;
@@ -244,7 +238,7 @@ public final class SoftRenderer {
      * the flat parts, so the map looks like a proper Mode 7 plane, and hills rise and hide).
      */
     public void drawGround() {
-        if (ground == null) { Arrays.fill(zbuf, 0f); return; }
+        if (ground == null) return;
         for (int k = 0; k < Ground.MIPS; k++) mipD[k] = Ground.TEXEL * focal * (1 << k) * 1.4f;
         // snapshot of the tiles in view range: per-pixel lookups index an array, no shared map
         int reach = (int) Math.ceil(far / Ground.TILE) + 1;
@@ -258,7 +252,7 @@ public final class SoftRenderer {
         for (TileCache tc : tileCaches) { tc.cx = Integer.MIN_VALUE; tc.t = null; }
         soloCache.cx = Integer.MIN_VALUE;
         soloCache.t = null;
-        if (colFb.length != W * H) { colFb = new int[W * H]; colZ = new float[W * H]; }
+        if (colFb.length != W * H) colFb = new int[W * H];
         if (pool == null) { groundColumns(0, W, soloCache); transposeGround(0, H); }
         else {
             try {
@@ -407,7 +401,6 @@ public final class SoftRenderer {
 
     /** Column-major scratch (x * H + y): each column is written contiguously, then transposed. */
     private int[] colFb = new int[0];
-    private float[] colZ = new float[0];
 
     /** One screen column at a time, front to back over the height-mapped ground. */
     private void groundColumns(int colA, int colB, TileCache tc) {
@@ -433,13 +426,11 @@ public final class SoftRenderer {
             }
             if (env == null) {
                 for (int y = 0; y < ybuf; y++) {
-                    colZ[base + y] = 0f;
                     colFb[base + y] = sk[y * 4 + (x & 3)];
                 }
             } else if (ybuf > 0) {
                 float hl2 = dx * dx + dz * dz, az = (float) Math.atan2(dx, dz);
                 for (int y = 0; y < ybuf; y++) {
-                    colZ[base + y] = 0f;
                     colFb[base + y] = skyPixel(x, y, dx, dz, hl2, az);
                 }
             }
@@ -454,7 +445,6 @@ public final class SoftRenderer {
         if (ys >= ybuf) return ybuf;
         float fogK = 1f / (fogEnd - fogStart), fs = fogStart;
         int fr = fogR, fg = fogG, fbb = fogB;
-        float[] cz = colZ;
         int[] cf = colFb;
         // 1/depth is linear down the screen between the two samples
         float invC = 1f / d, invP = first ? invC : 1f / dPrev, span = s - sPrev;
@@ -477,7 +467,6 @@ public final class SoftRenderer {
                 int fv = (int) Math.min(256f, (dr - fs) * fogK * 256f);
                 cf[k] = shadeRaw(c, 256, fv, fr, fg, fbb, BAYER[((y & 3) << 2) | (x & 3)] >> 1);
             }
-            cz[k] = izc * 0.94f;
         }
         return ys;
     }
@@ -501,12 +490,11 @@ public final class SoftRenderer {
         for (int y = ybuf - 1; y >= ys; y--) {
             if (cov[y] == stamp) continue;
             float wy = ey + (hy - (y + 0.5f)) * k;        // world height of this row on the wall
-            int c = wallTexel(tl, sec.base, u + w.uOff, wy, tl.len > 0f ? tl.len : w.len, seed);
+            int c = wallTexel(tl, sec.base, u + w.uOff, wy, w.faceLen, seed);
             int q = base + y;
             int d = BAYER[((y & 3) << 2) | (x & 3)] >> 1;
             // lit windows and shopfronts glow at night: not darkened by the scene light
             colFb[q] = (c >>> 24) == 0xFE ? shadeRaw(c, 256, fv >> 1, fogR, fogG, fogB, d) : shade(c, lv, fv, fogR, fogG, fogB, d);
-            colZ[q] = izw;
         }
         return ys;
     }
@@ -645,11 +633,10 @@ public final class SoftRenderer {
         }
     }
 
-    /** Copies the column-major ground into the framebuffer and depth buffer, in cache-sized blocks. */
+    /** Copies the column-major ground into the framebuffer in cache-sized blocks. */
     private void transposeGround(int y0, int y1) {
         int w = W, h = H;
         int[] cf = colFb, out = fb;
-        float[] cz = colZ, zb = zbuf;
         for (int by = y0; by < y1; by += 16) {
             int ey2 = Math.min(y1, by + 16);
             for (int bx = 0; bx < w; bx += 16) {
@@ -658,7 +645,6 @@ public final class SoftRenderer {
                     int row = y * w;
                     for (int x = bx; x < ex2; x++) {
                         out[row + x] = cf[x * h + y];
-                        zb[row + x] = cz[x * h + y];
                     }
                 }
             }
@@ -668,6 +654,7 @@ public final class SoftRenderer {
     // ------------------------------------------------------------------ parallel raster
 
     private final int[] order = new int[MAX_PRIMS];
+    private final long[] orderKeys = new long[MAX_PRIMS];
     private int orderCount;
     private java.util.concurrent.ExecutorService pool;
     private final java.util.List<java.util.concurrent.Callable<Void>> bands = new java.util.ArrayList<>();
@@ -702,13 +689,18 @@ public final class SoftRenderer {
 
     public void dispose() { setThreads(1); }
 
-    /** Draws everything queued in the ordering table: layers in order, buckets far to near. */
+    /** Draws the ordering table by layer, with far polygons first so nearer polygons cover them. */
     public void flush() {
         int n = 0;
         for (int layer = 0; layer < LAYERS; layer++) {
             int base = layer * BUCKETS;
-            for (int b = BUCKETS - 1; b >= 0; b--)
-                for (int p = head[base + b]; p >= 0; p = next[p]) order[n++] = p;
+            int layerStart = n;
+            for (int b = BUCKETS - 1; b >= 0; b--) {
+                for (int p = head[base + b]; p >= 0; p = next[p])
+                    orderKeys[n++] = ((long) ~Float.floatToIntBits(pdepth[p]) << 32) | (p & 0xffffffffL);
+            }
+            Arrays.sort(orderKeys, layerStart, n);
+            for (int i = layerStart; i < n; i++) order[i] = (int) orderKeys[i];
         }
         orderCount = n;
         statPrims = n;
@@ -817,7 +809,9 @@ public final class SoftRenderer {
         P[o + 10] = 1f;
         ptex[p] = texId;
         pmode[p] = MODE_SPRITE;
-        int bucket = (int) ((vz + bias) * BUCKET_SCALE);
+        float depth = Math.max(0f, vz + bias);
+        pdepth[p] = depth;
+        int bucket = (int) (depth * BUCKET_SCALE);
         if (bucket < 0) bucket = 0;
         if (bucket >= BUCKETS) bucket = BUCKETS - 1;
         int hb = L_OBJECT * BUCKETS + bucket;
@@ -905,7 +899,7 @@ public final class SoftRenderer {
         }
         if ((allL | allR | allT | allB) != 0) return;
         statPolys++;
-        // whole polygons, no subdivision: texturing is perspective correct and a depth buffer sorts pixels
+        // whole polygons, no subdivision: perspective-correct texturing and painter sorting
         emit(vq, nv, (sortFar ? zmax : zsum / nv) + bias, texId, layer, mode);
     }
 
@@ -955,7 +949,8 @@ public final class SoftRenderer {
             if (sy <= H) offB = 0;
         }
         if ((offL | offR | offT | offB) != 0) return;
-        int bucket = (int) (depth * BUCKET_SCALE);
+        float orderDepth = Math.max(0f, depth);
+        int bucket = (int) (orderDepth * BUCKET_SCALE);
         if (bucket < 0) bucket = 0;
         if (bucket >= BUCKETS) bucket = BUCKETS - 1;
         int hb = layer * BUCKETS + bucket;
@@ -966,6 +961,7 @@ public final class SoftRenderer {
             System.arraycopy(scr, 0, P, o, VA);
             System.arraycopy(scr, k * VA, P, o + VA, VA);
             System.arraycopy(scr, (k + 1) * VA, P, o + 2 * VA, VA);
+            pdepth[p] = orderDepth;
             ptex[p] = texId;
             pmode[p] = mode;
             next[p] = head[hb];
@@ -974,9 +970,6 @@ public final class SoftRenderer {
     }
 
     // ------------------------------------------------------------------ rasterizer
-
-    /** Depth test: passes unless clearly behind (coplanar ties go to the later polygon, i.e. the ordering table). */
-    private static final float DEPTH_SLACK = 1.0001f;
 
     private void drawTri(int p, int bandY0, int bandY1) {
         int o = p * 3 * VA;
@@ -1029,7 +1022,6 @@ public final class SoftRenderer {
         int seal = mode == MODE_OPAQUE ? 1 : 0;
         int fr = fogR, fg = fogG, fbb = fogB;
         int[] out = fb;
-        float[] zb = zbuf;
         int width = W;
 
         for (int y = yStart; y < yEnd; y++) {
@@ -1061,7 +1053,6 @@ public final class SoftRenderer {
                 int dU = (int) ((uB - uA) / n * 65536f), dV = (int) ((vB - vA) / n * 65536f);
                 for (int e = x + n; x < e; x++, U += dU, V += dV, L += dL, F += dF, AL += dA, IZ += dzdx) {
                     int k = row + x;
-                    if (IZ * DEPTH_SLACK < zb[k]) continue;           // hidden (by the ground or nearer polygons)
                     if (shadow) {
                         int ty = V >> 16;
                         ty = ty < 0 ? 0 : (ty > hmax ? hmax : ty);
@@ -1087,8 +1078,7 @@ public final class SoftRenderer {
                     int lv = L >> 8, fv = F >> 8;
                     if (lv < 0) lv = 0;
                     if (fv < 0) fv = 0; else if (fv > 256) fv = 256;
-                    out[k] = shade(c, lv, fv, fr, fg, fbb, BAYER[db | (x & 3)] >> 1);
-                    zb[k] = IZ;
+                    out[row + x] = shade(c, lv, fv, fr, fg, fbb, BAYER[db | (x & 3)] >> 1);
                 }
                 Q = Qn;
                 R = Rn;
@@ -1115,7 +1105,7 @@ public final class SoftRenderer {
                 int x = (int) bx;
                 for (int k = -1; k <= 1; k++) {
                     int xx = x + k;
-                    if (xx < 0 || xx >= W || zbuf[y * W + xx] != 0f) continue;
+                    if (xx < 0 || xx >= W) continue;
                     out[y * W + xx] = k == 0 ? 0xFFF4F6FF : 0xFFB0B8E0;
                 }
             }
@@ -1179,7 +1169,7 @@ public final class SoftRenderer {
 
     /**
      * Sprites are real sprites: an upright billboard facing the camera is parallel to the screen
-     * (the camera never pitches), so it is a scaled, depth-tested rectangle blit.
+     * (the camera never pitches), so it is a scaled rectangle blit sorted with the polygons.
      */
     private void drawSprite(int p, int bandY0, int bandY1) {
         int o = p * 3 * VA;
@@ -1187,7 +1177,6 @@ public final class SoftRenderer {
         float sx0 = A[o], sy0 = A[o + 1], sx1 = A[o + 2], sy1 = A[o + 3];
         float u0 = A[o + 4], v0 = A[o + 5], u1 = A[o + 6], v1 = A[o + 7];
         int fv = (int) (A[o + 8] * 256f);
-        float iz = A[o + 9];
         int lv = (int) (A[o + 10] * 256f);
         int ya = Math.max(bandY0, (int) Math.ceil(sy0 - 0.5f)), yb = Math.min(bandY1, (int) Math.ceil(sy1 - 0.5f));
         int xa = Math.max(0, (int) Math.ceil(sx0 - 0.5f)), xb = Math.min(W, (int) Math.ceil(sx1 - 0.5f));
@@ -1198,22 +1187,17 @@ public final class SoftRenderer {
         float du = (u1 - u0) / (sx1 - sx0), dv = (v1 - v0) / (sy1 - sy0);
         int dU = (int) (du * 65536f);
         int U0 = (int) ((u0 + (xa + 0.5f - sx0) * du) * 65536f);
-        float[] zb = zbuf;
         int[] out = fb;
         int fr = fogR, fg = fogG, fbb = fogB;
-        float test = iz * DEPTH_SLACK;
         for (int y = ya; y < yb; y++) {
             int ty = (int) (v0 + (y + 0.5f - sy0) * dv);
             ty = ty < 0 ? 0 : (ty > hmax ? hmax : ty);
             int trow = ty << ws, row = y * W, db = (y & 3) << 2;
             int U = U0;
             for (int x = xa; x < xb; x++, U += dU) {
-                int k = row + x;
-                if (test < zb[k]) continue;
                 int c = tp[trow | ((U >> 16) & wm)];
                 if ((c >>> 24) < 128) continue;
-                out[k] = shade(c, lv, fv, fr, fg, fbb, BAYER[db | (x & 3)] >> 1);
-                zb[k] = iz;
+                out[row + x] = shade(c, lv, fv, fr, fg, fbb, BAYER[db | (x & 3)] >> 1);
             }
         }
     }
