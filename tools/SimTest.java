@@ -88,6 +88,7 @@ public class SimTest {
         int polys1 = generated.polyCount, polys2 = c.generate(10, 6).polyCount;
         check("chunk generation deterministic", polys1 == polys2 && polys1 > 0);
         check("chunk surfaces are emitted as polygon meshes", !generated.batches.isEmpty() && noRaycastSurfaces(generated));
+        check("generated building surfaces are double-sided", convertedMeshesAreDoubleSided(generated));
         // ---- traffic: cars keep moving, turn, and never run a red light
         com.harlequinxd.drivehard.core.sim.Traffic tr = new com.harlequinxd.drivehard.core.sim.Traffic(c, r -> r.nextInt(100));
         tr.spawnMin = 5f; tr.spawnMax = 400f; tr.despawn = 2000f; tr.target = 40;
@@ -125,6 +126,7 @@ public class SimTest {
                 bridgeFound = true;
                 check("bridge decks, parapets and piers use polygon meshes",
                         !bridge.batches.isEmpty() && noRaycastSurfaces(bridge));
+                check("bridge surfaces are double-sided", convertedMeshesAreDoubleSided(bridge));
                 break;
             }
             if (bridgeFound) break;
@@ -359,5 +361,14 @@ public class SimTest {
 
     static boolean noRaycastSurfaces(Chunk chunk) {
         return chunk.sectors.sectors.isEmpty() && chunk.sectors.walls.isEmpty() && chunk.sectors.slabs.isEmpty();
+    }
+
+    static boolean convertedMeshesAreDoubleSided(Chunk chunk) {
+        if (chunk.batches.isEmpty()) return false;
+        var mesh = chunk.batches.get(chunk.batches.size() - 1);
+        if (mesh.count == 0) return false;
+        for (int i = 0; i < mesh.count * 3; i++)
+            if (mesh.nrm[i] != 0f) return false;
+        return true;
     }
 }

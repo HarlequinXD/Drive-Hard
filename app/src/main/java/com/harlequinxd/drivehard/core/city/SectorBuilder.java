@@ -102,7 +102,7 @@ final class SectorBuilder {
                     (sector.poly[c * 2] * sector.vx + sector.poly[c * 2 + 1] * sector.vz) / sector.vs
             };
             gb.quad(p, uv, new float[]{sector.light, sector.light, sector.light}, sector.tex, L_OBJECT,
-                    Geo.FLAG_NO_SUBDIV, 0f, false);
+                    Geo.FLAG_NO_SUBDIV, 0f, true);
         }
     }
 
@@ -174,7 +174,7 @@ final class SectorBuilder {
                     uv[k * 2 + 1] = z / vs;
                 }
             }
-            gb.quad(p, uv, new float[]{light, light, light}, tex, L_OBJECT, Geo.FLAG_NO_SUBDIV, 0f, false);
+            gb.quad(p, uv, new float[]{light, light, light}, tex, L_OBJECT, Geo.FLAG_NO_SUBDIV, 0f, true);
         }
     }
 
@@ -191,7 +191,7 @@ final class SectorBuilder {
         float[] uv = {u0, -bottom0 * 0.5f, u1, -bottom1 * 0.5f,
                 u1, -top1 * 0.5f, u0, -top0 * 0.5f};
         float[] l = {edge.slab.lightSide, edge.slab.lightSide, edge.slab.lightSide, edge.slab.lightSide};
-        gb.quad(p, uv, l, edge.slab.sideTex, L_OBJECT, Geo.FLAG_NO_SUBDIV, 0f, false);
+        gb.quad(p, uv, l, edge.slab.sideTex, L_OBJECT, Geo.FLAG_NO_SUBDIV, 0f, true);
     }
 
     private static final class SlabEdge {
@@ -320,7 +320,7 @@ final class SectorBuilder {
         patch(gb, wall, x0, z0, x1, z1, y00, y01, y10, y11, tex,
                 (a0 - open0) / ow, (a1 - open0) / ow,
                 1f - (y10 - y0) / (y1 - y0), 1f - (y11 - y0) / (y1 - y0),
-                1f - (y00 - y0) / (y1 - y0), 1f - (y01 - y0) / (y1 - y0), 0.02f);
+                1f - (y00 - y0) / (y1 - y0), 1f - (y01 - y0) / (y1 - y0), 0.08f);
     }
 
     private static void patch(GeoBuilder gb, Sectors.Wall wall, float ax, float az, float bx, float bz,
@@ -348,7 +348,7 @@ final class SectorBuilder {
                 bx + ox, top1, bz + oz, ax + ox, top0, az + oz};
         float[] uv = {u0, botV0, u1, botV1, u1, topV1, u0, topV0};
         float[] light = {wall.light, wall.light, wall.light, wall.light};
-        gb.quad(p, uv, light, tex, L_OBJECT, Geo.FLAG_NO_SUBDIV, 0f, false);
+        gb.quad(p, uv, light, tex, L_OBJECT, Geo.FLAG_NO_SUBDIV, 0f, true);
     }
 
     private static final class EdgeKey {

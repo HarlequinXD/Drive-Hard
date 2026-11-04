@@ -976,7 +976,7 @@ public final class SoftRenderer {
     // ------------------------------------------------------------------ rasterizer
 
     /** Depth test: passes unless clearly behind (coplanar ties go to the later polygon, i.e. the ordering table). */
-    private static final float DEPTH_SLACK = 1.004f;
+    private static final float DEPTH_SLACK = 1.0001f;
 
     private void drawTri(int p, int bandY0, int bandY1) {
         int o = p * 3 * VA;
