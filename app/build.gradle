@@ -1,42 +1,37 @@
 plugins {
-    id 'com.android.application'
+    id 'application'
 }
 
-android {
-    namespace 'com.harlequinxd.drivehard'
-    compileSdk 35
+repositories { mavenCentral() }
 
-    defaultConfig {
-        applicationId 'com.harlequinxd.drivehard'
-        minSdk 23
-        targetSdk 35
-        versionCode 1
-        versionName '0.1.0'
-    }
+dependencies {
+    implementation 'net.java.dev.jna:jna:5.16.0'
+}
 
-    signingConfigs {
-        // Fixed key committed to the repo so every CI build installs over the previous one.
-        // Not for Play Store release.
-        shared {
-            storeFile file('drivehard-debug.keystore')
-            storePassword 'drivehard'
-            keyAlias 'drivehard'
-            keyPassword 'drivehard'
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(17) }
+}
+
+// Existing Android source files remain in the repository but are excluded
+// from the Windows build. Only the shared game core and desktop launcher compile.
+sourceSets {
+    main {
+        java {
+            srcDirs = ['src/main/java']
+            include 'com/harlequinxd/drivehard/core/**'
+            include 'com/harlequinxd/drivehard/desktop/**'
         }
     }
+}
 
-    buildTypes {
-        debug {
-            signingConfig signingConfigs.shared
-        }
-        release {
-            minifyEnabled false
-            signingConfig signingConfigs.shared
-        }
-    }
+application {
+    mainClass = 'com.harlequinxd.drivehard.desktop.DesktopMain'
+    applicationName = 'DriveHard'
+}
 
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
-    }
+tasks.register('prepareWindowsPackage', Sync) {
+    dependsOn tasks.named('jar')
+    into layout.buildDirectory.dir('windows-input')
+    from(tasks.named('jar'))
+    from(configurations.runtimeClasspath)
 }
