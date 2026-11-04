@@ -110,7 +110,7 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
                 boolean cancel=down(KeyEvent.VK_ESCAPE)||(connected&&pad.button(XboxInput.B));
                 if(select&&!lastSelect) {
                     mapOpen=!mapOpen; travelMenu=false; selectedDestination=null;
-                    if(mapOpen) { mapCursorX=g.mapX(); mapCursorZ=g.mapZ(); mapViewX=mapCursorX; mapViewZ=mapCursorZ; mapZoom=1f; }
+                    if(mapOpen) { mapCursorX=g.mapX(); mapCursorZ=g.mapZ(); mapViewX=mapCursorX; mapViewZ=mapCursorZ; mapZoom=1.2f; }
                 }
                 lastSelect=select;
                 if(mapOpen) {
@@ -135,7 +135,7 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
                         float zoomOut=Math.max(connected?pad.lt():0f,connected&&pad.button(XboxInput.LEFT_SHOULDER)?1f:0f)+((down(KeyEvent.VK_MINUS)||down(KeyEvent.VK_SUBTRACT)||down(KeyEvent.VK_PAGE_DOWN)||down(KeyEvent.VK_OPEN_BRACKET))?1:0);
                         int wheelSteps=mapWheelSteps.getAndSet(0);
                         int zoomClicks=mapZoomClicks.getAndSet(0);
-                        mapZoom=Math.max(MIN_MAP_ZOOM,Math.min(MAX_MAP_ZOOM,mapZoom*(float)Math.exp((zoomIn-zoomOut)*2.4f*dt-wheelSteps*0.22f+zoomClicks*0.22f)));
+                        mapZoom=Math.max(MIN_MAP_ZOOM,Math.min(MAX_MAP_ZOOM,mapZoom*(float)Math.exp((zoomIn-zoomOut)*5.5f*dt-wheelSteps*0.22f+zoomClicks*0.22f)));
                         int panelWidth=Math.min(getWidth(),(int)((long)getHeight()*W/H));
                         int panelHeight=(int)((long)panelWidth*H/W);
                         float dragX=panelWidth>0?mapDragX.getAndSet(0)*W/(float)panelWidth:0f;
@@ -144,7 +144,7 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
                         mapViewX-=dragX*mapUnitsPerPixel;
                         mapViewZ-=dragY*mapUnitsPerPixel;
                         if(dragX!=0f || dragY!=0f) { mapCursorX=mapViewX; mapCursorZ=mapViewZ; }
-                        float speed=(g.map.extent/mapZoom)*0.85f*dt;
+                        float speed=(g.map.extent/mapZoom)*1.4f*dt;
                         mapCursorX=Math.max(g.map.x0,Math.min(g.map.x0+g.map.extent,mapCursorX+panX*speed));
                         mapCursorZ=Math.max(g.map.z0,Math.min(g.map.z0+g.map.extent,mapCursorZ+panZ*speed));
                         // Follow the cursor smoothly so zoomed-in maps can traverse the whole world.

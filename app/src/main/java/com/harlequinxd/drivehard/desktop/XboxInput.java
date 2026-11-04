@@ -48,10 +48,10 @@ public final class XboxInput {
     public float ry() { return axis(state.Gamepad.sThumbRY); }
     public float lt() { return trigger(state.Gamepad.bLeftTrigger); }
     public float rt() { return trigger(state.Gamepad.bRightTrigger); }
-    private static float trigger(byte b) { int n=b & 255; return n<25?0f:(n-25f)/230f; }
+    private static float trigger(byte b) { int n=b & 255; return n<12?0f:(n-12f)/243f; }
     private static float axis(short s) {
         float v = s < 0 ? s/32768f : s/32767f;
-        float dead=0.17f;
+        float dead=0.10f;
         return Math.abs(v)<dead?0f:Math.copySign((Math.abs(v)-dead)/(1f-dead),v);
     }
 }
