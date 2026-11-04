@@ -103,7 +103,7 @@ final class SectorBuilder {
                     (sector.poly[c * 2] * sector.vx + sector.poly[c * 2 + 1] * sector.vz) / sector.vs
             };
             gb.quad(p, uv, new float[]{sector.light, sector.light, sector.light}, sector.tex, L_OBJECT,
-                    Geo.FLAG_NO_SUBDIV, 0f, true);
+                    Geo.FLAG_NO_SUBDIV, 0f, false);
         }
     }
 
@@ -117,6 +117,7 @@ final class SectorBuilder {
             for (int i = 0; i < n; i++) { cx += slab.poly[i * 2]; cz += slab.poly[i * 2 + 1]; }
             cx /= n; cz /= n;
             for (int i = 0; i < n; i++) {
+                if (slab.omitEndCaps && (i == 0 || i == 2)) continue;
                 int j = (i + 1) % n;
                 float x0 = slab.poly[i * 2], z0 = slab.poly[i * 2 + 1];
                 float x1 = slab.poly[j * 2], z1 = slab.poly[j * 2 + 1];
@@ -156,8 +157,9 @@ final class SectorBuilder {
         float light = top ? slab.lightTop : slab.lightBot;
         for (int i = 1; i < n - 1; i++) {
             boolean up = top;
-            int bIndex = (signedArea > 0f) == up ? i + 1 : i;
-            int cIndex = (signedArea > 0f) == up ? i : i + 1;
+            boolean reverse = (signedArea > 0f) == up;
+            int bIndex = reverse ? i + 1 : i;
+            int cIndex = reverse ? i : i + 1;
             float[] p = {
                     slab.poly[0], a + b * slab.poly[0] + c * slab.poly[1], slab.poly[1],
                     slab.poly[bIndex * 2], a + b * slab.poly[bIndex * 2] + c * slab.poly[bIndex * 2 + 1], slab.poly[bIndex * 2 + 1],
@@ -175,7 +177,7 @@ final class SectorBuilder {
                     uv[k * 2 + 1] = z / vs;
                 }
             }
-            gb.quad(p, uv, new float[]{light, light, light}, tex, L_OBJECT, Geo.FLAG_NO_SUBDIV, 0f, true);
+            gb.quad(p, uv, new float[]{light, light, light}, tex, L_OBJECT, Geo.FLAG_NO_SUBDIV, 0f, false);
         }
     }
 
@@ -192,7 +194,7 @@ final class SectorBuilder {
         float[] uv = {u0, -bottom0 * 0.5f, u1, -bottom1 * 0.5f,
                 u1, -top1 * 0.5f, u0, -top0 * 0.5f};
         float[] l = {edge.slab.lightSide, edge.slab.lightSide, edge.slab.lightSide, edge.slab.lightSide};
-        gb.quad(p, uv, l, edge.slab.sideTex, L_OBJECT, Geo.FLAG_NO_SUBDIV, 0f, true);
+        gb.quad(p, uv, l, edge.slab.sideTex, L_OBJECT, Geo.FLAG_NO_SUBDIV, 0f, false);
     }
 
     private static final class SlabEdge {
@@ -367,7 +369,7 @@ final class SectorBuilder {
         float[] p = {ax, bottom0, az, bx, bottom1, bz, bx, top1, bz, ax, top0, az};
         float[] uv = {u0, botV0, u1, botV1, u1, topV1, u0, topV0};
         float[] light = {wall.light, wall.light, wall.light, wall.light};
-        gb.quad(p, uv, light, tex, L_OBJECT, Geo.FLAG_NO_SUBDIV, 0f, true);
+        gb.quad(p, uv, light, tex, L_OBJECT, Geo.FLAG_NO_SUBDIV, 0f, false);
     }
 
     private static final class EdgeKey {

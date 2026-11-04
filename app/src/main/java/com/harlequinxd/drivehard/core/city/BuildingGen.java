@@ -104,19 +104,38 @@ final class BuildingGen {
 
     /**
      * Tiles of a facade: the ground storey (shopfronts, a lobby, or the facade) if groundH &gt; 0,
-     * then {@code storeys} storeys of facade tiles 2 m wide; above the top storey plain concrete
-     * (the parapet), the foundation below the base. {@code ground}: a texture, -1 shops, -2 lobby.
+     * then {@code storeys} storeys of inset window bays; above the top storey plain material.
+     * {@code ground}: a texture, -1 shops, -2 lobby. Shop and lobby textures already include their
+     * glazing and doors; other street fronts get a real doorway cut into the wall.
      */
-    private Sectors.Tiles facade(float len, float groundH, int storeys, float floorH, int tex, int ground, int[] shopSet) {
+    private Sectors.Tiles facade(float len, float groundH, int storeys, float floorH, int tex, int ground,
+                                 int[] shopSet, boolean streetSide) {
         boolean hasGround = groundH > 0f;
         int floors = Math.max(0, storeys) + (hasGround ? 1 : 0);
         Sectors.Tiles t = new Sectors.Tiles(floors);
-        t.mat = t.matUp = lib.concrete;
+        int material = lib.houseMat[Math.floorMod(tex, lib.houseMat.length)];
+        t.mat = t.matUp = material;
         t.found = lib.concrete;
         t.groundH = hasGround ? groundH : floorH;
         t.storeyH = floorH;
         int cols = Math.max(1, Math.round(len / 2f));
-        for (int f = 0; f < floors; f++) t.storey(f, cols, Sectors.FULL, tex);
+        for (int f = 0; f < floors; f++) {
+            if (hasGround && f == 0 && (ground == -1 || ground == -2)) {
+                t.storey(f, cols, Sectors.FULL, tex);
+                continue;
+            }
+            t.storey(f, cols, Sectors.PLAIN, 0);
+            for (int c = 0; c < cols; c++) {
+                boolean entrance = hasGround && f == 0 && streetSide && c == cols / 2;
+                if (entrance) {
+                    t.kind[f][c] = Sectors.DOOR;
+                    t.tex[f][c] = lib.houseDoor[r.nextInt(lib.houseDoor.length)];
+                } else if (r.nextFloat() < 0.72f) {
+                    t.kind[f][c] = Sectors.WINDOW;
+                    t.tex[f][c] = lib.houseWin[r.nextInt(lib.houseWin.length)];
+                }
+            }
+        }
         if (hasGround) {
             if (ground == -1 || ground == -2) {
                 int units = Math.max(1, Math.round(len / 5.5f));
@@ -125,7 +144,7 @@ final class BuildingGen {
                 for (int u = 0; u < units; u++)
                     t.tex[0][u] = ground == -2 ? (u == units / 2 ? lib.lobbies[r.nextInt(lib.lobbies.length)] : lib.facades(Kind.GLASS)[0])
                             : shopSet[r.nextInt(shopSet.length)];
-            } else t.storey(0, cols, Sectors.FULL, ground);
+            }
         }
         return t;
     }
@@ -215,7 +234,8 @@ final class BuildingGen {
         Sectors.Tiles[] t = new Sectors.Tiles[4];
         for (int s = 0; s < 4; s++) {
             int tex = street[s] ? fTex : (s == N || s == S ? bTex : side);
-            t[s] = facade(len(s, x0, z0, x1, z1), groundH, floors - 1, floorH, tex, shops[s] ? -1 : tex, shopSet);
+            t[s] = facade(len(s, x0, z0, x1, z1), groundH, floors - 1, floorH, tex,
+                    shops[s] ? -1 : tex, shopSet, street[s]);
             Kind k = street[s] ? front : (s == N || s == S ? back : Kind.BLANK);
             t[s].glowFacade = k != Kind.BLANK && k != Kind.WAREHOUSE;     // only facades with windows light up
             if (street[s] && signs > 0 && floors > 1) verticalSigns(s, x0, z0, x1, z1, base + groundH + 0.6f, top, signs);
@@ -238,7 +258,7 @@ final class BuildingGen {
             int floors = 12 + r.nextInt(28);
             float top = podTop + floors * 3.6f;
             Sectors.Tiles[] t = new Sectors.Tiles[4];
-            for (int s = 0; s < 4; s++) t[s] = facade(len(s, tx0, tz0, tx1, tz1), 0f, floors, 3.6f, tower, tower, shopSet);
+            for (int s = 0; s < 4; s++) t[s] = facade(len(s, tx0, tz0, tx1, tz1), 0f, floors, 3.6f, tower, tower, shopSet, false);
             rooftop(tx0, tz0, tx1, tz1, top);
             flatRoof(tx0, tz0, tx1, tz1, podTop, top, 1.2f, lib.roofMembrane, faces(tx0, tz0, tx1, tz1, t));
             // aviation light mast
@@ -248,7 +268,8 @@ final class BuildingGen {
         }
         Sectors.Tiles[] t = new Sectors.Tiles[4];
         for (int s = 0; s < 4; s++)
-            t[s] = facade(len(s, x0, z0, x1, z1), City.SHOP_H, podFloors - 1, City.FLOOR_H, pod, shops[s] ? -1 : (street[s] ? -2 : pod), shopSet);
+            t[s] = facade(len(s, x0, z0, x1, z1), City.SHOP_H, podFloors - 1, City.FLOOR_H, pod,
+                    shops[s] ? -1 : (street[s] ? -2 : pod), shopSet, street[s]);
         flatRoof(x0, z0, x1, z1, base, podTop, 0.9f, lib.roofGravel, faces(x0, z0, x1, z1, t));
         ch.boxes.add(new Box(x0, footMin, z0, x1, podTop + 0.9f, z1));
     }
@@ -337,7 +358,7 @@ final class BuildingGen {
         float top = base + 3.3f;
         Sectors.Tiles[] t = new Sectors.Tiles[4];
         for (int s = 0; s < 4; s++) {
-            t[s] = facade(len(s, x0, z0, x1, z1), 0f, 1, 3.3f, wall, wall, null);
+            t[s] = facade(len(s, x0, z0, x1, z1), 0f, 1, 3.3f, wall, wall, null, false);
             t[s].mat = t[s].matUp = wall;
             t[s].glowFacade = false;                      // timber boards, no windows
         }
@@ -359,7 +380,8 @@ final class BuildingGen {
     private void school(float x0, float z0, float x1, float z1, float base) {
         float top = base + 3 * 3.6f;
         Sectors.Tiles[] t = new Sectors.Tiles[4];
-        for (int s = 0; s < 4; s++) t[s] = facade(len(s, x0, z0, x1, z1), 0f, 3, 3.6f, lib.schoolWall, lib.schoolWall, null);
+        for (int s = 0; s < 4; s++)
+            t[s] = facade(len(s, x0, z0, x1, z1), 0f, 3, 3.6f, lib.schoolWall, lib.schoolWall, null, false);
         rooftop(x0, z0, x1, z1, top);
         flatRoof(x0, z0, x1, z1, base, top, 0.8f, lib.concrete, faces(x0, z0, x1, z1, t));
         ch.boxes.add(new Box(x0, footMin, z0, x1, top + 0.8f, z1));
@@ -371,7 +393,7 @@ final class BuildingGen {
         float floor = base + 0.6f, top = floor + 3.2f;
         Sectors.Tiles[] t = new Sectors.Tiles[4];
         for (int s = 0; s < 4; s++) {
-            t[s] = facade(len(s, x0, z0, x1, z1), 0f, 1, 3.2f, wall, wall, null);
+            t[s] = facade(len(s, x0, z0, x1, z1), 0f, 1, 3.2f, wall, wall, null, false);
             t[s].mat = t[s].matUp = wall;
             t[s].glowFacade = false;
         }
@@ -394,7 +416,7 @@ final class BuildingGen {
         // hose-drying tower with a red top, standing on the roof
         float tx = x1 - 3.4f, tz = z0 + 0.5f;
         plantBox(tx - 0.2f, tz - 0.2f, tx + 3.2f, tz + 3.2f, top + 9f, top + 10.5f, lib.paintRed, lib.paintRed);
-        Sectors.Tiles tw = facade(3f, 0f, 3, 3.4f, fac, fac, null);
+        Sectors.Tiles tw = facade(3f, 0f, 3, 3.4f, fac, fac, null, false);
         sb.piece(new float[]{tx, tz, tx + 3f, tz, tx + 3f, tz + 3f, tx, tz + 3f}, top + 9f, 0f, 0f, top, lib.concrete, 2f, -1f,
                 faces(tx, tz, tx + 3f, tz + 3f, new Sectors.Tiles[]{tw, tw, tw, tw}), tw);
         sb.taken(tx, tz, tx + 3f, tz + 3f);
@@ -402,7 +424,7 @@ final class BuildingGen {
         for (int s = 0; s < 4; s++) {
             float l = len(s, x0, z0, x1, z1);
             t[s] = street[s] && (s == N || s == S) ? single(groundH, lib.fireDoors[r.nextInt(2)], 3, 3.4f, fac, l)
-                    : facade(l, groundH, 2, 3.4f, fac, fac, null);
+                    : facade(l, groundH, 2, 3.4f, fac, fac, null, false);
         }
         flatRoof(x0, z0, x1, z1, base, top, 0.8f, lib.concrete, faces(x0, z0, x1, z1, t));
         ch.boxes.add(new Box(x0, footMin, z0, x1, top + 0.8f, z1));
@@ -414,7 +436,8 @@ final class BuildingGen {
         Sectors.Tiles[] t = new Sectors.Tiles[4];
         for (int s = 0; s < 4; s++) {
             float l = len(s, x0, z0, x1, z1);
-            t[s] = street[s] ? single(3.6f, lib.koban[r.nextInt(2)], 1, 3.6f, blank, l) : facade(l, 0f, 1, 3.6f, blank, blank, null);
+            t[s] = street[s] ? single(3.6f, lib.koban[r.nextInt(2)], 1, 3.6f, blank, l)
+                    : facade(l, 0f, 1, 3.6f, blank, blank, null, false);
             t[s].glowFacade = false;
         }
         gableRoof(x0, z0, x1, z1, base, top, 0.45f, lib.roofs[2], faces(x0, z0, x1, z1, t), SectorBuilder.plain(lib.concrete, lib.concrete));

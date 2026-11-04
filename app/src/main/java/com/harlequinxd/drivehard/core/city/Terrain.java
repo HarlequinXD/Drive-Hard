@@ -252,11 +252,18 @@ public final class Terrain {
         return t * t * (3 - 2 * t);
     }
 
-    /** Distance from the city rectangle (0 inside). */
+    /** Distance from the seed-shaped urban footprint (0 inside). */
     public float cityDistance(float x, float z) {
-        float dx = Math.max(Math.max(cx0 - x, 0f), x - cx1);
-        float dz = Math.max(Math.max(cz0 - z, 0f), z - cz1);
-        return (float) Math.sqrt(dx * dx + dz * dz);
+        float rx = Math.max(1f, (cx1 - cx0) * 0.5f);
+        float rz = Math.max(1f, (cz1 - cz0) * 0.5f);
+        float nx = (x - (cx0 + cx1) * 0.5f) / rx;
+        float nz = (z - (cz0 + cz1) * 0.5f) / rz;
+        float angle = (float) Math.atan2(nz, nx);
+        float edge = 0.86f + 0.09f * (float) Math.sin(angle * 3f + seed * 0.00017f)
+                + 0.05f * (float) Math.sin(angle * 7f + seed * 0.00031f);
+        edge = Math.min(1f, Math.max(0.72f, edge));
+        float outside = (float) Math.sqrt(nx * nx + nz * nz) - edge;
+        return Math.max(0f, outside * Math.min(rx, rz));
     }
 
     // ------------------------------------------------------------------ heights

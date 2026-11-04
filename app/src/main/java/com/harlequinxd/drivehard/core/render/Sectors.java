@@ -128,6 +128,8 @@ public final class Sectors {
         /** Top texture: u = dot(p - o, U) / us, v = dot(p - o, V) / vs + vOff; clampU for lane textures. */
         public float ox, oz, ux = 1f, uz, vx, vz = 1f, us = 2f, vs = 2f, vOff;
         public boolean clampU;
+        /** Suppress the two transverse perimeter faces (edges 0 and 2) on open-ended bridge slabs. */
+        public boolean omitEndCaps;
         public float lightTop = 1f, lightSide = 0.8f, lightBot = 0.5f;
         public float minX, minZ, maxX, maxZ;
 

@@ -15,7 +15,6 @@ import javax.swing.*;
 public final class DesktopMain extends JPanel implements KeyListener, Runnable {
     private static final int W=480, H=320;
     private static final float MIN_MAP_ZOOM=0.5f, MAX_MAP_ZOOM=12f;
-    private static final float MAP_STICK_DEADZONE=0.02f, MAP_STICK_MIN_SPEED=0.35f;
     private final Set<Integer> keys = ConcurrentHashMap.newKeySet();
     private final AtomicInteger mapWheelSteps = new AtomicInteger(), mapZoomClicks = new AtomicInteger();
     private final AtomicInteger mapDragX = new AtomicInteger(), mapDragY = new AtomicInteger();
@@ -93,7 +92,7 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
     }
     @Override public void run() {
         try {
-            Game g = new Game(Game.DEFAULT_SEED, s -> loading=s);
+            Game g = new Game(Game.randomSeed(), s -> loading=s);
             g.setResolution(W,H);
             game=g;
             mapCursorX=g.mapX(); mapCursorZ=g.mapZ();
@@ -216,10 +215,7 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
     private static float clamp(float x,float min,float max) {return Math.max(min,Math.min(max,x));}
     private static float mapPanAxis(float input) {
         float magnitude=Math.abs(input);
-        if(magnitude<=MAP_STICK_DEADZONE) return 0f;
-        float strength=(magnitude-MAP_STICK_DEADZONE)/(1f-MAP_STICK_DEADZONE);
-        float response=MAP_STICK_MIN_SPEED+(1f-MAP_STICK_MIN_SPEED)*strength;
-        return Math.copySign(response,input);
+        return Math.copySign((float)Math.pow(magnitude,0.3f),input);
     }
     private float toInternalX(int x) {
         int dw=Math.min(getWidth(),(int)((long)getHeight()*W/H));

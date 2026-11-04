@@ -44,7 +44,7 @@ public final class City extends World {
     public final TrafficLights traffic;
     public final ChunkManager chunks;
 
-    public final int nbx = 9, nbz = 10;
+    public final int nbx = 100, nbz = 100;
     public final float[] rx0 = new float[nbx + 1], rx1 = new float[nbx + 1];
     public final float[] rz0 = new float[nbz + 1], rz1 = new float[nbz + 1];
     public final boolean[] avenueX = new boolean[nbx + 1], avenueZ = new boolean[nbz + 1];
@@ -82,8 +82,20 @@ public final class City extends World {
         chunks = new ChunkManager(this);
         minX = terrain.islandX0 - 9000; maxX = terrain.islandX1 + 3000; minZ = terrain.islandZ0 - 9000; maxZ = terrain.islandZ1 + 9000;
         int mj = nbz / 2;
-        spawnX = cityX1 + 7f;
         spawnZ = (rz1[mj] + rz0[mj + 1]) * 0.5f;
+        float nearestRow = Float.MAX_VALUE, eastRoad = cityX0;
+        for (var node : roads.nodes) {
+            if (node.kind != com.harlequinxd.drivehard.core.road.RoadNode.Kind.CITY
+                    || node.edges.length == 0 || terrain.cityDistance(node.x, node.z) > 0f) continue;
+            float rowDistance = Math.abs(node.z - spawnZ);
+            if (rowDistance < nearestRow - 1f) {
+                nearestRow = rowDistance;
+                eastRoad = node.x;
+            } else if (Math.abs(rowDistance - nearestRow) <= 1f) {
+                eastRoad = Math.max(eastRoad, node.x);
+            }
+        }
+        spawnX = eastRoad + 7f;
     }
 
     private int[] shopSet(String... labels) {
@@ -100,19 +112,19 @@ public final class City extends World {
     private void layout(Random rnd) {
         float x = 0;
         for (int i = 0; i <= nbx; i++) {
-            avenueX[i] = i % 3 == 0 && i != nbx;
+            avenueX[i] = i % 8 == 0 && i != nbx;
             rx0[i] = x;
             x += avenueX[i] ? 22f : 13f;
             rx1[i] = x;
-            if (i < nbx) x += 52 + 4 * rnd.nextInt(8);
+            if (i < nbx) x += 118 + 4 * rnd.nextInt(9);
         }
         float z = 0;
         for (int j = 0; j <= nbz; j++) {
-            avenueZ[j] = j % 4 == 0;
+            avenueZ[j] = j % 9 == 0;
             rz0[j] = z;
             z += avenueZ[j] ? 22f : 13f;
             rz1[j] = z;
-            if (j < nbz) z += j == nbz / 2 ? 64 : 56 + 4 * rnd.nextInt(7);
+            if (j < nbz) z += j == nbz / 2 ? 136 : 118 + 4 * rnd.nextInt(9);
         }
         cityX0 = rx0[0]; cityX1 = rx1[nbx];
         cityZ0 = rz0[0]; cityZ1 = rz1[nbz];
@@ -202,7 +214,7 @@ public final class City extends World {
         for (int i = 0; i <= nbx; i++)
             for (int j = 0; j < nbz; j++) {
                 float mx = (rx0[i] + rx1[i]) * 0.5f, mz = (rz1[j] + rz0[j + 1]) * 0.5f;
-                if (in(mx, mz, x0, z0, x1, z1)) {
+                if (terrain.cityDistance(mx, mz) <= 0f && in(mx, mz, x0, z0, x1, z1)) {
                     gb.begin(false);
                     roadSegment(ch, gb, true, rx0[i], rx1[i], rz1[j], rz0[j + 1], avenueX[i]);
                     gb.end();
@@ -211,7 +223,7 @@ public final class City extends World {
         for (int j = 0; j <= nbz; j++)
             for (int i = 0; i < nbx; i++) {
                 float mx = (rx1[i] + rx0[i + 1]) * 0.5f, mz = (rz0[j] + rz1[j]) * 0.5f;
-                if (in(mx, mz, x0, z0, x1, z1)) {
+                if (terrain.cityDistance(mx, mz) <= 0f && in(mx, mz, x0, z0, x1, z1)) {
                     gb.begin(false);
                     roadSegment(ch, gb, false, rz0[j], rz1[j], rx1[i], rx0[i + 1], avenueZ[j]);
                     gb.end();
@@ -220,7 +232,7 @@ public final class City extends World {
         for (int j = 0; j <= nbz; j++)
             for (int i = 0; i <= nbx; i++) {
                 float mx = (rx0[i] + rx1[i]) * 0.5f, mz = (rz0[j] + rz1[j]) * 0.5f;
-                if (in(mx, mz, x0, z0, x1, z1)) signals(ch, i, j);
+                if (terrain.cityDistance(mx, mz) <= 0f && in(mx, mz, x0, z0, x1, z1)) signals(ch, i, j);
             }
         for (int j = 0; j < nbz; j++)
             for (int i = 0; i < nbx; i++) {
@@ -537,11 +549,13 @@ public final class City extends World {
     public enum Zone { CENTRAL, ENTERTAINMENT, MIXED, SUBURB, SEASIDE }
 
     public Zone zone(int i, int j) {
-        int di = Math.abs(i - iCentre), dj = Math.abs(j - jCentre);
-        if (i >= nbx - 1) return Zone.SEASIDE;
-        if (di <= 1 && dj <= 1) return Zone.CENTRAL;
-        if (di <= 2 && dj <= 2) return Zone.ENTERTAINMENT;
-        if (i == 0 || j == 0 || j >= nbz - 2 || di + dj >= 6) return Zone.SUBURB;
+        if (i >= nbx - 3) return Zone.SEASIDE;
+        float dx = (i - iCentre) / (nbx * 0.5f);
+        float dz = (j - jCentre) / (nbz * 0.5f);
+        float radius = (float) Math.hypot(dx, dz);
+        if (radius < 0.06f) return Zone.CENTRAL;
+        if (radius < 0.17f) return Zone.ENTERTAINMENT;
+        if (radius > 0.72f) return Zone.SUBURB;
         return Zone.MIXED;
     }
 
@@ -557,6 +571,9 @@ public final class City extends World {
     }
 
     private void block(Chunk ch, GeoBuilder gb, int i, int j) {
+        float cx = (rx1[i] + rx0[i + 1]) * 0.5f;
+        float cz = (rz1[j] + rz0[j + 1]) * 0.5f;
+        if (terrain.cityDistance(cx, cz) > 0f) return;
         Random rnd = new Random(seed * 1000003L + i * 7919L + j * 104729L);
         float bx0 = rx1[i], bx1 = rx0[i + 1], bz0 = rz1[j], bz1 = rz0[j + 1];
         float s = SIDEWALK;
@@ -654,13 +671,19 @@ public final class City extends World {
 
     private void wire(GeoBuilder gb, float ax, float ay, float az, float bx, float by, float bz) {
         float mx = (ax + bx) * 0.5f, my = (ay + by) * 0.5f - 0.45f, mz = (az + bz) * 0.5f;
-        float th = 0.05f;
+        wireRibbon(gb, ax, ay, az, mx, my, mz);
+        wireRibbon(gb, mx, my, mz, bx, by, bz);
+    }
+
+    private void wireRibbon(GeoBuilder gb, float ax, float ay, float az, float bx, float by, float bz) {
+        float dx = bx - ax, dz = bz - az, len = (float) Math.hypot(dx, dz);
+        if (len < 0.01f) return;
+        float halfWidth = 0.035f, px = dz * halfWidth / len, pz = -dx * halfWidth / len;
         float[] l = {0.5f, 0.5f, 0.5f, 0.5f};
-        float[] t = {0, 1, 1, 1, 1, 0, 0, 0};
-        gb.quad(new float[]{ax, ay - th, az, mx, my - th, mz, mx, my + th, mz, ax, ay + th, az}, t, l, lib.pole, L_OBJECT,
-                Geo.FLAG_DETAIL | Geo.FLAG_NO_SUBDIV, -0.2f, true);
-        gb.quad(new float[]{mx, my - th, mz, bx, by - th, bz, bx, by + th, bz, mx, my + th, mz}, t, l, lib.pole, L_OBJECT,
-                Geo.FLAG_DETAIL | Geo.FLAG_NO_SUBDIV, -0.2f, true);
+        float[] t = {0, 0, len / 8f, 0, len / 8f, 1, 0, 1};
+        gb.quad(new float[]{ax - px, ay, az - pz, bx - px, by, bz - pz,
+                        bx + px, by, bz + pz, ax + px, ay, az + pz},
+                t, l, lib.pole, L_OBJECT, Geo.FLAG_DETAIL | Geo.FLAG_NO_SUBDIV, -0.2f, true);
     }
 
     /** A drink vending machine standing against the lot line, facing the street. */
@@ -695,14 +718,26 @@ public final class City extends World {
     }
 
     /** A property wall (block wall or hedge) standing on the ground. */
-    void propertyWall(Chunk ch, float x0, float z0, float x1, float z1, float h, int tex) {
+    private void propertyWall(Ctx c, float x0, float z0, float x1, float z1, float h, int tex) {
         if (x1 - x0 < 0.05f || z1 - z0 < 0.05f) return;
-        float g0 = terrain.height(x0, z0), g1 = terrain.height(x1, z1);
-        float base = Math.min(g0, g1), top = Math.max(g0, g1) + h;
-        Sectors.Tiles t = SectorBuilder.plain(tex, tex);
-        t.matScale = tex == lib.blockWall ? 1.2f : 2f;
-        sectorBox(ch, x0, z0, x1, z1, base - 0.1f, top, new Sectors.Tiles[]{t, t, t, t}, tex == lib.blockWall ? lib.concrete : tex);
-        ch.boxes.add(new Box(x0, base - 1f, z0, x1, top, z1));
+        float ax, az, bx, bz;
+        if (x1 - x0 >= z1 - z0) {
+            ax = x0; az = (z0 + z1) * 0.5f;
+            bx = x1; bz = az;
+        } else {
+            ax = (x0 + x1) * 0.5f; az = z0;
+            bx = ax; bz = z1;
+        }
+        float g0 = terrain.height(ax, az), g1 = terrain.height(bx, bz);
+        float dx = bx - ax, dz = bz - az, len = (float) Math.hypot(dx, dz);
+        float nx = -dz / len, nz = dx / len;
+        float light = GeoBuilder.sunLight(nx, 0f, nz);
+        float[] p = {ax, g0, az, bx, g1, bz, bx, g1 + h, bz, ax, g0 + h, az};
+        float scale = tex == lib.blockWall ? 1.2f : 2f;
+        float[] uv = {0f, h / scale, len / scale, h / scale, len / scale, 0f, 0f, 0f};
+        float[] lights = {light, light, light, light};
+        c.gb.quad(p, uv, lights, tex, L_OBJECT, Geo.FLAG_NO_SUBDIV, 0f, true);
+        c.ch.boxes.add(new Box(x0, Math.min(g0, g1) - 1f, z0, x1, Math.max(g0, g1) + h, z1));
     }
 
     void lampAt(Chunk ch, float x, float z, float yaw) {
@@ -828,10 +863,10 @@ public final class City extends World {
         blockWall(c, gate1, wz, x1, wz, faceN);
         // side and back walls round the property
         float t = 0.08f, zf = faceN ? z0 + 0.25f : z0 + 0.1f, zb = faceN ? z1 - 0.1f : z1 - 0.25f;
-        propertyWall(c.ch, x0 + 0.1f, zf, x0 + 0.1f + 2 * t, zb, 1.2f, lib.blockWall);
-        propertyWall(c.ch, x1 - 0.1f - 2 * t, zf, x1 - 0.1f, zb, 1.2f, lib.blockWall);
+        propertyWall(c, x0 + 0.1f, zf, x0 + 0.1f + 2 * t, zb, 1.2f, lib.blockWall);
+        propertyWall(c, x1 - 0.1f - 2 * t, zf, x1 - 0.1f, zb, 1.2f, lib.blockWall);
         float zw = faceN ? z1 - 0.1f - 2 * t : z0 + 0.1f;
-        propertyWall(c.ch, x0 + 0.3f, zw, x1 - 0.3f, zw + 2 * t, 1.2f, lib.blockWall);
+        propertyWall(c, x0 + 0.3f, zw, x1 - 0.3f, zw + 2 * t, 1.2f, lib.blockWall);
         // garden planting
         Flora[] garden = {Flora.BLACK_PINE, Flora.MAPLE, Flora.CAMELLIA, Flora.BOXWOOD, Flora.HYDRANGEA, Flora.AZALEA};
         float gz = faceN ? z0 + 1.3f : z1 - 1.3f;
@@ -845,7 +880,7 @@ public final class City extends World {
 
     private void blockWall(Ctx c, float ax, float z, float bx, float z2, boolean faceN) {
         if (bx - ax < 0.3f) return;
-        propertyWall(c.ch, ax, z - 0.08f, bx, z + 0.08f, 1.2f, lib.blockWall);
+        propertyWall(c, ax, z - 0.08f, bx, z + 0.08f, 1.2f, lib.blockWall);
     }
 
     private void parking(Ctx c, float x0, float z0, float x1, float z1) {

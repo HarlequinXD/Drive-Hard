@@ -142,7 +142,11 @@ public final class MapData {
         // the city
         int ci0 = (int) ((city.cityX0 - x0) / px), ci1 = (int) ((city.cityX1 - x0) / px);
         int cj0 = (int) ((city.cityZ0 - z0) / px), cj1 = (int) ((city.cityZ1 - z0) / px);
-        for (int j = cj0; j <= cj1; j++) for (int i = ci0; i <= ci1; i++) relief[j * SIZE + i] = 0xFFB8B2A8;
+        for (int j = cj0; j <= cj1; j++)
+            for (int i = ci0; i <= ci1; i++) {
+                float x = x0 + (i + 0.5f) * px, z = z0 + (j + 0.5f) * px;
+                if (city.terrain.cityDistance(x, z) <= 0f) relief[j * SIZE + i] = 0xFFB8B2A8;
+            }
     }
 
     private static int mix(int a, int b, float t) {

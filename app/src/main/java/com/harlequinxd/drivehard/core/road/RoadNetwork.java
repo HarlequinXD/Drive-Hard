@@ -95,6 +95,7 @@ public final class RoadNetwork {
         for (int i = 0; i <= c.nbx; i++)
             for (int j = 0; j < c.nbz; j++) {
                 RoadNode a = nodes.get(cityNode[i][j]), b = nodes.get(cityNode[i][j + 1]);
+                if (terrain.cityDistance((a.x + b.x) * 0.5f, (a.z + b.z) * 0.5f) > 0f) continue;
                 RoadEdge e = addEdge(c.avenueX[i] ? RoadClass.AVENUE : RoadClass.STREET, a.id, b.id,
                         new float[]{a.x, b.x}, new float[]{a.z, b.z});
                 e.ns = true;
@@ -104,6 +105,7 @@ public final class RoadNetwork {
         for (int j = 0; j <= c.nbz; j++)
             for (int i = 0; i < c.nbx; i++) {
                 RoadNode a = nodes.get(cityNode[i][j]), b = nodes.get(cityNode[i + 1][j]);
+                if (terrain.cityDistance((a.x + b.x) * 0.5f, (a.z + b.z) * 0.5f) > 0f) continue;
                 RoadEdge e = addEdge(c.avenueZ[j] ? RoadClass.AVENUE : RoadClass.STREET, a.id, b.id,
                         new float[]{a.x, b.x}, new float[]{a.z, b.z});
                 e.ns = false;
@@ -131,12 +133,34 @@ public final class RoadNetwork {
 
     private void cityConnectors() {
         City c = city;
-        int[][] west = {{0, 1}, {0, 7}, {0, 9}};
-        for (int[] p : west) linkToVillage(cityNode[p[0]][p[1]], RoadClass.COUNTRY, -1f, 0f);
-        int[] north = {2, 8};
-        for (int i : north) linkToVillage(cityNode[i][0], RoadClass.COUNTRY, 0f, -1f);
-        int[] south = {1, 8};
-        for (int i : south) linkToVillage(cityNode[i][c.nbz], RoadClass.COUNTRY, 0f, 1f);
+        for (float offset : new float[]{-2500f, 0f, 2500f})
+            linkToVillage(cityBoundaryNode(-1f, 0f, offset), RoadClass.COUNTRY, -1f, 0f);
+        for (float offset : new float[]{-2500f, 2500f})
+            linkToVillage(cityBoundaryNode(0f, -1f, offset), RoadClass.COUNTRY, 0f, -1f);
+        for (float offset : new float[]{-2500f, 2500f})
+            linkToVillage(cityBoundaryNode(0f, 1f, offset), RoadClass.COUNTRY, 0f, 1f);
+    }
+
+    /** Finds a connected city-grid node on the seed-shaped urban edge in the requested direction. */
+    private int cityBoundaryNode(float dx, float dz, float lateralOffset) {
+        float len = (float) Math.hypot(dx, dz);
+        dx /= len; dz /= len;
+        float lx = -dz, lz = dx;
+        float cx = (city.cityX0 + city.cityX1) * 0.5f, cz = (city.cityZ0 + city.cityZ1) * 0.5f;
+        int best = -1;
+        float bestScore = -Float.MAX_VALUE;
+        for (int i = 0; i <= city.nbx; i++)
+            for (int j = 0; j <= city.nbz; j++) {
+                RoadNode node = nodes.get(cityNode[i][j]);
+                if (node.edges.length == 0 || terrain.cityDistance(node.x, node.z) > 0f) continue;
+                float rx = node.x - cx, rz = node.z - cz;
+                float along = rx * dx + rz * dz;
+                float lateral = rx * lx + rz * lz;
+                float score = along - 0.5f * Math.abs(lateral - lateralOffset);
+                if (score > bestScore) { bestScore = score; best = node.id; }
+            }
+        if (best < 0) throw new IllegalStateException("No connected city road at the urban boundary");
+        return best;
     }
 
     // ------------------------------------------------------------------ towns & regions
@@ -146,7 +170,10 @@ public final class RoadNetwork {
     private final java.util.HashMap<Integer, Town> townByNode = new java.util.HashMap<>();
     private PlaceNames names;
     /** Street spacing in towns (centre line to centre line). */
-    public static final float TOWN_SX = 64f, TOWN_SZ = 52f;
+    public static final float TOWN_SX = 145f, TOWN_SZ = 145f;
+    private static final int LARGE_TOWN_GRID = 49, TOWN_GRID = 15;
+    private static final int LARGE_VILLAGE_GRID = 21, VILLAGE_GRID = 9;
+    private boolean hasLargeTownGrid, hasLargeVillageGrid;
 
     /** Names the island's regions: the 3x3 parts of the island, each centred on land. */
     private void regions() {
@@ -214,6 +241,32 @@ public final class RoadNetwork {
             Town t = makeTown(nd, size, false);
             t.coastal = c[3] < 3000f;
         }
+        float[] largeTownSite = largestTownSite();
+        if (largeTownSite != null) {
+            RoadNode centre = addNode(largeTownSite[0], largeTownSite[1], RoadNode.Kind.JUNCTION);
+            villages.add(centre);
+            Town largeTown = makeTown(centre, Town.Size.TOWN, false);
+            largeTown.coastal = largeTownSite[3] < 3000f;
+        }
+    }
+
+    /** Reserves one gently sloped, well-separated site for the island's largest town. */
+    private float[] largestTownSite() {
+        float step = 3000f;
+        float[] best = null;
+        float bestScore = -Float.MAX_VALUE;
+        for (float z = terrain.islandZ0 + step * 0.5f; z < terrain.islandZ1; z += step)
+            for (float x = terrain.islandX0 + step * 0.5f; x < terrain.islandX1; x += step) {
+                if (!gridFits(x, z, LARGE_TOWN_GRID)) continue;
+                float inland = -terrain.coastOver(x, z);
+                float score = Noise.rnd((int) (x / 100f), (int) (z / 100f), seed + 1540)
+                        - Math.abs(inland - 4500f) / 20000f;
+                if (score > bestScore) {
+                    bestScore = score;
+                    best = new float[]{x, z, score, inland};
+                }
+            }
+        return best;
     }
 
     /** Largest height difference across a +-r cross, as a slope. */
@@ -246,31 +299,53 @@ public final class RoadNetwork {
     public Town townOf(RoadNode n) { return townByNode.get(n.id); }
 
     private Town makeTown(RoadNode centre, Town.Size size, boolean exit) {
-        int nx = size == Town.Size.TOWN ? 5 : (size == Town.Size.VILLAGE ? 3 : 0);
-        if (nx > 0 && !gridFits(centre.x, centre.z, nx)) {
-            nx = 0;
+        int nx = gridSize(centre.x, centre.z, size);
+        if (nx == 0 && size != Town.Size.HAMLET) {
             size = Town.Size.HAMLET;
         }
         Town t = new Town(towns.size(), names.town(), regionAt(centre.x, centre.z), size, centre);
         t.exitTown = exit;
         towns.add(t);
         townByNode.put(centre.id, t);
-        if (nx > 0) townGrid(t, nx, nx);
+        if (nx > 0) {
+            townGrid(t, nx, nx);
+            if (size == Town.Size.TOWN && nx == LARGE_TOWN_GRID) hasLargeTownGrid = true;
+            if (size == Town.Size.VILLAGE && nx == LARGE_VILLAGE_GRID) hasLargeVillageGrid = true;
+        }
         return t;
+    }
+
+    private int gridSize(float cx, float cz, Town.Size size) {
+        if (size == Town.Size.TOWN) {
+            int large = hasLargeTownGrid ? 0 : LARGE_TOWN_GRID;
+            for (int candidate : new int[]{large, 27, TOWN_GRID})
+                if (candidate > 0 && gridFits(cx, cz, candidate)) return candidate;
+        } else if (size == Town.Size.VILLAGE) {
+            int large = hasLargeVillageGrid ? 0 : LARGE_VILLAGE_GRID;
+            for (int candidate : new int[]{large, 15, VILLAGE_GRID})
+                if (candidate > 0 && gridFits(cx, cz, candidate)) return candidate;
+        }
+        return 0;
     }
 
     /** A street grid needs gentle ground and no freeway or coast through it. */
     private boolean gridFits(float cx, float cz, int nx) {
         float hx = (nx - 1) * 0.5f * TOWN_SX + 40f, hz = (nx - 1) * 0.5f * TOWN_SZ + 40f;
-        float lo = Float.MAX_VALUE, hi = -Float.MAX_VALUE;
-        for (int j = -2; j <= 2; j++)
-            for (int i = -2; i <= 2; i++) {
-                float x = cx + hx * i / 2f, z = cz + hz * j / 2f;
-                if (terrain.coastOver(x, z) > -400f) return false;
+        float[][] heights = new float[5][5];
+        float stepX = hx * 0.5f, stepZ = hz * 0.5f;
+        for (int j = 0; j < 5; j++)
+            for (int i = 0; i < 5; i++) {
+                float x = cx + (i - 2) * stepX, z = cz + (j - 2) * stepZ;
+                if (terrain.coastOver(x, z) > -400f || terrain.cityDistance(x, z) == 0f) return false;
                 float h = terrain.natural(x, z);
-                lo = Math.min(lo, h); hi = Math.max(hi, h);
+                if (h < 3f) return false;
+                heights[j][i] = h;
             }
-        if (hi - lo > 22f || lo < 3f) return false;
+        for (int j = 0; j < 5; j++)
+            for (int i = 0; i < 5; i++) {
+                if (i < 4 && Math.abs(heights[j][i + 1] - heights[j][i]) / stepX > 0.08f) return false;
+                if (j < 4 && Math.abs(heights[j + 1][i] - heights[j][i]) / stepZ > 0.08f) return false;
+            }
         float reach = Math.max(hx, hz) + 150f;
         for (RoadEdge e : edges)
             if ((e.cls == RoadClass.FREEWAY || e.cls == RoadClass.RAMP || e.cls == RoadClass.HIGHWAY) && distTo(e, cx, cz) < reach) return false;
@@ -342,7 +417,7 @@ public final class RoadNetwork {
             boolean near = false;
             for (Town o : towns) if (Math.hypot(o.centre.x - x, o.centre.z - z) < 4500f) { near = true; break; }
             if (near) continue;
-            if (!gridFits(x, z, 5)) continue;
+            if (gridSize(x, z, Town.Size.TOWN) == 0) continue;
             RoadNode c = addNode(x, z, RoadNode.Kind.JUNCTION);
             villages.add(c);
             makeTown(c, Town.Size.TOWN, true);
@@ -476,7 +551,8 @@ public final class RoadNetwork {
         for (Town t : towns) if (t.coastal) ring.add(t);
         float ccx = terrain.centreX, ccz = terrain.centreZ;
         ring.sort((A, B) -> Float.compare((float) Math.atan2(A.centre.z - ccz, A.centre.x - ccx), (float) Math.atan2(B.centre.z - ccz, B.centre.x - ccx)));
-        RoadNode cityN = nodes.get(cityNode[city.nbx][0]), cityS = nodes.get(cityNode[city.nbx][city.nbz]);
+        RoadNode cityN = nodes.get(cityBoundaryNode(1f, -1f, 0f));
+        RoadNode cityS = nodes.get(cityBoundaryNode(1f, 1f, 0f));
         float cityAng = (float) Math.atan2((cityN.z + cityS.z) * 0.5f - ccz, cityN.x - ccx);
         int at = 0;
         while (at < ring.size() && Math.atan2(ring.get(at).centre.z - ccz, ring.get(at).centre.x - ccx) < cityAng) at++;
@@ -507,9 +583,9 @@ public final class RoadNetwork {
         // 2. freeways from the city to the most important towns far away
         List<Town> majors = new ArrayList<>();
         for (Town t : towns) if (t.size == Town.Size.TOWN) majors.add(t);
-        freewayTo(cityNode[0][4], -1f, 0f, majors, fw);
-        freewayTo(cityNode[6][0], 0f, -1f, majors, fw);
-        freewayTo(cityNode[3][city.nbz], 0f, 1f, majors, fw);
+        freewayTo(cityBoundaryNode(-1f, 0f, 0f), -1f, 0f, majors, fw);
+        freewayTo(cityBoundaryNode(0f, -1f, 0f), 0f, -1f, majors, fw);
+        freewayTo(cityBoundaryNode(0f, 1f, 0f), 0f, 1f, majors, fw);
         // 3. highways joining the towns: a spanning tree, plus short cut links
         int m = majors.size();
         boolean[] in = new boolean[m];

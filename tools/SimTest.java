@@ -12,7 +12,8 @@ public class SimTest {
 
     public static void main(String[] a) {
         check("polygons are sorted far-to-near by the ordering table", orderingTableSortsPolygons());
-        City c = new City(new TextureLibrary(20261103L), 20261103L);
+        TextureLibrary textures = new TextureLibrary(20261103L);
+        City c = new City(textures, 20261103L);
         float dt = 1f / 60f;
         OrbitCamera cam = new OrbitCamera();
         float[] mv = new float[2];
@@ -60,7 +61,7 @@ public class SimTest {
         check("crossed the street onto the next sidewalk", crossed);
 
         // walk east from the promenade toward the sea: must stop at the water line
-        Player w = new Player(c.spawnX, c.spawnZ);
+        Player w = new Player(c.cityX1, c.spawnZ);
         c.chunks.ensureAround(w.x, w.z);
         w.y = c.surface(w.x, w.z);
         for (int i = 0; i < 60 * 30; i++) { c.chunks.ensureAround(w.x, w.z); w.update(dt, 1f, 0f, false, c); }
@@ -85,11 +86,17 @@ public class SimTest {
         check("signals cycle green/yellow/red", seen == 7);
 
         // streaming: chunks generated deterministically
-        Chunk generated = c.generate(10, 6);
-        int polys1 = generated.polyCount, polys2 = c.generate(10, 6).polyCount;
+        int sampleI = c.nbx / 4, sampleJ = c.nbz / 2;
+        float sampleX = (c.rx1[sampleI] + c.rx0[sampleI + 1]) * 0.5f;
+        float sampleZ = (c.rz1[sampleJ] + c.rz0[sampleJ + 1]) * 0.5f;
+        int sampleCx = ChunkManager.chunkOf(sampleX), sampleCz = ChunkManager.chunkOf(sampleZ);
+        Chunk generated = c.generate(sampleCx, sampleCz);
+        int polys1 = generated.polyCount, polys2 = c.generate(sampleCx, sampleCz).polyCount;
         check("chunk generation deterministic", polys1 == polys2 && polys1 > 0);
         check("chunk surfaces are emitted as polygon meshes", !generated.batches.isEmpty() && noRaycastSurfaces(generated));
-        check("generated building surfaces are double-sided", convertedMeshesAreDoubleSided(generated));
+        check("generated buildings contain culled polygons", containsOneSidedPolygons(generated));
+        check("generated details retain double-sided polygons", containsDoubleSidedPolygons(generated));
+        check("city windows and doors are integrated into wall polygons", cityFacadesUseOpenings(c, textures));
         // ---- traffic: cars keep moving, turn, and never run a red light
         com.harlequinxd.drivehard.core.sim.Traffic tr = new com.harlequinxd.drivehard.core.sim.Traffic(c, r -> r.nextInt(100));
         tr.spawnMin = 5f; tr.spawnMax = 400f; tr.despawn = 2000f; tr.target = 40;
@@ -127,7 +134,8 @@ public class SimTest {
                 bridgeFound = true;
                 check("bridge decks, parapets and piers use polygon meshes",
                         !bridge.batches.isEmpty() && noRaycastSurfaces(bridge));
-                check("bridge surfaces are double-sided", convertedMeshesAreDoubleSided(bridge));
+                check("bridge road texture is part of the deck mesh", containsLaneSurface(bridge, textures));
+                check("bridge chunk contains culled polygons", containsOneSidedPolygons(bridge));
                 break;
             }
             if (bridgeFound) break;
@@ -139,12 +147,37 @@ public class SimTest {
                 net.villages.size(), c.countryside.farmCount, net.buildTime);
         check("island is 128 km across", Math.abs(c.terrain.islandX1 - c.terrain.islandX0 - 128000f) < 1f);
         check("the island reaches 25 km inland", c.terrain.natural(c.cityX0 - 25000f, (c.cityZ0 + c.cityZ1) / 2) > 1f);
-        check("freeways leave the city", net.lengthKm(com.harlequinxd.drivehard.core.road.RoadClass.FREEWAY) > 150f);
+        float freewayKm = net.lengthKm(com.harlequinxd.drivehard.core.road.RoadClass.FREEWAY);
+        long freewayCount = net.edges.stream()
+                .filter(edge -> edge.cls == com.harlequinxd.drivehard.core.road.RoadClass.FREEWAY).count();
+        check("freeways extend beyond the city", freewayCount >= 2 && freewayKm > 50f);
+        int cityRoads = 0, outsideCityRoads = 0;
+        float cityRoadX0 = Float.MAX_VALUE, cityRoadX1 = -Float.MAX_VALUE;
+        float cityRoadZ0 = Float.MAX_VALUE, cityRoadZ1 = -Float.MAX_VALUE;
+        for (var edge : net.edges) {
+            if (edge.cls != com.harlequinxd.drivehard.core.road.RoadClass.STREET
+                    && edge.cls != com.harlequinxd.drivehard.core.road.RoadClass.AVENUE) continue;
+            float mx = (edge.x[0] + edge.x[edge.count() - 1]) * 0.5f;
+            float mz = (edge.z[0] + edge.z[edge.count() - 1]) * 0.5f;
+            cityRoads++;
+            if (c.terrain.cityDistance(mx, mz) > 0f) outsideCityRoads++;
+            cityRoadX0 = Math.min(cityRoadX0, mx); cityRoadX1 = Math.max(cityRoadX1, mx);
+            cityRoadZ0 = Math.min(cityRoadZ0, mz); cityRoadZ1 = Math.max(cityRoadZ1, mz);
+        }
+        check("city roads follow the irregular 15 km footprint",
+                cityRoads > 10000 && cityRoads < 20200 && outsideCityRoads == 0
+                        && cityRoadX1 - cityRoadX0 > 11000f && cityRoadZ1 - cityRoadZ0 > 11000f);
+        var cityMap = new com.harlequinxd.drivehard.core.map.MapData(c);
+        int mapCentre = mapPixel(cityMap, (c.cityX0 + c.cityX1) * 0.5f, (c.cityZ0 + c.cityZ1) * 0.5f);
+        int mapCorner = mapPixel(cityMap, c.cityX0 + 100f, c.cityZ0 + 100f);
+        check("island map shows the irregular city footprint",
+                cityMap.relief[mapCentre] == 0xFFB8B2A8 && cityMap.relief[mapCorner] != 0xFFB8B2A8);
         check("countryside has villages and farms", net.villages.size() > 60 && c.countryside.farmCount > 800);
         {
             boolean[] reach = new boolean[net.nodes.size()];
             java.util.ArrayDeque<Integer> bfs = new java.util.ArrayDeque<>();
-            bfs.add(net.cityNode[0][0]); reach[net.cityNode[0][0]] = true;
+            int cityCentre = net.cityNode[c.nbx / 2][c.nbz / 2];
+            bfs.add(cityCentre); reach[cityCentre] = true;
             while (!bfs.isEmpty()) {
                 int id = bfs.poll();
                 for (int e : net.nodes.get(id).edges) {
@@ -156,6 +189,8 @@ public class SimTest {
             for (var v : net.villages) if (!reach[v.id]) lost++;
             check("every village is reachable by road from the city", lost == 0);
         }
+            check("bridge end caps are omitted while longitudinal sides remain",
+                    com.harlequinxd.drivehard.core.city.SectorBuilderRegression.bridgeEndCapsOmitted(c.terrain));
         // roads sit on their profile: terrain under a country road equals the road height
         {
             int bad = 0, n = 0;
@@ -255,6 +290,17 @@ public class SimTest {
             check("pedestrians use " + size.name().toLowerCase() + " footpaths", walkedFootpath);
         }
 
+        float largestTown = 0f, largestVillage = 0f;
+        for (var town : c.roads.towns) {
+            if (town.grid == null) continue;
+            float span = Math.max(town.x1 - town.x0, town.z1 - town.z0);
+            if (town.size == com.harlequinxd.drivehard.core.road.Town.Size.TOWN) largestTown = Math.max(largestTown, span);
+            if (town.size == com.harlequinxd.drivehard.core.road.Town.Size.VILLAGE) largestVillage = Math.max(largestVillage, span);
+        }
+        System.out.printf("largest built-up town %.1f km, village %.1f km%n", largestTown / 1000f, largestVillage / 1000f);
+        check("largest town spans about 7 km", largestTown >= 6800f);
+        check("largest village spans about 3 km", largestVillage >= 2800f);
+
         vehicleTest();
 
         System.out.println(fails == 0 ? "ALL OK" : fails + " FAILED");
@@ -293,7 +339,9 @@ public class SimTest {
         check("gas moves the car", far > 5f);
         float yaw0 = g.vehicle.yaw;
         for (int i = 0; i < 40; i++) g.update(dt, 0, 0, 0, 0, false, 1, 0.5f, 0, false);
-        check("steering turns the car", Math.abs(g.vehicle.yaw - yaw0) > 0.15f);
+        float yawChange = Math.abs(g.vehicle.yaw - yaw0);
+        System.out.printf("steering changed yaw by %.3f rad at %.1f m/s%n", yawChange, g.vehicle.speed);
+        check("steering turns the car", yawChange > 0.15f);
         float minSpeed = 99f;
         for (int i = 0; i < 300; i++) { g.update(dt, 0, 0, 0, 0, false, 0, 0, 1, false); minSpeed = Math.min(minSpeed, g.vehicle.speed); }
         check("reverse brakes then backs up", minSpeed < -0.5f);
@@ -364,13 +412,51 @@ public class SimTest {
         return chunk.sectors.sectors.isEmpty() && chunk.sectors.walls.isEmpty() && chunk.sectors.slabs.isEmpty();
     }
 
-    static boolean convertedMeshesAreDoubleSided(Chunk chunk) {
-        if (chunk.batches.isEmpty()) return false;
-        var mesh = chunk.batches.get(chunk.batches.size() - 1);
-        if (mesh.count == 0) return false;
-        for (int i = 0; i < mesh.count * 3; i++)
-            if (mesh.nrm[i] != 0f) return false;
-        return true;
+    static boolean containsOneSidedPolygons(Chunk chunk) {
+        for (var mesh : chunk.batches)
+            for (int i = 0; i < mesh.count; i++)
+                if (mesh.nrm[i * 3] != 0f || mesh.nrm[i * 3 + 1] != 0f || mesh.nrm[i * 3 + 2] != 0f) return true;
+        return false;
+    }
+
+    static boolean containsDoubleSidedPolygons(Chunk chunk) {
+        for (var mesh : chunk.batches)
+            for (int i = 0; i < mesh.count; i++)
+                if (mesh.nrm[i * 3] == 0f && mesh.nrm[i * 3 + 1] == 0f && mesh.nrm[i * 3 + 2] == 0f) return true;
+        return false;
+    }
+
+    static boolean containsLaneSurface(Chunk chunk, TextureLibrary textures) {
+        int[] laneTextures = {textures.laneCountry, textures.laneHwInner, textures.laneHwOuter,
+                textures.laneHwMedian, textures.laneFwInner, textures.laneFwOuter, textures.laneRamp, textures.laneTown};
+        for (var mesh : chunk.batches)
+            for (int i = 0; i < mesh.count; i++)
+                for (int texture : laneTextures)
+                    if (mesh.tex[i] == texture) return true;
+        return false;
+    }
+
+    static boolean cityFacadesUseOpenings(City city, TextureLibrary textures) {
+        boolean windows = false, doors = false;
+        int stride = Math.max(1, Math.max(city.nbx, city.nbz) / 20);
+        for (int i = 0; i < city.nbx && !(windows && doors); i += stride)
+            for (int j = 0; j < city.nbz && !(windows && doors); j += stride) {
+                float x = (city.rx1[i] + city.rx0[i + 1]) * 0.5f;
+                float z = (city.rz1[j] + city.rz0[j + 1]) * 0.5f;
+                Chunk chunk = city.generate(ChunkManager.chunkOf(x), ChunkManager.chunkOf(z));
+                for (var batch : chunk.batches)
+                    for (int k = 0; k < batch.count; k++) {
+                        for (int tex : textures.houseWin) if (batch.tex[k] == tex) windows = true;
+                        for (int tex : textures.houseDoor) if (batch.tex[k] == tex) doors = true;
+                    }
+            }
+        return windows && doors;
+    }
+
+    private static int mapPixel(com.harlequinxd.drivehard.core.map.MapData map, float x, float z) {
+        int i = Math.max(0, Math.min(map.SIZE - 1, (int) ((x - map.x0) / (map.extent / map.SIZE))));
+        int j = Math.max(0, Math.min(map.SIZE - 1, (int) ((z - map.z0) / (map.extent / map.SIZE))));
+        return j * map.SIZE + i;
     }
 
     static boolean orderingTableSortsPolygons() {

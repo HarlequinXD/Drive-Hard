@@ -27,6 +27,7 @@ import com.harlequinxd.drivehard.core.tex.TextureLibrary;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+import java.util.concurrent.ThreadLocalRandom;
 
 /** Platform-independent game: streamed island, player, traffic, pedestrians, flora and the renderer. */
 public final class Game {
@@ -80,6 +81,11 @@ public final class Game {
 
     /** The island everyone plays on. */
     public static final long DEFAULT_SEED = 20261103L;
+
+    /** A fresh seed for a new randomly generated island. */
+    public static long randomSeed() {
+        return ThreadLocalRandom.current().nextLong();
+    }
 
     public Game(long seed, Progress progress) {
         env = new Environment(seed);

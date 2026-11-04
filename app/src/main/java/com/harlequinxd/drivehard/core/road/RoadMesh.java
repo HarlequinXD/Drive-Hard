@@ -203,7 +203,7 @@ public final class RoadMesh {
         boolean gore = cls == RoadClass.RAMP && rampOverlap();
         if (city) return;        // city streets are painted flat into the ground map
         if (b - a > 0.05f && bridge) {
-            // Temporary deck solids are meshed at chunk finalization; the road below remains visible.
+            // The deck solids carry the road textures on their top faces; no road strip is overlaid.
             float vBase = (float) Math.floor(s0 / 64f) * 64f;
             float laneBase = (float) Math.floor(s0 / 320f) * 320f;
             for (float[] bd : bands(cls)) {
@@ -486,6 +486,7 @@ public final class RoadMesh {
         at(b, o1, 0.04f, 2);
         at(b, o0, 0.04f, 3);
         Sectors.Slab sl = slab(0f, -DECK);
+        sl.omitEndCaps = true;
         float ax = p[0], az = p[2];
         float uxr = p[3] - p[0], uzr = p[5] - p[2], ul = (float) Math.sqrt(uxr * uxr + uzr * uzr);
         float vxr = p[9] - p[0], vzr = p[11] - p[2], vl = (float) Math.sqrt(vxr * vxr + vzr * vzr);
@@ -529,6 +530,7 @@ public final class RoadMesh {
             at(b, Math.max(o0, o1), 0f, 2);
             at(b, Math.min(o0, o1), 0f, 3);
             Sectors.Slab sl = slab(1.0f, -DECK);
+            sl.omitEndCaps = true;
             sl.us = sl.vs = 1f;
             ch.sectors.slabs.add(sl);
         }
@@ -584,12 +586,18 @@ public final class RoadMesh {
 
     private void wire(GeoBuilder gb, float ax, float ay, float az, float bx, float by, float bz) {
         float mx = (ax + bx) * 0.5f, my = (ay + by) * 0.5f - 0.6f, mz = (az + bz) * 0.5f;
-        float th = 0.05f;
+        wireRibbon(gb, ax, ay, az, mx, my, mz);
+        wireRibbon(gb, mx, my, mz, bx, by, bz);
+    }
+
+    private void wireRibbon(GeoBuilder gb, float ax, float ay, float az, float bx, float by, float bz) {
+        float dx = bx - ax, dz = bz - az, len = (float) Math.hypot(dx, dz);
+        if (len < 0.01f) return;
+        float halfWidth = 0.035f, px = dz * halfWidth / len, pz = -dx * halfWidth / len;
         float[] lt = {0.5f, 0.5f, 0.5f, 0.5f};
-        float[] t = {0, 1, 1, 1, 1, 0, 0, 0};
-        gb.quad(new float[]{ax, ay - th, az, mx, my - th, mz, mx, my + th, mz, ax, ay + th, az}, t, lt, lib.pole, L_OBJECT,
-                Geo.FLAG_DETAIL | Geo.FLAG_NO_SUBDIV, -0.2f, true);
-        gb.quad(new float[]{mx, my - th, mz, bx, by - th, bz, bx, by + th, bz, mx, my + th, mz}, t, lt, lib.pole, L_OBJECT,
-                Geo.FLAG_DETAIL | Geo.FLAG_NO_SUBDIV, -0.2f, true);
+        float[] t = {0, 0, len / 8f, 0, len / 8f, 1, 0, 1};
+        gb.quad(new float[]{ax - px, ay, az - pz, bx - px, by, bz - pz,
+                        bx + px, by, bz + pz, ax + px, ay, az + pz},
+                t, lt, lib.pole, L_OBJECT, Geo.FLAG_DETAIL | Geo.FLAG_NO_SUBDIV, -0.2f, true);
     }
 }

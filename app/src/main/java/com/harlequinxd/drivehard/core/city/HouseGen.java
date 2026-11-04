@@ -528,20 +528,18 @@ final class HouseGen {
         }
         // property walls: block walls down both sides and across the back, and along the front a
         // block wall or hedge (or nothing) with an opening for the drive and the path
-        Sectors.Tiles bw = SectorBuilder.plain(lib.blockWall, lib.blockWall);
-        bw.matScale = 1.2f;
-        float fb = base - 0.15f, bt = 0.15f;
+        float fb = base - 0.15f;
         if (face == 0) {
-            if (!westNeighbor) sb.block(-bt * 0.5f, 0.2f, bt * 0.5f, D - 0.2f, fb, fb + 1.2f, lib.concrete, bw);
-            sb.block(W - bt * 0.5f, 0.2f, W + bt * 0.5f, D - 0.2f, fb, fb + 1.2f, lib.concrete, bw);
+            if (!westNeighbor) fencePlane(0f, 0.2f, 0f, D - 0.2f, fb, fb + 1.2f, lib.blockWall, 1.2f);
+            fencePlane(W, 0.2f, W, D - 0.2f, fb, fb + 1.2f, lib.blockWall, 1.2f);
         } else if (face == 1) {
-            sb.block(-bt * 0.5f, 0.2f, bt * 0.5f, D - 0.2f, fb, fb + 1.2f, lib.concrete, bw);
-            if (!westNeighbor) sb.block(W - bt * 0.5f, 0.2f, W + bt * 0.5f, D - 0.2f, fb, fb + 1.2f, lib.concrete, bw);
+            fencePlane(0f, 0.2f, 0f, D - 0.2f, fb, fb + 1.2f, lib.blockWall, 1.2f);
+            if (!westNeighbor) fencePlane(W, 0.2f, W, D - 0.2f, fb, fb + 1.2f, lib.blockWall, 1.2f);
         } else {
-            sb.block(-bt * 0.5f, 0.2f, bt * 0.5f, D - 0.2f, fb, fb + 1.2f, lib.concrete, bw);
-            sb.block(W - bt * 0.5f, 0.2f, W + bt * 0.5f, D - 0.2f, fb, fb + 1.2f, lib.concrete, bw);
+            fencePlane(0f, 0.2f, 0f, D - 0.2f, fb, fb + 1.2f, lib.blockWall, 1.2f);
+            fencePlane(W, 0.2f, W, D - 0.2f, fb, fb + 1.2f, lib.blockWall, 1.2f);
         }
-        sb.block(0f, D - 0.35f, W, D - 0.2f, fb, fb + 1.2f, lib.concrete, bw);
+        fencePlane(0f, D - 0.2f, W, D - 0.2f, fb, fb + 1.2f, lib.blockWall, 1.2f);
         if (d.fence > 0) {
             int tex = d.fence == 1 ? lib.blockWall : lib.hedge;
             float h = d.fence == 1 ? 0.95f : 1.15f, t = d.fence == 1 ? 0.15f : 0.6f;
@@ -551,12 +549,24 @@ final class HouseGen {
                 if (d.leftDoor) gap0 = Math.min(gap0, lay[2] - 2f); else gap1 = Math.max(gap1, lay[0] + 2f);
             }
             gap0 = Math.max(0.3f, gap0); gap1 = Math.min(W - 0.3f, gap1);
-            Sectors.Tiles ft = SectorBuilder.plain(tex, tex);
-            ft.matScale = d.fence == 1 ? 1.2f : 2f;
-            int cap = d.fence == 1 ? lib.concrete : tex;
-            if (gap0 > 0.6f) sb.block(0f, 0.2f, gap0, 0.2f + t, fb, fb + h, cap, ft);
-            if (gap1 < W - 0.6f) sb.block(gap1, 0.2f, W, 0.2f + t, fb, fb + h, cap, ft);
+            float front = 0.2f + t * 0.5f;
+            float scale = d.fence == 1 ? 1.2f : 2f;
+            if (gap0 > 0.6f) fencePlane(0f, front, gap0, front, fb, fb + h, tex, scale);
+            if (gap1 < W - 0.6f) fencePlane(gap1, front, W, front, fb, fb + h, tex, scale);
         }
+    }
+
+    private void fencePlane(float u0, float v0, float u1, float v1, float y0, float y1, int tex, float scale) {
+        float ax = wx(u0, v0), az = wz(u0, v0), bx = wx(u1, v1), bz = wz(u1, v1);
+        float dx = bx - ax, dz = bz - az, len = (float) Math.hypot(dx, dz);
+        if (len < 0.05f || y1 - y0 < 0.05f) return;
+        float nx = -dz / len, nz = dx / len;
+        float light = GeoBuilder.sunLight(nx, 0f, nz);
+        float[] p = {ax, y0, az, bx, y0, bz, bx, y1, bz, ax, y1, az};
+        float[] uv = {0f, (y1 - y0) / scale, len / scale, (y1 - y0) / scale,
+                len / scale, 0f, 0f, 0f};
+        float[] l = {light, light, light, light};
+        gb.quad(p, uv, l, tex, L_OBJECT, Geo.FLAG_NO_SUBDIV, 0f, true);
     }
 
     // ------------------------------------------------------------------ props (local to world)
