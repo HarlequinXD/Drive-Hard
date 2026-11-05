@@ -12,8 +12,8 @@ Once the build succeeds, open its GitHub Actions run and download the `DriveHard
 
 ## Controls
 
-- Xbox controller (XInput): left stick walk/steer; right stick camera; RT accelerate; LT brake/reverse; A jump; Y enter/exit vehicle; Start toggle fullscreen.
-- Keyboard: WASD/arrow keys walk or steer/accelerate/brake; Space jump; E enter/exit vehicle; F11 fullscreen.
+- Xbox controller (XInput): left stick walk/steer; right stick camera; RT accelerate; LT brake/reverse; A jump; Y enter/exit vehicle; View map; Start pause menu (resume, map, fullscreen, quit).
+- Keyboard and mouse: click the window to capture the mouse for the camera; WASD/arrow keys walk or steer, W/S gas/brake; Space jump; E or F enter/exit vehicle; M or Tab map; Esc pause menu (releases the mouse); F11 fullscreen.
 
 ## Local build
 
@@ -27,13 +27,12 @@ Then use JDK 17's `jpackage` to create an app-image from `app/build/windows-inpu
 
 ## Build notes
 
-The Windows frontend retains software rendering (not OpenGL). Buildings, shared property walls, vending machines and bridges are emitted as polygon meshes and sorted through a PS1-style ordering table; there is no per-pixel Z-buffer, so terrain does not depth-occlude polygons. The height-mapped ground remains ray-marched. Controller support uses the JNA dependency to call Windows XInput. The Android app is a separate `android-app` module and does not change this Windows package or include Swing/JNA. The actual Windows GitHub Actions EXE packaging has **not** been run here.
+The Windows frontend retains software rendering (not OpenGL). Buildings, shared property walls, vending machines and bridges are emitted as tiled polygon meshes and sorted through a PS1-style ordering table; polygons do not depth-test each other, but the terrain writes a ground-only depth buffer so hills hide what is behind them. The height-mapped ground remains ray-marched. Controller support uses the JNA dependency to call Windows XInput. The Android app is a separate `android-app` module and does not change this Windows package or include Swing/JNA. The actual Windows GitHub Actions EXE packaging has **not** been run here.
 
 ## Island map and fast travel (Windows)
-- The minimap is always visible in the top-right corner while playing.
-- Press **Xbox View/Select/Back** (or **M**) to open or close the full island map.
-- Pan with **left stick** or **D-pad** (or WASD/arrow keys); on PC, **left-drag** the map.
-- Zoom with the **mouse wheel**, on-screen **+ / -** buttons, keyboard **+ / -** or Page Up/Down, or hold controller **LT/RT** or **LB/RB** for repeated zoom steps.
-- Move the cursor over a yellow town/city marker and press **A** (or Enter) to open the fast-travel confirmation.
-- Press **A** again to fast travel; **B** (or Escape) cancels the menu or closes the map.
-- Fast travel uses the existing island map locations and streams the destination area. It is disabled while entering/exiting a car.
+- A heading-up minimap sits in the top-right corner while playing, with the place name and speed top left.
+- Press **View** (or **M** / **Tab**) to open or close the full island map.
+- Pan with the **left stick** / **D-pad**, **WASD** / arrows, or **left-drag**; zoom with **LT/RT**, the **mouse wheel**, **+ / -** or the on-screen buttons.
+- **LB / RB** (or **Q / E**, or the **< >** buttons) step through places nearest first; **Y** (or **C**, or **ME**) re-centres on you.
+- Press **A** / **Enter** or click a place to open the fast-travel dialog, then **A** / **Enter** or **TRAVEL** to go; **B** / **Esc** goes back.
+- Fast travel lands you on a street at the destination (in a lane if you are driving), builds the streets around it behind a travel screen, and repopulates traffic and pedestrians there.

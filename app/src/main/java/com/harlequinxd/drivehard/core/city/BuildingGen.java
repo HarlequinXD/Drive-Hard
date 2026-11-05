@@ -119,6 +119,15 @@ final class BuildingGen {
         t.groundH = hasGround ? groundH : floorH;
         t.storeyH = floorH;
         int cols = Math.max(1, Math.round(len / 2f));
+        // real buildings repeat one window layout up the whole facade: pick the columns once
+        // (mirrored, so the facade is symmetric) and one or two window types
+        boolean[] mask = new boolean[cols];
+        float density = 0.6f + r.nextFloat() * 0.4f;
+        for (int c = 0; c < (cols + 1) / 2; c++) mask[c] = mask[cols - 1 - c] = r.nextFloat() < density;
+        boolean any = false;
+        for (boolean b : mask) any |= b;
+        if (!any) mask[cols / 2] = true;
+        int winA = lib.houseWin[r.nextInt(lib.houseWin.length)], winB = lib.houseWin[r.nextInt(lib.houseWin.length)];
         for (int f = 0; f < floors; f++) {
             if (hasGround && f == 0 && (ground == -1 || ground == -2)) {
                 t.storey(f, cols, Sectors.FULL, tex);
@@ -130,9 +139,9 @@ final class BuildingGen {
                 if (entrance) {
                     t.kind[f][c] = Sectors.DOOR;
                     t.tex[f][c] = lib.houseDoor[r.nextInt(lib.houseDoor.length)];
-                } else if (r.nextFloat() < 0.72f) {
+                } else if (mask[c]) {
                     t.kind[f][c] = Sectors.WINDOW;
-                    t.tex[f][c] = lib.houseWin[r.nextInt(lib.houseWin.length)];
+                    t.tex[f][c] = r.nextFloat() < 0.8f ? winA : winB;
                 }
             }
         }

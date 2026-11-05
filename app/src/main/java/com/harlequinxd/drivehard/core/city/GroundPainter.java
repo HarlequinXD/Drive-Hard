@@ -346,7 +346,14 @@ final class GroundPainter {
                 if (d > 0f && e.cls.city) continue;        // city streets end at the kerb
                 int road = roadColor(e, sAt[k], offAt[k], goreAt[k], x, z);
                 if (d <= 0f) out[k] = road;
-                else {
+                else if (e.surface != com.harlequinxd.drivehard.core.road.RoadEdge.PAVED) {
+                    // unsealed tracks fade straight into the grass
+                    float t = d / VERGE;
+                    if (t < 0.5f) out[k] = Img.mix(road, out[k], 0.5f + t);
+                } else if (e.cls == com.harlequinxd.drivehard.core.road.RoadClass.TOWN) {
+                    // town footpaths end at a neat concrete kerb, then the lots
+                    if (d < 0.35f) out[k] = Img.mix(0xFFB4B0A8, 0xFF8E8A84, d / 0.35f);
+                } else {
                     // soft verge: a dusty shoulder fading into the ground
                     float t = d / VERGE;
                     out[k] = Img.mix(Img.mix(road, 0xFF8C8270, 0.5f), out[k], t * t);

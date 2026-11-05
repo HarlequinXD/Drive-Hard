@@ -453,31 +453,24 @@ public final class Countryside {
                 String role = blockRole(town, bi, bj, ci, cj, nbx, nbz, t.id);
                 switch (role) {
                     case "civic":
-                        civic(TOWN_HALL, bx0, bz0, bx1, bz0 + rowD, 0, lib.concrete, rnd);
-                        civic(POST, bx0, bz1 - rowD, (bx0 + bx1) * 0.5f, bz1, 1, lib.concrete, rnd);
-                        civic(CLINIC, (bx0 + bx1) * 0.5f, bz1 - rowD, bx1, bz1, 1, lib.concrete, rnd);
+                        civicPart(TOWN_HALL, bx0, bz0, bx1, bz0 + rowD, 0, lib.concrete, 0.5f, 52f, 34f, rnd);
+                        civicPart(POST, bx0, bz1 - rowD, (bx0 + bx1) * 0.5f, bz1, 1, lib.concrete, 1f, 24f, 22f, rnd);
+                        civicPart(CLINIC, (bx0 + bx1) * 0.5f, bz1 - rowD, bx1, bz1, 1, lib.concrete, 0f, 24f, 22f, rnd);
                         break;
                     case "shops":
                         shopRow(bx0, bz0, bx1, bz0 + rowD, 0, rnd);
                         shopRow(bx0, bz1 - rowD, bx1, bz1, 1, rnd);
                         break;
                     case "market":
-                        if (!civic(SUPERMARKET, bx0, bz0, bx1, bz1, 0, lib.parking, rnd)) {
-                            houseRow(bx0, bz0, bx1, bz0 + rowD, 0, rnd, true);
-                            houseRow(bx0, bz1 - rowD, bx1, bz1, 1, rnd, true);
-                        }
+                        civicPart(SUPERMARKET, bx0, bz0, bx1, bz0 + rowD, 0, lib.parking, 0.5f, 70f, Math.min(rowD, 52f), rnd);
+                        houseRow(bx0, bz1 - rowD, bx1, bz1, 1, rnd, true);
                         break;
                     case "school":
-                        if (!civic(SCHOOL, bx0, bz0, bx1, bz1, 0, lib.field, rnd)) {
-                            houseRow(bx0, bz0, bx1, bz0 + rowD, 0, rnd, true);
-                            houseRow(bx0, bz1 - rowD, bx1, bz1, 1, rnd, true);
-                        }
+                        civicPart(SCHOOL, bx0, bz0, bx1, bz1, 0, lib.field, 0.5f, 110f, Math.min(bz1 - bz0, 96f), rnd);
                         break;
                     case "shrine":
-                        if (!civic(SHRINE, bx0, bz0, bx1, bz1, 1, lib.gravel, rnd)) {
-                            houseRow(bx0, bz0, bx1, bz0 + rowD, 0, rnd, true);
-                            houseRow(bx0, bz1 - rowD, bx1, bz1, 1, rnd, true);
-                        }
+                        civicPart(SHRINE, bx0, bz1 - rowD, bx1, bz1, 1, lib.gravel, 0.5f, 56f, Math.min(rowD, 56f), rnd);
+                        houseRow(bx0, bz0, bx1, bz0 + rowD, 0, rnd, true);
                         break;
                     case "village_centre":
                         shopRow(bx0, bz0, bx1 - 14f, bz0 + rowD, 0, rnd);
@@ -566,6 +559,23 @@ public final class Countryside {
             st.ground.add(new float[]{lx0, face == 0 ? z0 : sz1 - 0.5f, lx1, face == 0 ? sz0 + 0.5f : z1, lib.pavers});
             add(st);
         }
+    }
+
+    /**
+     * A civic building on part of a row: a plot {@code w} wide (placed at {@code at} 0 = left,
+     * 0.5 = middle, 1 = right of the row) and {@code d} deep from the street; the rest of the row
+     * becomes houses, so no block turns into one huge car park or concrete apron.
+     */
+    private void civicPart(int kind, float x0, float z0, float x1, float z1, int face, int groundTex, float at,
+                           float w, float d, Random rnd) {
+        float rw = x1 - x0;
+        w = Math.min(w, rw);
+        float px0 = x0 + (rw - w) * at, px1 = px0 + w;
+        float pz0 = face == 0 ? z0 : z1 - d, pz1 = face == 0 ? z0 + d : z1;
+        boolean ok = civic(kind, px0, pz0, px1, pz1, face, groundTex, rnd);
+        if (!ok) { houseRow(x0, z0, x1, z1, face, rnd, true); return; }
+        if (px0 - x0 > 10f) houseRow(x0, z0, px0, z1, face, rnd, true);
+        if (x1 - px1 > 10f) houseRow(px1, z0, x1, z1, face, rnd, true);
     }
 
     private boolean civic(int kind, float x0, float z0, float x1, float z1, int face, int groundTex, Random rnd) {

@@ -31,6 +31,7 @@ public final class Facades {
 
     static void wallMaterial(Img m, Random r, int base, int mat, int seed) {
         m.fill(base);
+        Photo.weather(m, 0.07f, seed + 101);
         switch (mat) {
             case 0: // stucco
                 m.grain(0, 0, m.w, m.h, 0.05f, 0.035f, seed);
@@ -79,37 +80,23 @@ public final class Facades {
     /** Glass with sky reflection, interior variation and frame. */
     static void glass(Img m, Random r, int x0, int y0, int x1, int y1, int glass, int frame, int ft, boolean interior) {
         int h = y1 - y0;
-        for (int y = y0; y < y1; y++) {
-            float t = (y - y0) / (float) Math.max(1, h);
-            int c = mix(mix(glass, 0xFFE8F4FF, 0.45f), mul(glass, 0.55f), t);
-            for (int x = x0; x < x1; x++) {
-                int cc = c;
-                // diagonal reflection streak
-                int d = (x - x0) + (y - y0) / 2;
-                if ((d % 23) < 3) cc = mix(cc, 0xFFFFFFFF, 0.25f);
-                m.set(x, y, cc);
-            }
-        }
+        Photo.glass(m, x0, y0, x1, y1, glass, r);
         if (interior) {
-            int k = r.nextInt(4);
-            if (k == 0) { // blinds
-                int bl = mix(0xFFF0EEE8, glass, 0.35f);
-                int by = y0 + 2 + r.nextInt(Math.max(1, h / 2));
-                for (int y = y0; y < by; y++) if ((y & 1) == 0) for (int x = x0; x < x1; x++) m.set(x, y, bl);
-            } else if (k == 1) { // curtain on one side
+            int k = r.nextInt(5);
+            if (k == 0) {
+                Photo.blinds(m, x0, y0, x1, y1, mix(0xFFF0EEE8, glass, 0.3f), 0.15f + r.nextFloat() * 0.6f);
+            } else if (k == 1) {
                 int cu = pick(r, new int[]{0xE8D8B0, 0xC85A5A, 0x5A7AB0, 0xE8E8E0, 0x6A9A6A, 0xD8A0C0});
-                int cw = (x1 - x0) / 3;
-                boolean left = r.nextBoolean();
-                for (int y = y0; y < y1; y++)
-                    for (int x = 0; x < cw; x++) {
-                        int px = left ? x0 + x : x1 - 1 - x;
-                        m.set(px, y, mul(cu, 0.75f + 0.25f * (((x + (left ? 0 : 1)) & 2) >> 1)));
-                    }
+                Photo.curtains(m, x0, y0, x1, y1, cu, 0.3f + r.nextFloat() * 0.4f, r.nextBoolean());
             } else if (k == 2) { // dark room
                 m.tint(x0, y0 + h / 3, x1, y1, 0xFF1A2028, 0.35f);
             }
         }
-        if (ft > 0) m.frame(x0 - ft, y0 - ft, x1 + ft, y1 + ft, ft, frame);
+        if (ft > 0) {
+            Photo.frame(m, x0 - ft, y0 - ft, x1 + ft, y1 + ft, ft, frame);
+            // rain has washed dirt down from the sill corners
+            Photo.streaks(m, x0 - ft, x1 + ft, y1 + ft, Math.min(18, m.h - y1 - ft), 0.6f, r.nextInt());
+        }
     }
 
     static void sill(Img m, int x0, int x1, int y, int c) {

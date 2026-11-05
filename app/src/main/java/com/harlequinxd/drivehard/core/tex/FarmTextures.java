@@ -170,19 +170,27 @@ public final class FarmTextures {
     }
 
     /**
-     * Coloured walking strip at the edge of a town street (u 0 at the lane edge line to 1 at the
-     * road edge): green-tinted asphalt, as painted along school routes.
+     * Footpath at the edge of a town street (u 0 at the lane edge line to 1 at the kerb; one tile
+     * is 20 m along): pale concrete pavers with joints every 2 m, a few darker replaced slabs,
+     * and a slightly darker gutter strip against the road.
      */
     public static Texture walkStrip(Texture asphalt, float width) {
         int w = 32, h = 64;
         Img m = new Img(w, h);
-        int green = rgb(78, 128, 92);
+        java.util.Random r = new java.util.Random(77);
+        int base = rgb(188, 184, 176);
+        m.fill(base);
+        m.grain(0, 0, w, h, 0.05f, 0.06f, 991);
+        for (int y = 0; y < h; y += 6) {
+            if (r.nextInt(6) == 0) m.shade(3, y + 1, w, Math.min(h, y + 6), 0.9f + r.nextFloat() * 0.06f);
+            m.shade(3, y, w, y + 1, 0.78f);                       // joint
+            m.shade(3, y + 1, w, Math.min(h, y + 2), 1.04f);      // lit slab edge
+        }
+        m.shade(17, 0, 18, h, 0.84f);                             // centre joint along the path
+        // gutter: a strip of darker concrete next to the carriageway
         for (int y = 0; y < h; y++)
-            for (int x = 0; x < w; x++) {
-                int sx = (int) (x * width / w / 2f * asphalt.w) & (asphalt.w - 1);
-                int sy = (int) (y * 5f / h / 2f * asphalt.h) & (asphalt.h - 1);
-                m.px[y * w + x] = mix(green, asphalt.px[sy * asphalt.w + sx], 0.55f);
-            }
+            for (int x = 0; x < 3; x++) m.set(x, y, mix(m.get(x, y), rgb(120, 118, 114), x == 2 ? 0.4f : 0.6f));
+        m.shade(w - 1, 0, w, h, 0.8f);                            // kerb edge
         return m.texture();
     }
 

@@ -23,39 +23,80 @@ public final class HouseTextures {
         Random r = new Random(seed * 37L + k.ordinal());
         m.fill(0xFF000000 | color);
         switch (k) {
-            case SIDING:          // horizontal lap siding, a shadow line under every board
+            case SIDING:          // horizontal lap siding: each board darker under the lap, lit along its lower edge
                 m.grain(0, 0, 64, 64, 0.03f, 0.025f, seed);
-                for (int y = 0; y < 64; y += 6) { m.shade(0, y, 64, y + 1, 0.78f); m.shade(0, y + 1, 64, y + 2, 1.06f); }
-                for (int y = 0; y < 64; y += 6) { int x = r.nextInt(64); m.shade(x, y, x + 1, y + 6, 0.9f); }
+                for (int y = 0; y < 64; y += 6) {
+                    m.shade(0, y, 64, y + 1, 0.66f);
+                    m.shade(0, y + 1, 64, y + 2, 0.86f);
+                    m.shade(0, y + 4, 64, y + 6, 1.05f);
+                }
+                for (int y = 0; y < 64; y += 6) { int x = r.nextInt(64); m.shade(x, y, x + 1, y + 6, 0.82f); m.shade(x + 1, y + 1, x + 2, y + 6, 1.08f); }
+                Photo.weather(m, 0.05f, seed);
                 break;
-            case STUCCO:          // sprayed plaster
-                m.grain(0, 0, 64, 64, 0.05f, 0.06f, seed);
-                break;
-            case BOARDS:          // vertical boards with battens
-                m.grain(0, 0, 64, 64, 0.07f, 0.05f, seed);
-                for (int x = 0; x < 64; x += 8) { m.shade(x, 0, x + 1, 64, 0.7f); m.shade(x + 1, 0, x + 2, 64, 1.1f); }
-                break;
-            case TILE:            // small ceramic facade tiles
-                m.grain(0, 0, 64, 64, 0.02f, 0.03f, seed);
-                for (int y = 0; y < 64; y += 4) m.shade(0, y, 64, y + 1, 0.86f);
-                for (int y = 0; y < 64; y += 4) for (int x = (y / 4 % 2) * 4; x < 64; x += 8) m.shade(x, y, x + 1, y + 4, 0.86f);
-                break;
-            case BRICK:           // brick-look siding
-                m.grain(0, 0, 64, 64, 0.06f, 0.05f, seed);
-                for (int y = 0; y < 64; y += 5) {
-                    m.rect(0, y, 64, y + 1, mix(0xFFD8D0C4, 0xFF000000 | color, 0.5f));
-                    for (int x = (y / 5 % 2) * 6; x < 64; x += 12) m.rect(x, y, x + 1, y + 5, mix(0xFFD8D0C4, 0xFF000000 | color, 0.5f));
-                    for (int x = 0; x < 64; x += 12) m.shade(x + 1, y + 1, x + 12, y + 5, 0.9f + r.nextFloat() * 0.2f);
+            case STUCCO:          // sprayed plaster: fine speckle over soft blotches, faint hairline cracks
+                m.grain(0, 0, 64, 64, 0.05f, 0.07f, seed);
+                Photo.weather(m, 0.08f, seed);
+                for (int crack = 0; crack < 2; crack++) {
+                    int x = r.nextInt(64), y = r.nextInt(64);
+                    for (int s2 = 0; s2 < 10 + r.nextInt(10); s2++) {
+                        m.set(x & 63, y & 63, mul(m.get(x & 63, y & 63), 0.86f));
+                        x += r.nextInt(3) - 1;
+                        y += 1;
+                    }
                 }
                 break;
-            case PANEL:           // fibre-cement panels with joints
-                m.grain(0, 0, 64, 64, 0.03f, 0.03f, seed);
-                m.shade(0, 0, 64, 1, 0.75f);
-                m.shade(0, 0, 1, 64, 0.75f);
-                m.shade(32, 0, 33, 64, 0.8f);
+            case BOARDS:          // vertical boards with battens and wood grain
+                m.grain(0, 0, 64, 64, 0.07f, 0.05f, seed);
+                for (int x = 0; x < 64; x++) {
+                    float g = 0.94f + 0.08f * (float) Math.sin(x * 2.3f + Noise.rnd(x / 8, 0, seed) * 6f);
+                    m.shade(x, 0, x + 1, 64, g);
+                }
+                for (int x = 0; x < 64; x += 8) { m.shade(x, 0, x + 1, 64, 0.62f); m.shade(x + 1, 0, x + 2, 64, 1.14f); m.shade(x + 2, 0, x + 3, 64, 1.05f); }
+                Photo.weather(m, 0.06f, seed);
                 break;
-            case PLASTER:         // traditional white plaster
+            case TILE:            // small glazed facade tiles, each slightly different, with a glint
+                m.grain(0, 0, 64, 64, 0.02f, 0.03f, seed);
+                for (int y = 0; y < 64; y += 4)
+                    for (int x = (y / 4 % 2) * 4 - 4; x < 64; x += 8) {
+                        int bx0 = Math.max(0, x), bx1 = Math.min(64, x + 8);
+                        m.shade(bx0, y, bx1, y + 4, 0.92f + r.nextFloat() * 0.14f);
+                        if (r.nextInt(5) == 0) m.shade(bx0 + 1, y + 1, Math.min(64, bx0 + 3), y + 2, 1.15f);
+                    }
+                for (int y = 0; y < 64; y += 4) m.shade(0, y, 64, y + 1, 0.8f);
+                for (int y = 0; y < 64; y += 4) for (int x = (y / 4 % 2) * 4; x < 64; x += 8) m.shade(x, y, x + 1, y + 4, 0.82f);
+                Photo.weather(m, 0.04f, seed);
+                break;
+            case BRICK:           // bricks: each its own shade, recessed mortar, lit top edges
+                m.grain(0, 0, 64, 64, 0.06f, 0.06f, seed);
+                {
+                    int mortar = mix(0xFFCFC8BC, 0xFF000000 | color, 0.3f);
+                    for (int y = 0; y < 64; y += 4) {
+                        int off = (y / 4 % 2) * 4;
+                        for (int x = -8; x < 64; x += 8) {
+                            float v = 0.82f + r.nextFloat() * 0.3f;
+                            int bx0 = Math.max(0, x + off), bx1 = Math.min(64, x + off + 8);
+                            m.shade(bx0, y, bx1, y + 4, v);
+                            if (r.nextInt(9) == 0) m.tint(bx0, y, bx1, y + 4, 0xFF3A2A22, 0.18f);   // burnt brick
+                            m.shade(bx0, y + 1, bx1, y + 2, 1.06f);
+                        }
+                        m.rect(0, y, 64, y + 1, mortar);
+                        m.shade(0, y + 1, 64, y + 2, 0.9f);                                          // shadow under the mortar line
+                        for (int x = off; x < 64; x += 8) m.rect(x, y, x + 1, y + 4, mortar);
+                    }
+                    Photo.weather(m, 0.06f, seed);
+                }
+                break;
+            case PANEL:           // fibre-cement panels: recessed joints, fixings, a stone-like finish
+                m.grain(0, 0, 64, 64, 0.04f, 0.04f, seed);
+                Photo.weather(m, 0.06f, seed);
+                m.shade(0, 0, 64, 1, 0.68f); m.shade(0, 1, 64, 2, 1.08f);
+                m.shade(0, 0, 1, 64, 0.68f); m.shade(1, 0, 2, 64, 1.08f);
+                m.shade(32, 0, 33, 64, 0.72f); m.shade(33, 0, 34, 64, 1.06f);
+                for (int y = 6; y < 64; y += 26) for (int x = 6; x < 64; x += 26) m.set(x, y, mul(m.get(x, y), 0.7f));
+                break;
+            case PLASTER:         // traditional white plaster, a little sun-faded and rain-marked
                 m.grain(0, 0, 64, 64, 0.04f, 0.03f, seed);
+                Photo.weather(m, 0.07f, seed);
                 break;
             default:              // charred cedar boards (yakisugi)
                 m.grain(0, 0, 64, 64, 0.1f, 0.08f, seed);
@@ -78,8 +119,8 @@ public final class HouseTextures {
         m.fill(f);
         switch (k) {
             case FROSTED:
-                m.rect(2, 2, w - 2, h - 2, 0xFFC4CED4);
-                m.grain(2, 2, w - 2, h - 2, 0.02f, 0.04f, seed);
+                for (int y = 2; y < h - 2; y++) m.rect(2, y, w - 2, y + 1, mix(0xFFD4DCE2, 0xFFA8B4BC, (y - 2) / (float) (h - 4)));
+                m.grain(2, 2, w - 2, h - 2, 0.03f, 0.05f, seed);
                 m.rect(w / 2 - 1, 2, w / 2 + 1, h - 2, f);
                 break;
             case LATTICE:         // wooden grille (koshi) over dark glass
@@ -105,19 +146,23 @@ public final class HouseTextures {
                 break;
         }
         if (k == Window.GARDEN) { m.rect(0, h - 3, w, h, mul(f, 0.8f)); }
+        Photo.frame(m, 0, 0, w, h, 2, f);
         return m.texture();
     }
 
     private static void glass(Img m, int x0, int y0, int x1, int y1, int glass, int frame, Random r) {
-        m.rect(x0, y0, x1, y1, glass);
-        // sky reflection streak and curtains
-        for (int y = y0; y < y1; y++) for (int x = x0; x < x1; x++) if ((x - y + 40) % 23 < 3) m.px[y * m.w + x] = mix(0xFFDCE6EE, m.px[y * m.w + x], 0.6f);
-        if (r.nextBoolean()) {
+        Photo.glass(m, x0, y0, x1, y1, glass, r);
+        int k = r.nextInt(5);
+        if (k <= 1) {
             int cur = mix(0xFFE8E0D0, 0xFF000000 | r.nextInt(0xFFFFFF), 0.25f);
-            m.rect(x0, y0, x0 + (x1 - x0) / 4, y1, cur);
-            m.rect(x1 - (x1 - x0) / 4, y0, x1, y1, cur);
+            Photo.curtains(m, x0, y0, x1, y1, cur, 0.35f + r.nextFloat() * 0.4f, k == 0);
+        } else if (k == 2) {
+            Photo.blinds(m, x0, y0, x1, y1, mix(0xFFEDEBE4, glass, 0.2f), 0.2f + r.nextFloat() * 0.6f);
         }
-        m.rect((x0 + x1) / 2 - 1, y0, (x0 + x1) / 2 + 1, y1, frame);        // meeting rails of the sliding sashes
+        // meeting rails of the sliding sashes, with a lit edge
+        int mx = (x0 + x1) / 2;
+        m.rect(mx - 1, y0, mx + 1, y1, frame);
+        m.rect(mx - 1, y0, mx, y1, mul(frame, 1.15f));
     }
 
     public enum Door { WOOD, METAL, DARK, SLIDING_LATTICE, SLIDING_GLASS, GARAGE }
