@@ -12,6 +12,8 @@ public final class Ground {
     public static final int RES = 512, HCELLS = 8;
     public static final float TEXEL = TILE / RES, HCELL = TILE / HCELLS;
     public static final int MIPS = 7;
+    /** Cells per tile edge of the water map. */
+    public static final int WRES = 64;
 
     /** One painted tile: colour mips (lighting baked in) and its corner heights. */
     public static final class Tile {
@@ -24,6 +26,21 @@ public final class Ground {
         public final short[][] mips = new short[MIPS][];
         /** (HCELLS+1)^2 heights at the 8 m grid points (shared with the neighbouring tiles). */
         public final float[] h = new float[(HCELLS + 1) * (HCELLS + 1)];
+        /**
+         * Sea and beach, (WRES+1)^2 samples on the 1 m lattice (z down), or null on tiles with no coast: 0 is land
+         * the waves never reach, otherwise {@link #waterHeight} of the code is the sea-floor / sand
+         * height. The renderer animates the water over it (waves, swash, foam) every frame.
+         */
+        public byte[] water;
+
+        /** Height (m) of a water code: 1 = 0.6 m above sea level, rising codes go deeper (20 per metre). */
+        public static float waterHeight(int code) { return 0.6f - (code - 1) * 0.05f; }
+
+        /** Code for a ground height (0 above the reach of the waves). */
+        public static int waterCode(float h) {
+            if (h > 0.6f) return 0;
+            return 1 + Math.min(254, Math.round((0.6f - h) * 20f));
+        }
 
         public Tile(int cx, int cz, int[] base) {
             this.cx = cx;

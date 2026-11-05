@@ -199,7 +199,9 @@ final class GroundPainter {
                     // sea: shallows lighter, deeper water darker
                     c = world(lib.water, 4f, x, z);
                     float depth = Math.min(1f, -th / 4f);
-                    c = th > -0.4f ? Img.mix(world(lib.sand, 2f, x, z), c, Math.min(1f, (0.05f - th) / 0.45f)) : Img.mix(c, 0xFF1C4A6E, depth * 0.5f);
+                    // near the shore the sand runs on under the water: the renderer animates the sea over it
+                    c = th > -0.6f ? world(lib.sand, 2f, x, z)
+                            : th > -1.2f ? Img.mix(world(lib.sand, 2f, x, z), c, (-0.6f - th) / 0.6f) : Img.mix(c, 0xFF1C4A6E, depth * 0.5f);
                 } else {
                     Surface b = cell(grid, x - x0, z - z0);
                     if (city.urban(x, z))
@@ -254,6 +256,27 @@ final class GroundPainter {
                 out[py * RES + px] = 0xFF000000 | (r << 16) | (g << 8) | b;
             }
         Ground.Tile tile = new Ground.Tile(cx, cz, out);
+        // sea and beach for the animated water: the real (unclamped) ground height per metre
+        float hmin = Float.MAX_VALUE;
+        for (float v : h) hmin = Math.min(hmin, v);
+        if (hmin < 0.6f) {
+            // samples on the 1 m lattice corners (WRES+1 per side), so neighbouring tiles share their edges
+            int wn = Ground.WRES + 1;
+            byte[] wm = new byte[wn * wn];
+            float cellW = Ground.TILE / Ground.WRES;
+            boolean any = false;
+            for (int j = 0; j < wn; j++)
+                for (int i = 0; i < wn; i++) {
+                    float wx = x0 + i * cellW, wz = z0 + j * cellW;
+                    // the true terrain (not the 8 m grid) plus a little ripple in the sand: a natural waterline
+                    float th = terrain.natural(wx, wz) + (vn(wx / 4.3f, wz / 4.3f, 77) - 0.5f) * 0.07f
+                            + (vn(wx / 1.7f, wz / 1.7f, 78) - 0.5f) * 0.025f;
+                    int code = Ground.Tile.waterCode(th);
+                    wm[j * wn + i] = (byte) code;
+                    any |= code != 0;
+                }
+            if (any) tile.water = wm;
+        }
         // the sea is drawn as a flat surface at sea level
         for (int k = 0; k < h.length; k++) tile.h[k] = Math.max(h[k], -0.05f);
         return tile;

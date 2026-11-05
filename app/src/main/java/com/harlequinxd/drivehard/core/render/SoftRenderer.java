@@ -251,6 +251,7 @@ public final class SoftRenderer {
      */
     public void drawGround() {
         if (ground == null) { Arrays.fill(groundZ, 0f); return; }
+        updateWater();
         for (int k = 0; k < Ground.MIPS; k++) mipD[k] = Ground.TEXEL * focal * (1 << k) * 1.4f;
         // snapshot of the tiles in view range: per-pixel lookups index an array, no shared map
         int reach = (int) Math.ceil(far / Ground.TILE) + 1;
@@ -326,6 +327,200 @@ public final class SoftRenderer {
             ri >>= 3; gi >>= 3; bi >>= 3;
             groundLut[c] = 0xFF000000 | ((ri << 3 | ri >> 2) << 16) | ((gi << 3 | gi >> 2) << 8) | (bi << 3 | bi >> 2);
         }
+    }
+
+    // ------------------------------------------------------------------ animated sea
+
+    /*
+     * The sea is animated per pixel over the painted ground. Each coastal tile carries a 1 m map of
+     * the sea-floor / sand height; every frame the renderer builds one small tiling wave field
+     * (two drifting layers of swell plus ripples, lit by the sun with a glint, as brightness and
+     * highlight), and each water pixel then combines: colour by depth (turquoise shallows over sand,
+     * blue to navy offshore, the sand showing through the shallowest water), the wave lighting, the
+     * sky reflected more at grazing angles, breaking waves as foam bands rolling in toward the beach
+     * along the depth contours, and the swash: the water's edge runs up the sand after each breaker
+     * and slides back, leaving darker, glistening wet sand.
+     */
+    private static final int WN = 128, WMASK = WN - 1;
+    private static final float[] SWELL_A = new float[WN * WN], SWELL_B = new float[WN * WN], RIPPLE = new float[WN * WN];
+    private static final float[] FOAM = new float[WN * WN], ALONG = new float[64 * 64];
+    static {
+        for (int y = 0; y < WN; y++)
+            for (int x = 0; x < WN; x++) {
+                int i = y * WN + x;
+                SWELL_A[i] = com.harlequinxd.drivehard.core.tex.Noise.value(x, y, WN, WN, 4, 4, 5101) * 0.6f
+                        + com.harlequinxd.drivehard.core.tex.Noise.value(x, y, WN, WN, 8, 8, 5102) * 0.4f;
+                SWELL_B[i] = com.harlequinxd.drivehard.core.tex.Noise.value(x, y, WN, WN, 6, 6, 5103) * 0.7f
+                        + com.harlequinxd.drivehard.core.tex.Noise.value(x, y, WN, WN, 12, 12, 5104) * 0.3f;
+                RIPPLE[i] = com.harlequinxd.drivehard.core.tex.Noise.value(x, y, WN, WN, 24, 24, 5105) * 0.6f
+                        + com.harlequinxd.drivehard.core.tex.Noise.value(x, y, WN, WN, 48, 48, 5106) * 0.4f;
+                // foam: lacy cells, bright edges with holes
+                float f = com.harlequinxd.drivehard.core.tex.Noise.value(x, y, WN, WN, 16, 16, 5107) * 0.55f
+                        + com.harlequinxd.drivehard.core.tex.Noise.value(x, y, WN, WN, 32, 32, 5108) * 0.3f
+                        + com.harlequinxd.drivehard.core.tex.Noise.rnd(x, y, 5109) * 0.15f;
+                FOAM[i] = f;
+            }
+        for (int y = 0; y < 64; y++)
+            for (int x = 0; x < 64; x++)
+                ALONG[y * 64 + x] = com.harlequinxd.drivehard.core.tex.Noise.value(x, y, 64, 64, 8, 8, 5110);
+    }
+    /** This frame's wave field: brightness (256 = 1) and sun highlight (0..255), 16 m tiling. */
+    private final int[] waveMod = new int[WN * WN], waveSpec = new int[WN * WN];
+    private float seaChop = 1f;
+    private int seaSkyR, seaSkyG, seaSkyB;
+
+    private void updateWater() {
+        float t = time;
+        Environment e0 = env;
+        float wind = e0 == null ? 0.3f : Math.min(1f, 0.25f + e0.cloudCover * 0.5f + e0.rain * 0.6f);
+        seaChop = 0.7f + wind * 0.9f;
+        // two swells drifting in different directions, plus fast fine ripples
+        int ax = (int) (t * 9f), az = (int) (t * 5f), bx = (int) (-t * 6f), bz = (int) (t * 11f);
+        int rx2 = (int) (t * 23f), rz2 = (int) (-t * 17f);
+        float amp = seaChop;
+        // light: the sun (or a dim moon-ish sky light at night), viewer looking along the camera
+        float lx = sunX, ly = Math.max(0.15f, sunY), lz = sunZ;
+        float ll = (float) Math.sqrt(lx * lx + ly * ly + lz * lz);
+        lx /= ll; ly /= ll; lz /= ll;
+        float vx = -fx, vy = 0.45f, vz = -fz;
+        float vl = (float) Math.sqrt(vx * vx + vy * vy + vz * vz);
+        vx /= vl; vy /= vl; vz /= vl;
+        float hx = lx + vx, hy2 = ly + vy, hz = lz + vz;
+        float hl = (float) Math.sqrt(hx * hx + hy2 * hy2 + hz * hz);
+        hx /= hl; hy2 /= hl; hz /= hl;
+        float glint = e0 == null ? 1f : sunVis * (1f - e0.cloudCover * 0.7f);
+        for (int y = 0; y < WN; y++)
+            for (int x = 0; x < WN; x++) {
+                // height and its slope from the three layers (finite differences, wrapping)
+                float dX = field(x + 1, y, ax, az, bx, bz, rx2, rz2) - field(x - 1, y, ax, az, bx, bz, rx2, rz2);
+                float dZ = field(x, y + 1, ax, az, bx, bz, rx2, rz2) - field(x, y - 1, ax, az, bx, bz, rx2, rz2);
+                float nx = -dX * 2.2f * amp, nz = -dZ * 2.2f * amp, ny = 1f;
+                float nl = 1f / (float) Math.sqrt(nx * nx + 1f + nz * nz);
+                nx *= nl; ny *= nl; nz *= nl;
+                float diff = nx * lx + ny * ly + nz * lz;
+                int i = y * WN + x;
+                waveMod[i] = (int) (256f * (0.72f + 0.42f * diff));
+                float sp = nx * hx + ny * hy2 + nz * hz;
+                if (sp > 0.97f) {
+                    float g = (sp - 0.97f) / 0.03f;
+                    g *= g;
+                    waveSpec[i] = (int) Math.min(255f, g * 255f * glint);
+                } else waveSpec[i] = 0;
+            }
+        seaSkyR = (fogR * 3 + zenR) >> 2;
+        seaSkyG = (fogG * 3 + zenG) >> 2;
+        seaSkyB = (fogB * 3 + zenB) >> 2;
+    }
+
+    private static float field(int x, int y, int ax, int az, int bx, int bz, int rx, int rz) {
+        return SWELL_A[((y + az) & WMASK) * WN + ((x + ax) & WMASK)] * 0.55f
+                + SWELL_B[((y * 2 + bz) & WMASK) * WN + ((x * 2 + bx) & WMASK)] * 0.3f
+                + RIPPLE[((y * 3 + rz) & WMASK) * WN + ((x * 3 + rx) & WMASK)] * 0.15f;
+    }
+
+    /** Smooth along-shore phase offset (bilinear over a 37 m lattice), so breakers arrive unevenly. */
+    private static float along(float x, float z) {
+        float gx = x * (1f / 37f), gz = z * (1f / 37f);
+        int ix = (int) Math.floor(gx), iz = (int) Math.floor(gz);
+        float tx = gx - ix, tz = gz - iz;
+        tx = tx * tx * (3f - 2f * tx);
+        tz = tz * tz * (3f - 2f * tz);
+        float a = ALONG[(iz & 63) * 64 + (ix & 63)], b = ALONG[(iz & 63) * 64 + ((ix + 1) & 63)];
+        float c = ALONG[((iz + 1) & 63) * 64 + (ix & 63)], d = ALONG[((iz + 1) & 63) * 64 + ((ix + 1) & 63)];
+        float top = a + (b - a) * tx, bot = c + (d - c) * tx;
+        return top + (bot - top) * tz;
+    }
+
+    /** Water level at the beach right now: the swash after each breaker (m above sea level). */
+    private static float swash(float phase) {
+        float p = phase - (float) Math.floor(phase);
+        float r = p < 0.15f ? p / 0.15f : Math.max(0f, 1f - (p - 0.15f) / 0.55f);
+        return -0.03f + 0.24f * r * r * (3f - 2f * r);
+    }
+
+    /**
+     * The colour of a ground pixel that may be sea or beach; returns the painted colour c where
+     * the water does not reach.
+     */
+    private int water(TileCache tc, float x, float z, float dist, int c, int mip, int sx, int sy) {
+        byte[] wm = tc.t.water;
+        float fx2 = x - tc.x0, fz2 = z - tc.z0;
+        int ix = (int) fx2, iz = (int) fz2;
+        if (ix < 0) ix = 0; else if (ix > 63) ix = 63;
+        if (iz < 0) iz = 0; else if (iz > 63) iz = 63;
+        float tx = fx2 - ix, tz = fz2 - iz;
+        int o = iz * 65 + ix;
+        int a = wm[o] & 255, b = wm[o + 1] & 255, cc = wm[o + 65] & 255, d = wm[o + 66] & 255;
+        if ((a | b | cc | d) == 0) return c;
+        // land the waves never reach counts as a little above their reach
+        float ha = a == 0 ? 0.8f : Ground.Tile.waterHeight(a), hb = b == 0 ? 0.8f : Ground.Tile.waterHeight(b);
+        float hc = cc == 0 ? 0.8f : Ground.Tile.waterHeight(cc), hd = d == 0 ? 0.8f : Ground.Tile.waterHeight(d);
+        float top = ha + (hb - ha) * tx, bot = hc + (hd - hc) * tx;
+        float h = top + (bot - top) * tz;
+        if (h > 0.5f) return c;
+        // breakers roll in along the depth contours; the phase wanders along the shore
+        float along = along(x, z);
+        float t = time;
+        float phase0 = t * 0.11f + along * 2.3f;                  // one set of breakers every ~9 s
+        float level = swash(phase0);
+        int wi = ((((int) (z * 8f)) & WMASK) << 7) | (((int) (x * 8f)) & WMASK);
+        if (h >= level) {
+            // dry or wet sand: darker below the highest swash, glistening where the water just left
+            if (h < 0.24f) {
+                float wet = 1f - h / 0.24f;
+                int k = 256 - (int) (wet * 95f);
+                int r = ((c >> 16) & 255) * k >> 8, g = ((c >> 8) & 255) * k >> 8, bl = (c & 255) * k >> 8;
+                if (h < level + 0.05f) {
+                    int sh = 28 + (waveSpec[wi] >> 2);
+                    r += sh; g += sh; bl += sh;
+                }
+                return 0xFF000000 | (Math.min(255, r) << 16) | (Math.min(255, g) << 8) | Math.min(255, bl);
+            }
+            return c;
+        }
+        float depth = level - h;                                  // water depth over the sand / sea floor
+        // colour by depth: clear turquoise shallows to deep blue
+        int wr, wg, wb;
+        if (depth < 1.5f) { float k = depth / 1.5f; wr = (int) (64 + (30 - 64) * k); wg = (int) (196 + (150 - 196) * k); wb = (int) (190 + (178 - 190) * k); }
+        else if (depth < 6f) { float k = (depth - 1.5f) / 4.5f; wr = (int) (30 + (20 - 30) * k); wg = (int) (150 + (96 - 150) * k); wb = (int) (178 + (150 - 178) * k); }
+        else { float k = Math.min(1f, (depth - 6f) / 6f); wr = (int) (20 + (14 - 20) * k); wg = (int) (96 + (64 - 96) * k); wb = (int) (150 + (112 - 150) * k); }
+        // waves: lighting from this frame's field (calmer far away, where they would only shimmer)
+        int mod = waveMod[wi], spec = waveSpec[wi];
+        if (mip >= 1) { mod = 256 + ((mod - 256) >> mip); spec >>= mip; }
+        // daylight tint like the painted ground
+        wr = (wr * tR >> 8) * mod >> 8; wg = (wg * tG >> 8) * mod >> 8; wb = (wb * tB >> 8) * mod >> 8;
+        // sky reflection, stronger at grazing angles
+        float graze = (ey + 2f) / Math.max(1f, dist);
+        float refl = Math.max(0f, Math.min(0.62f, 0.7f - graze * 2.2f));
+        wr += (int) ((seaSkyR - wr) * refl); wg += (int) ((seaSkyG - wg) * refl); wb += (int) ((seaSkyB - wb) * refl);
+        // the sand shows through the shallowest water
+        float clear = 1f - Math.min(1f, depth / 0.7f);
+        if (clear > 0f) {
+            float k = clear * 0.75f;
+            wr += (int) ((((c >> 16) & 255) - wr) * k); wg += (int) ((((c >> 8) & 255) - wg) * k); wb += (int) (((c & 255) - wb) * k);
+        }
+        // foam: breaking crests rolling in, and lace at the water's edge
+        float foam = 0f;
+        if (depth < 4f) {
+            float ph = phase0 + depth * 0.32f;
+            float f = ph - (float) Math.floor(ph);
+            float crest = f < 0.1f ? 1f - f / 0.1f : (f > 0.96f ? (f - 0.96f) / 0.04f : 0f);
+            float wash = f < 0.35f ? (0.35f - f) / 0.35f * 0.35f : 0f;   // the white water behind each crest
+            foam = Math.max(crest, wash) * (1f - depth / 4f) * (0.55f + 0.45f * seaChop);
+        }
+        if (depth < 0.08f) foam = Math.max(foam, 0.85f * (1f - depth / 0.08f));
+        if (foam > 0f) {
+            int fi = ((((int) (z * 6f + t * 1.3f)) & WMASK) << 7) | (((int) (x * 6f)) & WMASK);
+            float lace = FOAM[fi];
+            float fa = Math.max(0f, Math.min(1f, (foam - (1f - lace) * 0.75f) * 2.2f));
+            if (mip >= 3) fa *= 0.6f;
+            int fr = 236 * tR >> 8, fg = 242 * tG >> 8, fb = 240 * tB >> 8;
+            wr += (int) ((fr - wr) * fa); wg += (int) ((fg - wg) * fa); wb += (int) ((fb - wb) * fa);
+            spec >>= 1;
+        }
+        wr += spec; wg += spec; wb += spec * 15 / 16;
+        int dth = BAYER[((sy & 3) << 2) | (sx & 3)] >> 1;
+        return q(Math.max(0, Math.min(255, wr)), Math.max(0, Math.min(255, wg)), Math.max(0, Math.min(255, wb)), dth);
     }
 
     /** Cloud density, 256x256, tiles (about 24 m per texel). */
@@ -478,6 +673,7 @@ public final class SoftRenderer {
             int k = base + y;
             colZ[k] = izc * 0.94f;
             int c = groundLut[groundColor(tc, px, pz, mip)];
+            if (tc.t != null && tc.t.water != null) c = water(tc, px, pz, dr, c, mip, x, y);
             if (dr <= fs) cf[k] = c;
             else {
                 int fv = (int) Math.min(256f, (dr - fs) * fogK * 256f);
