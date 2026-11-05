@@ -51,6 +51,7 @@ public final class RoadNetwork implements java.io.Serializable {
         List<RoadEdge> fw = new ArrayList<>();
         network(fw);
         for (RoadEdge f : fw) interchanges(f);
+        bridgeInterchanges();
         router = null;
         resolveCrossings();
         profiles();
@@ -1017,7 +1018,19 @@ public final class RoadNetwork implements java.io.Serializable {
         return out;
     }
 
-    /** Diamond interchanges every ~9 km: one-way slip roads to junctions either side of the freeway. */
+    /** Where interchanges are, so new ones keep their distance. */
+    private final List<float[]> interchangeSpots = new ArrayList<>();
+
+    /** Ramp terminals sit this far either side of the freeway's centreline, on the crossroad. */
+    private static final float IC_SIDE = 100f;
+    /** The slip roads leave and join the freeway this far before and after the crossroad. */
+    private static final float IC_REACH = 340f;
+
+    /**
+     * Diamond interchanges every ~8-11 km: a crossroad bridges the freeway, and four one-way slip
+     * roads join it at junctions either side: off the freeway along a deceleration lane, up to
+     * the crossroad, and from it back down along an acceleration lane to merge.
+     */
     private void interchanges(RoadEdge f) {
         List<Float> spots = new ArrayList<>();
         for (float s = 5000f; s < f.len - 3000f; s += 8000f + Noise.rnd(f.id, (int) s, seed + 800) * 3000f) spots.add(s);
@@ -1029,18 +1042,15 @@ public final class RoadNetwork implements java.io.Serializable {
             cur.point(sc, p);
             float px = p[0], pz = p[1], tx = p[3], tz = p[4];
             float lx = tz, lz = -tx;              // left of travel a→b
-            int nUp = splitAt(cur, sc + 260f, RoadNode.Kind.SPLIT);   // later piece
-            int nDn = splitAt(cur, sc - 260f, RoadNode.Kind.SPLIT);
-            RoadNode up = nodes.get(nUp), dn = nodes.get(nDn);
-            float lane = RoadClass.FREEWAY.median + (RoadClass.FREEWAY.lanes - 0.5f) * RoadClass.FREEWAY.laneW;
-            RoadNode tL = addNode(px + lx * 85f, pz + lz * 85f, RoadNode.Kind.JUNCTION);
-            RoadNode tR = addNode(px - lx * 85f, pz - lz * 85f, RoadNode.Kind.JUNCTION);
-            // a→b travel (left side): off-ramp at dn, on-ramp to up
-            ramp(dn, tL, lx, lz, tx, tz, lane, true);
-            ramp(up, tL, lx, lz, tx, tz, lane, false);
-            // b→a travel (right side): off at up, on to dn
-            ramp(up, tR, -lx, -lz, -tx, -tz, lane, true);
-            ramp(dn, tR, -lx, -lz, -tx, -tz, lane, false);
+            RoadNode tL = addNode(px + lx * IC_SIDE, pz + lz * IC_SIDE, RoadNode.Kind.JUNCTION);
+            RoadNode tR = addNode(px - lx * IC_SIDE, pz - lz * IC_SIDE, RoadNode.Kind.JUNCTION);
+            // the crossroad over the freeway (it becomes a bridge where it crosses)
+            List<float[]> wp = new ArrayList<>();
+            wp.add(new float[]{tR.x, tR.z});
+            wp.add(new float[]{tL.x, tL.z});
+            float[][] pl = spline(wp, RoadClass.COUNTRY.step);
+            addEdge(RoadClass.COUNTRY, tR.id, tL.id, pl[0], pl[1]);
+            diamond(cur, sc, tL, tR);
             // a town just off the exit on one side (where there is room), the other side heads to the nearest village
             boolean townL = exitTown(tL, lx, lz), townR = !townL && exitTown(tR, -lx, -lz);
             if (!townL) linkToVillage(tL.id, RoadClass.COUNTRY, lx, lz);
@@ -1049,16 +1059,120 @@ public final class RoadNetwork implements java.io.Serializable {
     }
 
     /**
+     * The four slip roads of a diamond at distance {@code sc} along freeway piece {@code f},
+     * joining terminals tL (left of a→b travel) and tR on the crossroad. Splits the freeway
+     * where the slip roads leave and join it (the piece before stays {@code f}).
+     */
+    private void diamond(RoadEdge f, float sc, RoadNode tL, RoadNode tR) {
+        float[] p = new float[5];
+        f.point(sc, p);
+        float tx = p[3], tz = p[4], lx = tz, lz = -tx;
+        interchangeSpots.add(new float[]{p[0], p[1]});
+        int nUp = splitAt(f, sc + IC_REACH, RoadNode.Kind.SPLIT);   // later piece
+        int nDn = splitAt(f, sc - IC_REACH, RoadNode.Kind.SPLIT);
+        RoadNode up = nodes.get(nUp), dn = nodes.get(nDn);
+        float lane = RoadClass.FREEWAY.median + (RoadClass.FREEWAY.lanes - 0.5f) * RoadClass.FREEWAY.laneW;
+        // traffic keeps left: a→b travel uses the left carriageway, off at dn, back on at up
+        ramp(dn, tL, lx, lz, tx, tz, lane, true);
+        ramp(up, tL, lx, lz, tx, tz, lane, false);
+        // b→a travel: off at up, on at dn
+        ramp(up, tR, -lx, -lz, -tx, -tz, lane, true);
+        ramp(dn, tR, -lx, -lz, -tx, -tz, lane, false);
+    }
+
+    /**
+     * Interchanges where a highway or country road already bridges a freeway, so you can get on
+     * and off there too: the road becomes the crossroad of a diamond. Skipped where the road
+     * crosses too obliquely, too near another interchange or the freeway's end.
+     */
+    private void bridgeInterchanges() {
+        // grid of freeway segments
+        HashMap<Long, List<int[]>> grid = new HashMap<>();
+        for (RoadEdge e : edges) {
+            if (e.cls != RoadClass.FREEWAY) continue;
+            for (int i = 0; i < e.count() - 1; i++) {
+                long key = cellKey(e.x[i], e.z[i]);
+                grid.computeIfAbsent(key, k -> new ArrayList<>()).add(new int[]{e.id, i});
+                long key2 = cellKey(e.x[i + 1], e.z[i + 1]);
+                if (key2 != key) grid.computeIfAbsent(key2, k -> new ArrayList<>()).add(new int[]{e.id, i});
+            }
+        }
+        // crossings of highways and country roads with them
+        List<float[]> hits = new ArrayList<>();      // x, z, freeway origin, road origin
+        int nEdges = edges.size();
+        for (int ri = 0; ri < nEdges; ri++) {
+            RoadEdge r = edges.get(ri);
+            if (r.cls != RoadClass.HIGHWAY && r.cls != RoadClass.COUNTRY) continue;
+            for (int i = 0; i < r.count() - 1; i++) {
+                List<int[]> list = grid.get(cellKey(r.x[i], r.z[i]));
+                if (list == null) continue;
+                for (int[] fs : list) {
+                    RoadEdge f = edges.get(fs[0]);
+                    float[] h = intersect(r.x[i], r.z[i], r.x[i + 1], r.z[i + 1], f.x[fs[1]], f.z[fs[1]], f.x[fs[1] + 1], f.z[fs[1] + 1]);
+                    if (h != null) hits.add(new float[]{h[0], h[1], f.origin, r.origin});
+                }
+            }
+        }
+        float[] p = new float[5], q = new float[5];
+        for (float[] h : hits) {
+            boolean crowded = false;
+            for (float[] s : interchangeSpots) if (Math.hypot(s[0] - h[0], s[1] - h[1]) < 3000f) { crowded = true; break; }
+            if (crowded) continue;
+            RoadEdge f = pieceNear(h[0], h[1], (int) h[2]), r = pieceNear(h[0], h[1], (int) h[3]);
+            if (f == null || r == null || f.cls != RoadClass.FREEWAY) continue;
+            float sf = project(f, h[0], h[1]), sr = project(r, h[0], h[1]);
+            if (sf < IC_REACH + 80f || sf > f.len - IC_REACH - 80f) continue;
+            if (nearEnd(f, h[0], h[1], 1200f)) continue;
+            f.point(sf, p);
+            r.point(sr, q);
+            float tx = p[3], tz = p[4], lx = tz, lz = -tx;
+            float sin = Math.abs(tx * q[4] - tz * q[3]);
+            if (sin < 0.75f) continue;                    // too oblique for a tidy diamond
+            float dd = IC_SIDE / sin;
+            if (sr - dd < 40f || sr + dd > r.len - 40f) continue;
+            // the road's own bends: the terminals must really be ~100 m either side
+            float[] a0 = new float[5], a1 = new float[5];
+            r.point(sr + dd, a0);
+            r.point(sr - dd, a1);
+            float side0 = (a0[0] - p[0]) * lx + (a0[1] - p[1]) * lz, side1 = (a1[0] - p[0]) * lx + (a1[1] - p[1]) * lz;
+            if (Math.abs(Math.abs(side0) - IC_SIDE) > 25f || Math.abs(Math.abs(side1) - IC_SIDE) > 25f || side0 * side1 > 0) continue;
+            int hi = splitAt(r, sr + dd, RoadNode.Kind.JUNCTION);
+            int lo = splitAt(r, sr - dd, RoadNode.Kind.JUNCTION);
+            RoadNode tL = nodes.get(side0 > 0 ? hi : lo), tR = nodes.get(side0 > 0 ? lo : hi);
+            diamond(f, sf, tL, tR);
+            bridgeIcCount++;
+        }
+    }
+
+    public int bridgeIcCount;
+
+    private static long cellKey(float x, float z) {
+        return ((long) Math.floor(x / 256f) << 32) ^ ((long) Math.floor(z / 256f) & 0xFFFFFFFFL);
+    }
+
+    /** True if (x, z) is within {@code r} of the end of the freeway that {@code f} is part of. */
+    private boolean nearEnd(RoadEdge f, float x, float z, float r) {
+        for (RoadNode n : nodes)
+            if (n.kind == RoadNode.Kind.END && Math.hypot(n.x - x, n.z - z) < r) return true;
+        return false;
+    }
+
+    /**
      * One-way slip road between freeway node fn and terminal t on side (sx,sz) of travel (hx,hz).
-     * off: freeway→terminal (diverging forward); else terminal→freeway (merging forward).
+     * off: freeway→terminal; else terminal→freeway. Leaving, it first runs alongside the freeway
+     * (the deceleration lane) before curving away and up to the crossroad, which it meets at a
+     * right angle to the freeway; joining, the mirror image (an acceleration lane to merge).
      */
     private void ramp(RoadNode fn, RoadNode t, float sx, float sz, float hx, float hz, float lane, boolean off) {
         float ox = fn.x + sx * lane, oz = fn.z + sz * lane;
+        // how far along the freeway the terminal is from where the slip road meets it
+        float along = Math.abs((t.x - ox) * hx + (t.z - oz) * hz);
+        float run = Math.min(190f, along * 0.55f), approach = Math.min(120f, along * 0.35f);
         float[][] pl;
-        // the slip roads meet the crossroad at right angles to each other: the exit arrives from
-        // behind, the entry leaves forward
-        if (off) pl = bezier(ox, oz, ox + hx * 140f, oz + hz * 140f, t.x - (sx + hx) * 32f, t.z - (sz + hz) * 32f, t.x, t.z, RoadClass.RAMP.step);
-        else pl = bezier(t.x, t.z, t.x - (sx - hx) * 32f, t.z - (sz - hz) * 32f, ox - hx * 140f, oz - hz * 140f, ox, oz, RoadClass.RAMP.step);
+        if (off) pl = bezier(ox, oz, ox + hx * run + sx * 2f, oz + hz * run + sz * 2f,
+                t.x - hx * approach, t.z - hz * approach, t.x, t.z, RoadClass.RAMP.step);
+        else pl = bezier(t.x, t.z, t.x + hx * approach, t.z + hz * approach,
+                ox - hx * run + sx * 2f, oz - hz * run + sz * 2f, ox, oz, RoadClass.RAMP.step);
         // the slip road starts/ends on the freeway's kerb lane (a taper), not at the node centre
         RoadEdge e = off ? addEdge(RoadClass.RAMP, fn.id, t.id, pl[0], pl[1]) : addEdge(RoadClass.RAMP, t.id, fn.id, pl[0], pl[1]);
         e.rampSide = lane;
