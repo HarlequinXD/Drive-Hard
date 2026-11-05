@@ -55,6 +55,47 @@ public final class Game {
     private float popT, popX0, popY0, popZ0;
     private float camIdle;
     private final float[] door = new float[2];
+    private float camSurge, camSway;
+
+    // ------------------------------------------------------------------ skid marks
+    private static final int SKIDS = 640;
+    private final float[] skidX = new float[SKIDS], skidZ = new float[SKIDS], skidY = new float[SKIDS], skidYaw = new float[SKIDS];
+    private int skidHead, skidCount;
+    private float skidRun;
+
+    /** Lays rubber behind sliding or spinning tyres. */
+    private void dropSkids(float dt) {
+        Vehicle v = vehicle;
+        float sp = (float) Math.hypot(v.vx, v.vz);
+        boolean rear = v.slipRear > 0.45f, front = v.slipFront > 0.55f;
+        if ((!rear && !front) || sp < 2f) { skidRun = 0.18f; return; }
+        skidRun += sp * dt;
+        if (skidRun < 0.18f) return;
+        skidRun = 0f;
+        float fx = v.fx(), fz = v.fz(), rx = -fz, rz = fx;
+        float travel = (float) Math.atan2(v.vx, v.vz);
+        for (int axle = 0; axle < 2; axle++) {
+            if (axle == 0 ? !rear : !front) continue;
+            float along = (axle == 0 ? -0.31f : 0.31f) * v.len;
+            for (int side = -1; side <= 1; side += 2) {
+                int i = skidHead;
+                skidHead = (skidHead + 1) % SKIDS;
+                skidCount = Math.min(SKIDS, skidCount + 1);
+                skidX[i] = v.x + fx * along + rx * side * v.wid * 0.38f;
+                skidZ[i] = v.z + fz * along + rz * side * v.wid * 0.38f;
+                skidY[i] = v.y;
+                skidYaw[i] = travel;
+            }
+        }
+    }
+
+    private void drawSkids(Renderer r) {
+        for (int k = 0; k < skidCount; k++) {
+            if (!r.boxVisible(skidX[k] - 1, skidY[k], skidZ[k] - 1, skidX[k] + 1, skidY[k] + 0.2f, skidZ[k] + 1)) continue;
+            r.groundQuadRotated(lib.shadow, skidX[k], skidY[k] + 0.02f, skidZ[k], 0.32f, 0.12f, skidYaw[k],
+                    SoftRenderer.MODE_SHADOW, SoftRenderer.L_SHADOW);
+        }
+    }
     private final List<Vehicle> trafficObstacles = new ArrayList<>();
     public final boolean lowMemory;
     public final SpriteSheet lamps, signals, umbrellas, poles;
@@ -184,7 +225,7 @@ public final class Game {
             traffic.boxesNear(x, z, out);
             for (Vehicle v : parked) {
                 float dx = v.x - x, dz = v.z - z;
-                if (dx * dx + dz * dz < 64f) out.add(v.box());
+                if (dx * dx + dz * dz < 64f) v.boxes(out);
             }
         };
         player = new Player(city.spawnX, city.spawnZ);
@@ -359,6 +400,19 @@ public final class Game {
         float fx = mode == Mode.DRIVING || mode == Mode.ENTERING ? vehicle.x : player.x;
         float fz = mode == Mode.DRIVING || mode == Mode.ENTERING ? vehicle.z : player.z;
         float fy = mode == Mode.DRIVING || mode == Mode.ENTERING ? vehicle.y : player.y;
+        if (mode == Mode.DRIVING) {
+            // the camera rides on the car's weight: it drops back as the car pulls away and
+            // surges forward under braking, and swings out a little in corners
+            float k = Math.min(1f, dt * 4f);
+            float wantSurge = Math.max(-0.9f, Math.min(0.9f, vehicle.pitch * 0.09f));
+            float wantSway = Math.max(-0.7f, Math.min(0.7f, vehicle.roll * 0.06f));
+            camSurge += (wantSurge - camSurge) * k;
+            camSway += (wantSway - camSway) * k;
+            float vf = vehicle.fx(), vfz = vehicle.fz();
+            fx += vf * camSurge + -vfz * camSway;
+            fz += vfz * camSurge + vf * camSway;
+            dropSkids(dt);
+        } else { camSurge = camSway = 0f; }
         cam.update(fx, fy, fz, dt);
         cameraCollision();
     }
@@ -370,7 +424,18 @@ public final class Game {
         cam.distance += (wantDist - cam.distance) * Math.min(1f, dt * 3f);
         cam.targetHeight += ((driving ? 1.5f : player.swimming ? 0.55f : 1.1f) - cam.targetHeight) * Math.min(1f, dt * 3f);
         if (driving && camIdle > 0.8f && Math.abs(vehicle.speed) > 1f) {
-            float behind = vehicle.yaw + (float) Math.PI;
+            // look down the direction of travel: in a slide the camera follows where the car is
+            // going, and you watch the body swing out sideways
+            float heading = vehicle.yaw;
+            float sp = (float) Math.hypot(vehicle.vx, vehicle.vz);
+            if (sp > 4f && vehicle.speed > 0f) {
+                float travel = (float) Math.atan2(vehicle.vx, vehicle.vz);
+                float d = travel - heading;
+                while (d > Math.PI) d -= (float) (2 * Math.PI);
+                while (d < -Math.PI) d += (float) (2 * Math.PI);
+                heading += d * 0.6f;
+            }
+            float behind = heading + (float) Math.PI;
             float diff = behind - cam.yaw;
             while (diff > Math.PI) diff -= (float) (2 * Math.PI);
             while (diff < -Math.PI) diff += (float) (2 * Math.PI);
@@ -446,8 +511,8 @@ public final class Game {
         city.chunks.loadAllNow(x, z, progress == null ? null
                 : (what, done) -> progress.step("Building the streets of " + destination.name, 0.08f + done * 0.9f));
         if (driving() && vehicle != null) {
-            vehicle.speed = 0f;
             vehicle.x = x; vehicle.z = z; vehicle.yaw = yaw;
+            vehicle.setSpeed(0f);
             vehicle.y = city.surface(x, z) + 0.05f;
             player.x = x; player.z = z; player.y = vehicle.y;
         } else {
@@ -544,6 +609,7 @@ public final class Game {
         float[] spot = null;
         for (float[] t : tries) if (spotFree(t[0], t[1], v)) { spot = t; break; }
         if (spot == null) return;   // boxed in: stay in the car
+        v.parkingBrake = true;
         parked.add(v);
         while (parked.size() > MAX_PARKED) {
             // forget the farthest parked car
@@ -633,6 +699,7 @@ public final class Game {
             }
             drawSprites(c, r, terrain);
         }
+        drawSkids(r);
         drawTraffic(r);
         drawPedestrians(r);
         for (Vehicle v : parked) drawVehicle(r, v);
