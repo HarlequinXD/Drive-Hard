@@ -182,7 +182,7 @@ public final class HouseKits {
             int dm = p.wideDoor ? 2 : 1;
             int at = p.doorLeft ? 1 : mods - 1 - dm;
             at = Math.max(0, Math.min(mods - dm, at));
-            float c = margin + (at + dm * 0.5f) * MODULE, half = p.wideDoor ? 0.85f : 0.5f;
+            float c = margin + (at + dm * 0.5f) * MODULE, half = p.wideDoor ? 0.95f : 0.6f;
             out.add(new float[]{3, c - half, c + half, 0f, 2.1f});
             for (int i = Math.max(0, at - 1); i < Math.min(mods, at + dm + 1); i++) used[i] = true;
         }
@@ -206,17 +206,18 @@ public final class HouseKits {
         while (i < mods - 1) {
             if (used[i]) { i++; continue; }
             float roll = r.nextFloat();
-            boolean two = i + 1 < mods - 1 && !used[i + 1] && (!side || roll < 0.2f);
+            // windows are two modules wide (about 1.6 m): where only one module is free, a small
+            // square window instead - never a tall slot
+            boolean two = i + 1 < mods - 1 && !used[i + 1];
             int kind;
             if (side) {
-                if (roll > 0.5f) { i++; continue; }
-                kind = roll < 0.25f ? 1 : 0;
+                if (roll > 0.55f) { i++; continue; }
+                kind = roll < 0.25f || !two ? 1 : 0;
             } else if (f == BACK && st == 0 && two && roll < 0.55f) kind = 2;
-            else if (roll < 0.12f) { kind = 1; two = false; }
+            else if (roll < 0.12f || !two) kind = 1;
             else kind = 0;
-            if (kind == 0 && !two && !side && r.nextBoolean()) { i++; continue; }
-            int span = kind == 1 ? 1 : (two ? 2 : 1);
-            float inset = kind == 1 ? 0.2f : 0.1f;
+            int span = kind == 1 ? 1 : 2;
+            float inset = kind == 1 ? 0.15f : 0.1f;
             float y0 = kind == 1 ? 1.2f : kind == 2 ? 0.05f : winBot, y1 = kind == 1 ? 1.8f : 2.0f;
             out.add(new float[]{kind, margin + i * MODULE + inset, margin + (i + span) * MODULE - inset, y0, y1});
             i += span + 1;
