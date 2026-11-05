@@ -117,7 +117,10 @@ public final class Game {
     public final Pedestrians pedestrians;
     private final SpriteCache.Entry[] flora = new SpriteCache.Entry[Flora.values().length];
     private final SpriteCache.Entry[] carEntries = new SpriteCache.Entry[Cars.STYLES];
-    private final SpriteCache.Entry[] pedEntries = new SpriteCache.Entry[100];
+    /** Pedestrian puppets, built the first time each of the 100 looks is needed; their atlases fill reserved texture slots. */
+    public static final int PED_STYLES = 100;
+    private final com.harlequinxd.drivehard.core.model.Puppet[] pedPuppets = new com.harlequinxd.drivehard.core.model.Puppet[PED_STYLES];
+    private int pedTexBase;
     private final Random rnd = new Random(7);
     public Renderer renderer;
     private final float[] move = new float[2];
@@ -209,7 +212,9 @@ public final class Game {
         signalTex = addTexture(Texture.padded(signals.pixels, signals.width, signals.height));
         umbrellaTex = addTexture(Texture.padded(umbrellas.pixels, umbrellas.width, umbrellas.height));
         poleTex = addTexture(Texture.padded(poles.pixels, poles.width, poles.height));
-        cache = new SpriteCache(textures, nextTex, new int[]{0, lowMemory ? 10 : CAR_CACHE, lowMemory ? 10 : PED_CACHE, 1});
+        pedTexBase = nextTex;
+        nextTex += PED_STYLES;
+        cache = new SpriteCache(textures, nextTex, new int[]{0, lowMemory ? 10 : CAR_CACHE, 0, 1});
         // plants bake in the background, most common species first
         Flora[] order = {Flora.GINKGO, Flora.ZELKOVA, Flora.SAKURA, Flora.BLACK_PINE, Flora.MAPLE, Flora.CEDAR,
                 Flora.CAMPHOR, Flora.BAMBOO, Flora.AZALEA, Flora.BOXWOOD, Flora.CAMELLIA, Flora.HYDRANGEA};
@@ -218,7 +223,11 @@ public final class Game {
             flora[f.ordinal()] = cache.get("flora:" + f, GROUP_FLORA, i, () -> PropSprites.flora(f));
         }
         traffic = new Traffic(city, r -> pickReady(carEntries, r));
-        pedestrians = new Pedestrians(city, r -> pickReady(pedEntries, r));
+        pedestrians = new Pedestrians(city, r -> {
+            int st = r.nextInt(PED_STYLES);
+            pedPuppet(st);
+            return st;
+        });
         traffic.obstacles = trafficObstacles;
         traffic.autoDensity = true;
         city.dynamic = (x, z, out) -> {
@@ -245,7 +254,7 @@ public final class Game {
         city.chunks.loadRadius = lowMemory ? 140f : 165f;
         city.chunks.unloadRadius = lowMemory ? 170f : 210f;
         city.chunks.start();
-        for (int i = 0; i < 6; i++) { requestCar(); requestPed(); }
+        for (int i = 0; i < 6; i++) requestCar();
         cache.start();
         if (progress != null) progress.step("Ready", 1f);
     }
@@ -296,16 +305,23 @@ public final class Game {
         return carEntries[s] = cache.get("car:" + s, GROUP_CARS, 50, () -> PropSprites.car(s));
     }
 
-    private SpriteCache.Entry ped(int style) {
-        final int s = style;
-        return pedEntries[s] = cache.get("ped:" + s, GROUP_PEDS, 40, () -> PropSprites.pedestrian(s));
+    /** The puppet for one of the pedestrian looks (built on first use: a few milliseconds). */
+    private com.harlequinxd.drivehard.core.model.Puppet pedPuppet(int style) {
+        com.harlequinxd.drivehard.core.model.Puppet p = pedPuppets[style];
+        if (p == null) {
+            p = new com.harlequinxd.drivehard.core.model.Puppet(com.harlequinxd.drivehard.core.model.CharacterSpec.randomPedestrian(style));
+            p.tex = pedTexBase + style;
+            textures[p.tex] = p.atlas;
+            pedPuppets[style] = p;
+        }
+        return p;
     }
 
     public void requestCar() { car(rnd.nextInt(Cars.STYLES)); }
 
     /** Starts baking one car style's sprites (tools, previews). */
     public void requestCarStyle(int style) { car(Math.floorMod(style, Cars.STYLES)); }
-    public void requestPed() { ped(rnd.nextInt(100)); }
+    public void requestPed() { pedPuppet(rnd.nextInt(PED_STYLES)); }
 
     // ------------------------------------------------------------------ update
 
@@ -322,7 +338,14 @@ public final class Game {
      */
     public void update(float dt, float stickX, float stickY, float dYaw, float dPitch, boolean jump,
                        float steer, float gas, float reverse, boolean carButton) {
+        update(dt, stickX, stickY, dYaw, dPitch, jump, steer, gas, reverse, carButton, false);
+    }
+
+    /** As above, with the handbrake held (driving: locks the rear wheels). */
+    public void update(float dt, float stickX, float stickY, float dYaw, float dPitch, boolean jump,
+                       float steer, float gas, float reverse, boolean carButton, boolean handbrake) {
         time += dt;
+        if (vehicle != null) vehicle.handbrake = handbrake && mode == Mode.DRIVING;
         env.update(dt);
         cache.update();
         updatePlace(dt);
@@ -330,20 +353,17 @@ public final class Game {
         for (Traffic.Car c : traffic.cars) if (carEntries[c.style] != null) cache.touch(carEntries[c.style]);
         if (vehicle != null && carEntries[vehicle.style] != null) cache.touch(carEntries[vehicle.style]);
         for (Vehicle v : parked) if (carEntries[v.style] != null) cache.touch(carEntries[v.style]);
-        for (Pedestrians.Ped p : pedestrians.peds) if (pedEntries[p.style] != null) cache.touch(pedEntries[p.style]);
         rotateTimer -= dt;
         if (rotateTimer <= 0f) {
             rotateTimer = 1.5f;
-            boolean full = cache.readyCount(GROUP_CARS) >= CAR_CACHE && cache.readyCount(GROUP_PEDS) >= PED_CACHE;
+            boolean full = cache.readyCount(GROUP_CARS) >= CAR_CACHE;
             if (full) rotateTimer = 8f;           // once the cache is full, new styles trickle in slowly (baking costs CPU)
             if (cache.queuedCount() < 3) {
                 if (cache.readyCount(GROUP_CARS) < CAR_CACHE || rnd.nextInt(4) == 0) requestCar();
-                if (cache.readyCount(GROUP_PEDS) < PED_CACHE || rnd.nextInt(4) == 0) requestPed();
             }
         }
         // forget evicted styles (cars/peds using them are re-requested when seen again)
         for (int i = 0; i < carEntries.length; i++) if (carEntries[i] != null && !cache.alive(carEntries[i])) carEntries[i] = null;
-        for (int i = 0; i < pedEntries.length; i++) if (pedEntries[i] != null && !cache.alive(pedEntries[i])) pedEntries[i] = null;
 
         city.chunks.update(player.x, player.z);
         city.chunks.ensureAround(player.x, player.z);
@@ -610,6 +630,7 @@ public final class Game {
         for (float[] t : tries) if (spotFree(t[0], t[1], v)) { spot = t; break; }
         if (spot == null) return;   // boxed in: stay in the car
         v.parkingBrake = true;
+        v.handbrake = false;
         parked.add(v);
         while (parked.size() > MAX_PARKED) {
             // forget the farthest parked car
@@ -909,15 +930,15 @@ public final class Game {
         for (Pedestrians.Ped p : pedestrians.peds) {
             float dx = p.x - r.ex, dz = p.z - r.ez;
             if (dx * dx + dz * dz > lim) continue;
-            SpriteCache.Entry e = pedEntries[p.style];
-            if (e == null) e = ped(p.style);
-            if (!e.ready()) continue;
             if (!r.boxVisible(p.x - 0.5f, p.y, p.z - 0.5f, p.x + 0.5f, p.y + 2f, p.z + 0.5f)) continue;
-            SpriteSheet s = e.sheet;
-            int frame = p.state == Pedestrians.WAIT ? ((int) (p.idleTime * 1.6f)) % 4 : 4 + ((int) (p.phase * 8)) % 8;
+            com.harlequinxd.drivehard.core.model.Puppet pp = pedPuppet(p.style);
             r.groundQuad(lib.shadow, p.x, p.y + 0.02f, p.z, 0.32f, SoftRenderer.MODE_SHADOW, SoftRenderer.L_SHADOW);
-            float viewYaw = (float) Math.atan2(r.ex - p.x, r.ez - p.z);
-            sprite(r, e.tex, s, s.directionFor(p.yaw, viewYaw), frame, p.x, p.y, p.z, -0.7f);
+            // the same skeleton and animations as the player: idling at a crossing, or mid-stride
+            boolean waiting = p.state == Pedestrians.WAIT;
+            float ph = waiting ? p.idleTime * 1.6f / Animations.Anim.IDLE.frames : p.phase;
+            ph -= (float) Math.floor(ph);
+            Pose pose = Animations.poseAt(waiting ? Animations.Anim.IDLE : Animations.Anim.WALK, ph, 0);
+            pp.draw(r, p.x, p.y, p.z, p.yaw, pose, -1e9f, -0.7f);
             pedsDrawn++;
         }
     }

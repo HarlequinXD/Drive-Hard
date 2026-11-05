@@ -303,6 +303,8 @@ public final class Puppet {
         final float bias;
         /** Rounded, outlined ends (the far end is the top row). */
         boolean capTop, capBottom;
+        /** Drawn width against the art's own (build, and the body's scale). */
+        float width = 1f;
         int[][] rect;           // per drawn view: x, y, w, h in the atlas
 
         Part(int bone, int kind, float[] a, float[] b, int padTop, int padBottom, int viewBone, float bias) {
@@ -316,19 +318,48 @@ public final class Puppet {
     public final Texture atlas;
     /** The atlas's slot in the renderer's texture table (set by the game). */
     public int tex = -1;
+    /** Body scale against the reference 1.68 m woman (parts are placed and sized by it). */
+    private final float k;
+    /** Colour of each art letter. */
+    private final int[] palette = new int[128];
 
-    public Puppet() {
-        rig = new CharacterModel(CharacterSpec.player());
-        // atlas: every view of every part in one texture, a transparent pixel between them
+    /** The player: black ponytail, blue eyes, white tank top, jeans, white trainers. */
+    public Puppet() { this(null); }
+
+    /**
+     * A pedestrian dressed from a {@link CharacterSpec}: the player's hand-pixelled parts are the
+     * templates, recoloured and reshaped for the hair style, hat, face, clothes and build.
+     */
+    public Puppet(CharacterSpec spec) {
+        rig = new CharacterModel(spec == null ? CharacterSpec.player() : spec, false);
+        k = spec == null ? 1f : rig.scale();
+        for (char c = 0; c < 128; c++) palette[c] = pal(c);
+        if (spec != null) colours(spec);
+        boolean male = spec != null && !spec.female;
+        float girth = spec == null ? 1f : 1f + spec.build * 0.3f;
+        float bodyW = girth * (male ? 1.1f : 1f), limbW = spec == null ? 1f : 1f + spec.build * 0.22f;
+        CharacterSpec.Hair hair = spec == null ? CharacterSpec.Hair.PONYTAIL : spec.hair;
+
         List<String[]> arts = new ArrayList<>();
-        Part head = add(CharacterModel.HEAD, SEG, v(0, -0.07f, 0), v(0, 0.245f, 0), 0, 0, CharacterModel.HEAD, -0.03f);
-        arts.add(HEAD);
-        Part pony = add(CharacterModel.PONY, SEG, v(0, 0.01f, 0), v(0, -0.21f, 0), 0, 0, CharacterModel.HEAD, 0.04f);
-        arts.add(PONY);
-        Part torso = add(CharacterModel.CHEST, SEG, v(0, -0.02f, 0), v(0, 0.42f, 0), 0, 0, CharacterModel.CHEST, 0.03f);
-        arts.add(TORSO);
-        Part hips = add(CharacterModel.PELVIS, SEG, v(0, -0.155f, 0), v(0, 0.085f, 0), 0, 0, CharacterModel.PELVIS, 0.04f);
-        arts.add(HIPS);
+        add(CharacterModel.HEAD, SEG, v(0, -0.07f, 0), v(0, 0.245f, 0), CharacterModel.HEAD, -0.03f, 1f);
+        arts.add(spec == null ? HEAD : headArt(spec));
+        if (hair == CharacterSpec.Hair.PONYTAIL) {
+            add(CharacterModel.PONY, SEG, v(0, 0.01f, 0), v(0, -0.21f, 0), CharacterModel.HEAD, 0.04f, 1f);
+            arts.add(PONY);
+        } else if (hair == CharacterSpec.Hair.BUN && (spec.hat == CharacterSpec.Hat.NONE)) {
+            add(CharacterModel.PONY, SEG, v(0, 0.06f, 0.01f), v(0, -0.04f, 0.01f), CharacterModel.HEAD, 0.04f, 1f);
+            arts.add(BUN);
+        }
+        add(CharacterModel.CHEST, SEG, v(0, -0.02f, 0), v(0, 0.42f, 0), CharacterModel.CHEST, 0.03f, bodyW);
+        arts.add(spec == null ? TORSO : torsoArt(spec));
+        add(CharacterModel.PELVIS, SEG, v(0, -0.155f, 0), v(0, 0.085f, 0), CharacterModel.PELVIS, 0.04f, girth);
+        arts.add(spec == null ? HIPS : hipsArt(spec));
+        if (spec != null && spec.bottom == CharacterSpec.Bottom.SKIRT) {
+            // one panel hanging from the waist over both legs; the legs swing underneath it
+            float hem = spec.top == CharacterSpec.Top.DRESS ? -0.52f : -0.47f;
+            add(CharacterModel.PELVIS, SEG, v(0, -0.06f, 0.02f), v(0, hem, 0.02f), CharacterModel.PELVIS, -0.13f, girth);
+            arts.add(SKIRT);
+        }
         int[][] limbs = {
                 {CharacterModel.THIGH_L, 0}, {CharacterModel.THIGH_R, 0},
                 {CharacterModel.SHIN_L, 1}, {CharacterModel.SHIN_R, 1},
@@ -340,15 +371,264 @@ public final class Puppet {
         for (int[] l : limbs) {
             switch (l[1]) {
                 // the ends reach a little past each joint, so the rounded caps overlap like a ball joint
-                case 0: caps(add(l[0], SEG, v(0, 0.035f, 0), v(0, -0.45f, 0), 0, 0, CharacterModel.PELVIS, 0.0f), true, false); arts.add(THIGH); break;
-                case 1: caps(add(l[0], SEG, v(0, 0.035f, 0), v(0, -0.43f, 0), 0, 0, CharacterModel.PELVIS, -0.005f), true, true); arts.add(SHIN); break;
-                case 2: caps(add(l[0], SEG, v(0, 0.015f, 0), v(0, -0.30f, 0), 0, 0, CharacterModel.CHEST, -0.01f), true, true); arts.add(UPPER_ARM); break;
-                case 3: caps(add(l[0], SEG, v(0, 0.035f, 0), v(0, -0.26f, 0), 0, 0, CharacterModel.CHEST, -0.012f), true, true); arts.add(FOREARM); break;
-                case 4: add(l[0], SEG, v(0, -0.235f, 0), v(0, -0.36f, 0), 0, 0, CharacterModel.CHEST, -0.015f); arts.add(HAND); break;
-                default: add(l[0], UPRIGHT, v(0, -0.07f, 0.045f), null, 0, 0, l[0], -0.008f); arts.add(SHOE); break;
+                case 0: caps(add(l[0], SEG, v(0, 0.035f, 0), v(0, -0.45f, 0), CharacterModel.PELVIS, 0.0f, limbW), true, false);
+                    arts.add(spec == null ? THIGH : thighArt(spec)); break;
+                case 1: caps(add(l[0], SEG, v(0, 0.035f, 0), v(0, -0.43f, 0), CharacterModel.PELVIS, -0.005f, limbW), true, true);
+                    arts.add(spec == null ? SHIN : shinArt(spec)); break;
+                case 2: caps(add(l[0], SEG, v(0, 0.015f, 0), v(0, -0.30f, 0), CharacterModel.CHEST, -0.01f, limbW), true, true);
+                    arts.add(spec == null ? UPPER_ARM : upperArmArt(spec)); break;
+                case 3: caps(add(l[0], SEG, v(0, 0.035f, 0), v(0, -0.26f, 0), CharacterModel.CHEST, -0.012f, limbW), true, true);
+                    arts.add(spec == null ? FOREARM : forearmArt(spec)); break;
+                case 4: add(l[0], SEG, v(0, -0.235f, 0), v(0, -0.36f, 0), CharacterModel.CHEST, -0.015f, 1f); arts.add(HAND); break;
+                default: add(l[0], UPRIGHT, v(0, -0.07f, 0.045f), null, l[0], -0.008f, 1f); arts.add(SHOE); break;
             }
         }
         atlas = pack(arts);
+    }
+
+    // ---------------------------------------------------------------- pedestrian looks
+
+    /** Skirt panel: front, side (facing right), back; row 0 is the hem. */
+    private static final String[] SKIRT = {
+            "jJJJjJJJJjJJJJj\n" +
+            "jJJJjJJJJjJJJJj\n" +
+            ".jJJJjJJJjJJJj.\n" +
+            ".jJJJjJJJjJJJj.\n" +
+            ".jJJJJJJJJJJJj.\n" +
+            "..jJJJJJJJJJj..\n" +
+            "..jJJJJJJJJJj..\n" +
+            "..jJJJJJJJJJj..\n" +
+            "..jJJJJJJJJJj..\n" +
+            "..jjjjjjjjjjj..",
+            "jJJJJJJJJJJJJJj\n" +
+            "jJJJJJJJJJJJJJj\n" +
+            ".jJJJJJJJJJJJj.\n" +
+            ".jJJJJJJJJJJJj.\n" +
+            "..jJJJJJJJJJj..\n" +
+            "..jJJJJJJJJJj..\n" +
+            "...jJJJJJJJj...\n" +
+            "...jJJJJJJJj...\n" +
+            "...jJJJJJJJj...\n" +
+            "...jjjjjjjjj...",
+            "jJJJJJJJJJJJJJj\n" +
+            "jJJJJJJJJJJJJJj\n" +
+            ".jJJJJJJJJJJJj.\n" +
+            ".jJJJJJJJJJJJj.\n" +
+            ".jJJJJJJJJJJJj.\n" +
+            "..jJJJJJJJJJj..\n" +
+            "..jJJJJJJJJJj..\n" +
+            "..jJJJJJJJJJj..\n" +
+            "..jJJJJJJJJJj..\n" +
+            "..jjjjjjjjjjj..",
+    };
+
+    private static final String[] BUN = {"dhd\nhWh\nhHh\ndhd"};
+
+    private void colours(CharacterSpec s) {
+        set('S', s.skin); set('s', shade(s.skin, 0.84f)); set('z', shade(s.skin, 0.7f));
+        set('h', s.hairColor); set('H', CharacterSpec.mix(s.hairColor, 0xFFFFFF, 0.2f));
+        set('W', CharacterSpec.mix(s.hairColor, 0xA8B4E0, 0.4f)); set('d', shade(s.hairColor, 0.55f));
+        set('E', s.eyeColor); set('e', 0x1E1A1C); set('M', s.lipColor);
+        set('T', s.topColor); set('t', shade(s.topColor, 0.8f)); set('u', shade(s.topColor, 0.64f));
+        set('J', s.bottomColor); set('j', shade(s.bottomColor, 0.72f)); set('n', CharacterSpec.mix(s.bottomColor, 0xFFFFFF, 0.22f));
+        set('L', 0x3A2A22);
+        set('F', s.shoeColor); set('f', shade(s.shoeColor, 0.74f)); set('k', s.soleColor);
+        set('R', s.hatColor); set('C', s.hatColor); set('c', shade(s.hatColor, 0.7f));
+        set('m', 0xEEF0F0); set('g', 0x16161A); set('w', 0xF2F2EE);
+        set('r', ((s.topColor ^ s.hairColor ^ s.skin) & 1) == 0 ? 0x8A2632 : 0x2A3A6A);
+    }
+
+    private void set(char c, int rgb) { palette[c] = 0xFF000000 | rgb; }
+
+    private static int shade(int c, float f) {
+        return ((int) (((c >> 16) & 255) * f) << 16) | ((int) (((c >> 8) & 255) * f) << 8) | (int) ((c & 255) * f);
+    }
+
+    private static boolean hairy(char c) { return c == 'h' || c == 'H' || c == 'd' || c == 'W'; }
+    private static boolean skin(char c) { return c == 'S' || c == 's' || c == 'z'; }
+
+    private static char[][] grid(String art) {
+        String[] rows = art.split("\n");
+        int w = 0;
+        for (String r : rows) w = Math.max(w, r.length());
+        char[][] g = new char[rows.length][w];
+        for (int y = 0; y < rows.length; y++)
+            for (int x = 0; x < w; x++) g[y][x] = x < rows[y].length() ? rows[y].charAt(x) : '.';
+        return g;
+    }
+
+    private static String str(char[][] g) {
+        StringBuilder b = new StringBuilder();
+        for (int y = 0; y < g.length; y++) { if (y > 0) b.append('\n'); b.append(g[y]); }
+        return b.toString();
+    }
+
+    /** Jeans letters (or any cloth) turned to bare skin. */
+    private static char toSkin(char c) {
+        switch (c) {
+            case 'J': case 'n': case 'T': return 'S';
+            case 'j': case 't': return 's';
+            case 'u': return 'z';
+            default: return c;
+        }
+    }
+
+    /** Skin letters turned to the top's cloth. */
+    private static char toCloth(char c) {
+        switch (c) {
+            case 'S': return 'T';
+            case 's': return 't';
+            case 'z': return 'u';
+            default: return c;
+        }
+    }
+
+    private static String[] headArt(CharacterSpec s) {
+        String[] out = new String[HEAD.length];
+        for (int i = 0; i < HEAD.length; i++) {
+            char[][] g = grid(HEAD[i]);
+            int h = g.length, w = g[0].length;
+            switch (s.hair) {
+                case SHORT: case AFRO:
+                    for (int y = 6; y < h; y++)
+                        for (int x = 0; x < w; x++) if (hairy(g[y][x])) g[y][x] = i >= 3 ? 's' : '.';
+                    break;
+                case LONG:
+                    for (int y = 6; y < h; y++)
+                        for (int x = 0; x < w; x++)
+                            if (hairy(g[5][x])) g[y][x] = x == 0 || x == w - 1 || g[5][x] == 'd' ? 'd' : 'h';
+                    break;
+                case BALD:
+                    for (int y = 0; y < h; y++)
+                        for (int x = 0; x < w; x++)
+                            if (hairy(g[y][x])) g[y][x] = g[y][x] == 'd' ? 's' : 'S';
+                    break;
+                default: break;
+            }
+            boolean face = i <= 2;
+            if (face && !s.female) for (char[] row : g) for (int x = 0; x < w; x++) if (row[x] == 'M') row[x] = 's';
+            if (face && s.beard) for (int x = 0; x < w; x++) if (skin(g[6][x]) || g[6][x] == 'M') g[6][x] = 'h';
+            if (face && s.mask)
+                for (int y = 5; y <= 6; y++) for (int x = 0; x < w; x++) if (skin(g[y][x]) || g[y][x] == 'M') g[y][x] = 'm';
+            if (face && s.sunglasses) {
+                int a = -1, b = -1;
+                for (int x = 0; x < w; x++) if (g[4][x] == 'E' || g[4][x] == 'e') { if (a < 0) a = x; b = x; }
+                if (a >= 0) for (int x = a; x <= b; x++) g[4][x] = 'g';
+            }
+            if (s.hat == CharacterSpec.Hat.CAP) {
+                for (int y = 0; y <= 1; y++)
+                    for (int x = 0; x < w; x++) if (g[y][x] != '.') g[y][x] = x == 0 || x == w - 1 || g[y][x] == 'd' ? 'c' : 'C';
+                if (i <= 1) { for (int x = 0; x < w; x++) if (hairy(g[2][x]) || skin(g[2][x])) g[2][x] = 'c'; }
+                else if (i == 2) g[2][w - 1] = 'c';
+            } else if (s.hat == CharacterSpec.Hat.SUNHAT) {
+                char[][] p = new char[h][w + 2];
+                for (int y = 0; y < h; y++) {
+                    p[y][0] = p[y][w + 1] = '.';
+                    System.arraycopy(g[y], 0, p[y], 1, w);
+                }
+                for (int y = 0; y <= 1; y++) for (int x = 1; x <= w; x++) if (p[y][x] != '.') p[y][x] = 'C';
+                for (int x = 0; x < w + 2; x++) p[2][x] = x == 0 || x == w + 1 ? 'c' : 'C';
+                g = p;
+            }
+            out[i] = str(g);
+        }
+        return out;
+    }
+
+    private static String[] torsoArt(CharacterSpec s) {
+        String[] out = new String[TORSO.length];
+        boolean covered = s.top != CharacterSpec.Top.TANK && s.top != CharacterSpec.Top.DRESS;
+        for (int i = 0; i < TORSO.length; i++) {
+            char[][] g = grid(TORSO[i]);
+            int h = g.length, w = g[0].length, mid = w / 2;
+            if (covered)
+                for (int y = 2; y <= 4; y++)
+                    for (int x = 0; x < w; x++) {
+                        if (y == 2 && i <= 1 && Math.abs(x - mid) <= 1) continue;      // the neckline
+                        g[y][x] = toCloth(g[y][x]);
+                    }
+            if (!s.female) {
+                // a straight, boxy body: the waist filled out to the chest's width
+                int x0 = w, x1 = -1;
+                for (int x = 0; x < w; x++) if (g[5][x] != '.') { x0 = Math.min(x0, x); x1 = x; }
+                for (int y = 5; y < h; y++)
+                    for (int x = x0; x <= x1; x++) {
+                        boolean edge = x == x0 || x == x1;
+                        if (y == h - 1) g[y][x] = edge ? 'u' : 't';
+                        else if (g[y][x] == '.' || g[y][x] == 'u' || edge) g[y][x] = edge ? 't' : 'T';
+                    }
+            }
+            if (s.top == CharacterSpec.Top.SUIT && i <= 1) {
+                for (int y = 2; y <= 3; y++) for (int x = mid - 1; x <= mid + 1; x++) g[y][x] = 'w';
+                for (int y = 4; y <= 10; y++) g[y][mid] = s.female ? 'w' : 'r';
+            }
+            out[i] = str(g);
+        }
+        return out;
+    }
+
+    private static String[] hipsArt(CharacterSpec s) {
+        if (s.bottom != CharacterSpec.Bottom.SKIRT) return HIPS;
+        String[] out = new String[HIPS.length];
+        for (int i = 0; i < HIPS.length; i++) {
+            char[][] g = grid(HIPS[i]);
+            int h = g.length, w = g[0].length;
+            int x0 = w, x1 = -1;
+            for (int x = 0; x < w; x++) if (g[1][x] != '.') { x0 = Math.min(x0, x); x1 = x; }
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++) {
+                    if (g[y][x] == 'L') g[y][x] = 'j';
+                    if (g[y][x] == 'n') g[y][x] = 'J';
+                    // the hem flares out over both legs
+                    if (y >= 5 && x >= x0 - (y == h - 1 ? 1 : 0) && x <= x1 + (y == h - 1 ? 1 : 0) && x >= 0 && x < w)
+                        g[y][x] = x <= x0 || x >= x1 ? 'j' : 'J';
+                }
+            out[i] = str(g);
+        }
+        return out;
+    }
+
+    /** Row 0 of a limb is its far end (knee, ankle, elbow, wrist); the last row is the joint nearest the body. */
+    private static String[] limb(String[] views, int fromRow, int toRow, boolean skinToCloth) {
+        String[] out = new String[views.length];
+        for (int i = 0; i < views.length; i++) {
+            char[][] g = grid(views[i]);
+            for (int y = Math.max(0, fromRow); y <= Math.min(g.length - 1, toRow); y++)
+                for (int x = 0; x < g[y].length; x++) g[y][x] = skinToCloth ? toCloth(g[y][x]) : toSkin(g[y][x]);
+            out[i] = str(g);
+        }
+        return out;
+    }
+
+    private static String[] thighArt(CharacterSpec s) {
+        switch (s.bottom) {
+            case SHORTS: return limb(THIGH, 0, 7, false);
+            case SKIRT: return limb(THIGH, 0, 99, false);
+            default: return THIGH;
+        }
+    }
+
+    private static String[] shinArt(CharacterSpec s) {
+        return s.bottom == CharacterSpec.Bottom.PANTS ? SHIN : limb(SHIN, 0, 99, false);
+    }
+
+    private static String[] upperArmArt(CharacterSpec s) {
+        switch (s.top) {
+            case TSHIRT: return limb(UPPER_ARM, 6, 99, true);
+            case LONGSLEEVE: case SUIT: return limb(UPPER_ARM, 0, 99, true);
+            default: return UPPER_ARM;
+        }
+    }
+
+    private static String[] forearmArt(CharacterSpec s) {
+        if (s.top != CharacterSpec.Top.LONGSLEEVE && s.top != CharacterSpec.Top.SUIT) return FOREARM;
+        String[] a = limb(FOREARM, 1, 99, true);
+        if (s.top == CharacterSpec.Top.SUIT) {
+            char[][] g = grid(a[0]);
+            for (int x = 0; x < g[1].length; x++) g[1][x] = 'w';     // shirt cuff
+            a = new String[]{str(g)};
+        }
+        return a;
     }
 
     /** The thigh's top stays open (it tucks under the hips); everything else is capped both ends. */
@@ -359,8 +639,11 @@ public final class Puppet {
 
     private static float[] v(float x, float y, float z) { return new float[]{x, y, z}; }
 
-    private Part add(int bone, int kind, float[] a, float[] b, int padTop, int padBottom, int viewBone, float bias) {
-        Part p = new Part(bone, kind, a, b, padTop, padBottom, viewBone, bias);
+    private Part add(int bone, int kind, float[] a, float[] b, int viewBone, float bias, float width) {
+        if (a != null) for (int i = 0; i < 3; i++) a[i] *= k;
+        if (b != null) for (int i = 0; i < 3; i++) b[i] *= k;
+        Part p = new Part(bone, kind, a, b, 0, 0, viewBone, bias);
+        p.width = width * k;
         parts.add(p);
         return p;
     }
@@ -399,12 +682,12 @@ public final class Puppet {
         return new Texture(W, H, px);
     }
 
-    private static void draw(int[] px, int W, String art, int[] r, boolean capTop, boolean capBottom) {
+    private void draw(int[] px, int W, String art, int[] r, boolean capTop, boolean capBottom) {
         String[] rows = art.split("\n");
         int h = rows.length, w = r[2] - 2;
         int[] cell = new int[(w + 2) * h];
         for (int y = 0; y < h; y++)
-            for (int x = 0; x < rows[y].length(); x++) cell[y * (w + 2) + x + 1] = pal(rows[y].charAt(x));
+            for (int x = 0; x < rows[y].length(); x++) cell[y * (w + 2) + x + 1] = palette[rows[y].charAt(x) & 127];
         int[] out = cell.clone();
         // selective outline: a dark shade of the colour beside it (only left and right for the
         // segments: their ends overlap the neighbouring part)
@@ -466,12 +749,12 @@ public final class Puppet {
             boolean mirror = d > 4;
             int[] rect = p.rect[Math.min(view, p.rect.length - 1)];
             if (p.rect.length == 3) rect = p.rect[view == 0 || view == 1 ? 0 : (view == 2 ? 1 : 2)];
-            float w = rect[2] / PPM;
+            float w = rect[2] / PPM * p.width;
             float u0 = rect[0] + 0.01f, u1 = rect[0] + rect[2] - 0.01f, v0 = rect[1] + 0.01f, v1 = rect[1] + rect[3] - 0.01f;
             if (mirror) { float t = u0; u0 = u1; u1 = t; }
             if (p.kind == UPRIGHT) {
                 m.transformPoint(p.a[0], p.a[1], p.a[2], p0, 0);
-                float h = rect[3] / PPM;
+                float h = rect[3] / PPM * k;
                 corners(p0[0], p0[1], p0[2], p0[0], p0[1] + h, p0[2], w, rx, rz, fx, fz);
             } else {
                 m.transformPoint(p.a[0], p.a[1], p.a[2], p0, 0);

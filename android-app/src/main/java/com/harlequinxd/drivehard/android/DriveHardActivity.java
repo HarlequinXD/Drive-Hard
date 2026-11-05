@@ -147,8 +147,8 @@ public final class DriveHardActivity extends Activity {
         // touch state (UI thread writes, game thread reads under the lock)
         private final Object input = new Object();
         private float stickX, stickY, camYaw, camPitch;
-        private boolean gas, brake, jumpHeld, carHeld, jumpLatch, carLatch;
-        private int stickPointer = -1, camPointer = -1, gasPointer = -1, brakePointer = -1, jumpPointer = -1, carPointer = -1;
+        private boolean gas, brake, handbrake, jumpHeld, carHeld, jumpLatch, carLatch;
+        private int stickPointer = -1, camPointer = -1, gasPointer = -1, brakePointer = -1, handPointer = -1, jumpPointer = -1, carPointer = -1;
         private float stickOriginX, stickOriginY, stickKnobX, stickKnobY, camLastX, camLastY;
         // map gestures (in frame pixels)
         private int mapPointer = -1;
@@ -225,9 +225,9 @@ public final class DriveHardActivity extends Activity {
 
         private void clearInput() {
             synchronized (input) {
-                stickPointer = camPointer = gasPointer = brakePointer = jumpPointer = carPointer = -1;
+                stickPointer = camPointer = gasPointer = brakePointer = handPointer = jumpPointer = carPointer = -1;
                 stickX = stickY = camYaw = camPitch = 0f;
-                gas = brake = jumpHeld = carHeld = jumpLatch = carLatch = false;
+                gas = brake = handbrake = jumpHeld = carHeld = jumpLatch = carLatch = false;
             }
         }
 
@@ -305,7 +305,7 @@ public final class DriveHardActivity extends Activity {
                 return;
             }
             float x, y, yaw, pitch;
-            boolean doJump, doCar, doGas, doBrake;
+            boolean doJump, doCar, doGas, doBrake, doHand;
             synchronized (input) {
                 x = stickX;
                 y = stickY;
@@ -317,15 +317,16 @@ public final class DriveHardActivity extends Activity {
                 jumpLatch = carLatch = false;
                 doGas = gas;
                 doBrake = brake;
+                doHand = handbrake;
             }
-            g.update(dt, x, y, yaw, pitch, doJump, x, doGas ? 1f : 0f, doBrake ? 1f : 0f, doCar);
+            g.update(dt, x, y, yaw, pitch, doJump, x, doGas ? 1f : 0f, doBrake ? 1f : 0f, doCar, doHand);
             g.render();
             hintTime -= dt;
             sceneToFrame(g);
             int r = minimapRadius();
             mapView.drawMinimap(fb, W, H, W - r - 8, r + 8, r, g);
             mapView.drawHud(fb, W, H, g, 34, 6);
-            mapView.drawHints(fb, W, H, g.driving() ? "STEER WITH THE STICK  -  GAS AND BRAKE ON THE RIGHT"
+            mapView.drawHints(fb, W, H, g.driving() ? "STEER WITH THE STICK  -  GAS, BRAKE AND HANDBRAKE ON THE RIGHT"
                     : "LEFT STICK WALK  -  DRAG RIGHT SIDE TO LOOK  -  TAP THE MAP TO TRAVEL", Math.min(1f, hintTime));
             publish();
         }
@@ -532,6 +533,7 @@ public final class DriveHardActivity extends Activity {
         private float stickRadius() { return unit() * 13f; }
 
         private float[] gasButton() { return new float[]{getWidth() - unit() * 15f, getHeight() - unit() * 21f, unit() * 12f}; }
+        private float[] handButton() { return new float[]{getWidth() - unit() * 40f, getHeight() - unit() * 37f, unit() * 8.5f}; }
         private float[] brakeButton() { return new float[]{getWidth() - unit() * 40f, getHeight() - unit() * 13f, unit() * 9.5f}; }
         private float[] jumpButton() { return new float[]{getWidth() - unit() * 15f, getHeight() - unit() * 21f, unit() * 11f}; }
         private float[] carButton() { return new float[]{getWidth() - unit() * 36f, getHeight() - unit() * 11f, unit() * 8f}; }
@@ -585,6 +587,7 @@ public final class DriveHardActivity extends Activity {
             if (driving) {
                 pedal(c, gasButton(), "GAS", gas, ACCENT, true);
                 pedal(c, brakeButton(), "BRAKE", brake, 0xFF3A6EA5, true);
+                pedal(c, handButton(), "HAND", handbrake, 0xFFB0452E, true);
                 roundButton(c, exitButton(), "EXIT", carHeld, 0xFF2A3640);
             } else {
                 roundButton(c, jumpButton(), "JUMP", jumpHeld, ACCENT);
@@ -681,6 +684,7 @@ public final class DriveHardActivity extends Activity {
                         }
                         if (driving && hit(gasButton(), x, y, 1.35f)) { gas = true; gasPointer = id; buzz(); }
                         else if (driving && hit(brakeButton(), x, y, 1.35f)) { brake = true; brakePointer = id; buzz(); }
+                        else if (driving && hit(handButton(), x, y, 1.3f)) { handbrake = true; handPointer = id; buzz(); }
                         else if (driving && hit(exitButton(), x, y, 1.3f)) { carHeld = true; carLatch = true; carPointer = id; buzz(); }
                         else if (!driving && hit(jumpButton(), x, y, 1.3f)) { jumpHeld = true; jumpLatch = true; jumpPointer = id; buzz(); }
                         else if (!driving && hit(carButton(), x, y, 1.3f)) { carHeld = true; carLatch = true; carPointer = id; buzz(); }
@@ -720,6 +724,7 @@ public final class DriveHardActivity extends Activity {
                         if (id == camPointer) camPointer = -1;
                         if (id == gasPointer) { gas = false; gasPointer = -1; }
                         if (id == brakePointer) { brake = false; brakePointer = -1; }
+                        if (id == handPointer) { handbrake = false; handPointer = -1; }
                         if (id == jumpPointer) { jumpHeld = false; jumpPointer = -1; }
                         if (id == carPointer) { carHeld = false; carPointer = -1; }
                         break;
@@ -732,9 +737,9 @@ public final class DriveHardActivity extends Activity {
         }
 
         private void clearLocked() {
-            stickPointer = camPointer = gasPointer = brakePointer = jumpPointer = carPointer = -1;
+            stickPointer = camPointer = gasPointer = brakePointer = handPointer = jumpPointer = carPointer = -1;
             stickX = stickY = 0f;
-            gas = brake = jumpHeld = carHeld = false;
+            gas = brake = handbrake = jumpHeld = carHeld = false;
         }
 
         private void moveStick(float x, float y) {

@@ -41,9 +41,9 @@ public final class CharacterSpec {
             0x7A4AA0, 0xF08A3C, 0x6E6E6E, 0xB8D8F0, 0x8C6A48, 0x101820};
     private static final int[] BOTTOMS = {0x4D6E9C, 0x2C3E5C, 0x22252B, 0xC8B89A, 0x6E6E6E, 0xF1EFE8, 0x5A6A3C, 0x8C2A2A};
 
-    private static final int[] GREYS = {0xB8B8B4, 0xD8D8D4, 0x8C8C88};
+    private static final int[] GREYS = {0x9A9A96, 0xB8B8B4, 0x76767A, 0x5E5C5C};
     private static final int[] JP_SKINS = {0xF3D7BE, 0xEDCDB0, 0xE6C4A2, 0xDDB892, 0xD2A882, 0xC69A74};
-    private static final int[] JP_HAIRS = {0x141210, 0x1E1814, 0x1E1814, 0x2A2018, 0x3A2A1E, 0x5A3E28, 0x8A6A44, 0xB89A70, 0x6A6A70};
+    private static final int[] JP_HAIRS = {0x141210, 0x141210, 0x1E1814, 0x1E1814, 0x1A1416, 0x2A2018, 0x2A2018, 0x3A2A1E, 0x4A3424, 0x5A3E28, 0x7A5634, 0x9A7448};
     private static final int[] SUITS = {0x1E2230, 0x2A2C30, 0x3A3E46, 0x22283A, 0x4A4A4E};
     private static final int[] CASUAL = {0xF1EFE8, 0x22252B, 0xC8443C, 0x2F5C9E, 0x3E8A5A, 0xE8B33A, 0xE07AA8, 0x40B8B0,
             0x7A4AA0, 0xF08A3C, 0x6E6E6E, 0xB8D8F0, 0x8C6A48, 0xD8CDB8, 0xA8B89A, 0xF4E4D4};
@@ -56,7 +56,7 @@ public final class CharacterSpec {
         Random r = new Random(seed * 7919L + 17L);
         CharacterSpec s = new CharacterSpec();
         s.female = (seed & 1) == 0;
-        boolean elder = r.nextInt(6) == 0;
+        boolean elder = r.nextInt(9) == 0;
         boolean visitor = r.nextInt(7) == 0;
         s.height = s.female ? 1.52f + r.nextFloat() * 0.16f : 1.62f + r.nextFloat() * 0.18f;
         if (elder) s.height -= 0.05f;

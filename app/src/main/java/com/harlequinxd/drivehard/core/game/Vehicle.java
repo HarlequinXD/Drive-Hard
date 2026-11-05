@@ -2,6 +2,7 @@ package com.harlequinxd.drivehard.core.game;
 
 import com.harlequinxd.drivehard.core.model.Cars;
 
+import static com.harlequinxd.drivehard.core.model.Cars.AWD;
 import static com.harlequinxd.drivehard.core.model.Cars.FWD;
 import static com.harlequinxd.drivehard.core.model.Cars.RWD;
 
@@ -36,6 +37,10 @@ public final class Vehicle {
     public boolean braking;
     /** Parking brake: set while nobody is driving, so an abandoned car pulls up instead of rolling on. */
     public boolean parkingBrake;
+    /** Handbrake held: locks the rear wheels so the tail lets go (flick it into a corner to slide). */
+    public boolean handbrake;
+    /** Seconds since the handbrake was let go — the stability assist stays off while you hold the slide. */
+    private float sinceHandbrake = 99f;
     /** Body pitch (+ nose down) and roll (+ leaning left, i.e. turning right), in m/s² of load shift. */
     public float pitch, roll;
     /** How hard the front / rear tyres are sliding (0 grip .. 1 sliding), for skid marks and smoke. */
@@ -70,7 +75,7 @@ public final class Vehicle {
         // pick the drag so that full power balances drag + rolling at the top speed
         drag = Math.max(0.1f, (power - 0.015f * mass * G * top) / (top * top * top));
         drive = s.drive;
-        assist = s.name.equals("Drift coupe") ? 0.35f : s.drive == RWD && s.grip > 1.03f ? 0.6f : 1f;
+        assist = s.name.equals("Drift coupe") ? 0.45f : s.drive == RWD && s.grip > 1.03f ? 0.6f : 1f;
         setSpeed(speed);
     }
 
@@ -107,6 +112,7 @@ public final class Vehicle {
     }
 
     private void physics(float h, float steerIn, float gas, float rev) {
+        sinceHandbrake = handbrake ? 0f : sinceHandbrake + h;
         float fx = fx(), fz = fz(), rx = -fz, rz = fx;
         float vf = vx * fx + vz * fz, vr = vx * rx + vz * rz, av = Math.abs(vf);
 
@@ -126,7 +132,7 @@ public final class Vehicle {
         } else if (rev > 0.05f) {
             if (vf > 0.5f) { brake = rev; braking = true; }
             else if (vf > -MAX_REVERSE) engine = -rev * Math.min(power * 0.5f / Math.max(av, 3f), mass * 3.5f);
-        } else if (parkingBrake) { brake = 0.7f; }
+        } else if (parkingBrake || (handbrake && av < 2f)) { brake = 0.7f; }
 
         // --- loads with longitudinal weight transfer
         float wf = mass * G * b / wheelbase - mass * accLong * cgH * 0.75f / wheelbase;
@@ -146,6 +152,12 @@ public final class Vehicle {
             fxF -= dirv * bf;
             fxR -= dirv * br;
         }
+        boolean locked = handbrake && av > 0.3f;
+        if (handbrake) {
+            // clutch in, rear wheels locked: they drag the car back and have little side grip left
+            fxR = -dirv * Math.min(capR * 0.8f, stopF * 0.5f);
+            if (drive == AWD) fxF *= 0.5f;
+        }
         // driven wheels spin past the grip they have
         float spinR = Math.abs(fxR) > capR ? Math.min(1f, (Math.abs(fxR) - capR) / capR + 0.4f) : 0f;
         float spinF = Math.abs(fxF) > capF ? Math.min(1f, (Math.abs(fxF) - capF) / capF + 0.4f) : 0f;
@@ -163,10 +175,12 @@ public final class Vehicle {
         float fyF = -latCapF * tyre(alphaF);
         float alphaR = (float) Math.atan2(vr - b * spin, vden);
         float latCapR = (float) Math.sqrt(Math.max(0f, capR * capR - fxR * fxR)) * (1f - 0.45f * spinR);
+        if (locked) latCapR = capR * 0.3f;
         float fyR = -latCapR * tyre(alphaR);
         slipFront = Math.max(spinF, Math.min(1f, Math.max(0f, Math.abs(alphaF) - 0.09f) * 6f));
         slipRear = Math.max(spinR, Math.min(1f, Math.max(0f, Math.abs(alphaR) - 0.09f) * 6f));
         if (brake > 0.9f && av > 3f && slipFront < 0.5f) slipFront = Math.max(slipFront, 0.35f * brake);
+        if (locked && av > 2f) slipRear = 1f;
         if (av < 1.5f) slipFront = slipRear = Math.max(spinR, spinF) * Math.min(1f, av);
 
         // wheel forces -> body frame (front wheel forces turn with the wheel)
@@ -193,7 +207,7 @@ public final class Vehicle {
             float lim = mu * G * 1.1f / sp;
             target = Math.max(-lim, Math.min(lim, target));
             float over = Math.max(0f, beta - 0.07f) / 0.25f;
-            float assistK = Math.min(1f, over) * assist * 6f;
+            float assistK = Math.min(1f, over) * assist * 6f * Math.min(1f, Math.max(0f, sinceHandbrake - 0.4f) / 0.8f);
             spin += (target - spin) * Math.min(1f, assistK * h);
         }
         // at walking pace the tyres just hold the car (no creeping sideways or spinning in place)

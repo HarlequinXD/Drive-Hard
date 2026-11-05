@@ -18,7 +18,8 @@ import javax.swing.*;
 /**
  * Windows desktop front end: keyboard + mouse and Xbox controller (XInput).
  *
- * Game: WASD / arrows or left stick to walk and steer, W / RT gas, S / LT brake, mouse (click
+ * Game: WASD / arrows or left stick to walk and steer, W / RT gas, S / LT brake, Space / A / X
+ * handbrake (held, while driving), mouse (click
  * the window to capture it) or right stick for the camera, Space / A jump, E / F / Y get in or
  * out, M / Tab / View for the map, Esc / Start for the pause menu, F11 fullscreen.
  * Map: drag / WASD / stick to pan, wheel / + - / triggers to zoom, Q E / LB RB to step through
@@ -264,7 +265,9 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
         if (key(KeyEvent.VK_S, KeyEvent.VK_DOWN)) brake = 1f;
         float yaw = -rx * 2.6f * dt - lookX.getAndSet(0) * 0.0045f;
         float pitch = -ry * 1.7f * dt - lookY.getAndSet(0) * 0.003f;
-        g.update(dt, x, y, yaw, pitch, jump, x, gas, brake, car);
+        boolean handbrake = key(KeyEvent.VK_SPACE, KeyEvent.VK_SPACE)
+                || (connected && (pad.buttons() & (XboxInput.A | XboxInput.X)) != 0);
+        g.update(dt, x, y, yaw, pitch, jump, x, gas, brake, car, handbrake);
         g.render();
         hintTime -= dt;
         synchronized (image) {

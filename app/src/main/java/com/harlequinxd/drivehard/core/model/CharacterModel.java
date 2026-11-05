@@ -24,8 +24,21 @@ public final class CharacterModel {
     public final CharacterSpec spec;
 
     public CharacterModel(CharacterSpec spec) {
+        this(spec, true);
+    }
+
+    /** With {@code meshes} false only the skeleton is laid out (for sprite puppets). */
+    public CharacterModel(CharacterSpec spec, boolean meshes) {
         this.spec = spec;
+        this.meshes = meshes;
         build();
+    }
+
+    private final boolean meshes;
+
+    /** Height scale of this body against the reference (1 for the 1.68 m woman). */
+    public float scale() {
+        return spec.height / (spec.female ? 1.68f : 1.78f) * (spec.female ? 1f : 1.06f);
     }
 
     private void off(int b, float x, float y, float z) {
@@ -70,6 +83,7 @@ public final class CharacterModel {
         off(FOOT_L, 0, -0.405f * k, 0);
         off(FOOT_R, 0, -0.405f * k, 0);
         off(PONY, 0, 0.17f * k, -0.085f * k);
+        if (!meshes) return;
 
         Mat4 K = Mat4.scale(k, k, k);
         final int skin = s.skin;
