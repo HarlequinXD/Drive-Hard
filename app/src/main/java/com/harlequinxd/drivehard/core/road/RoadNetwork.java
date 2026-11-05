@@ -643,6 +643,9 @@ public final class RoadNetwork implements java.io.Serializable {
                 if (route(RoadClass.COUNTRY, gate(a.centre, b.centre.x, b.centre.z), gate(b.centre, a.centre.x, a.centre.z), 0f, 0f, 0f, 0f) != null)
                     linked.add(pair(a.id, b.id));
             }
+        // 4b. more than one way between neighbours: short cuts over the hills where the road goes
+        // the long way round, and back roads beside the main roads
+        alternatives(linked);
         // 5. the city's own roads out west, north and south
         cityConnectors();
         // 6. fishing harbours below the coastal towns
@@ -679,6 +682,101 @@ public final class RoadNetwork implements java.io.Serializable {
             return;
         }
         harbours.add(new float[]{qx, qz, sx, sz, cx, cz, t.id});
+    }
+
+    public int shortcuts, backRoads;
+
+    /**
+     * Gives neighbouring settlements a choice of route. Where the road between them is much
+     * longer than the crow flies (round a headland, the far side of a ridge), a country road takes
+     * the short way over the hills. Where they are joined directly, often a back road takes the
+     * long way through the next valley inland — slower, quieter, and a way round a jam or a chase.
+     */
+    private void alternatives(java.util.HashSet<Long> linked) {
+        List<Town> set = new ArrayList<>();
+        set.addAll(towns);
+        List<long[]> pairs = new ArrayList<>();
+        for (int i = 0; i < set.size(); i++)
+            for (int j = i + 1; j < set.size(); j++) {
+                Town a = set.get(i), b = set.get(j);
+                double d = dist(a, b);
+                if (d < 2500 || d > 13000) continue;
+                boolean blocked = false;           // neighbours: nobody much closer to both in between
+                for (Town c : set) {
+                    if (c == a || c == b) continue;
+                    if (Math.max(dist(a, c), dist(b, c)) < d * 0.8) { blocked = true; break; }
+                }
+                if (!blocked) pairs.add(new long[]{i, j, (long) d});
+            }
+        pairs.sort((x, y) -> Long.compare(x[2], y[2]));
+        int maxBack = Math.max(2, set.size() / 4);
+        for (long[] pr : pairs) {
+            Town a = set.get((int) pr[0]), b = set.get((int) pr[1]);
+            float d = pr[2];
+            float rd = roadDistance(a.centre.id, b.centre.id);
+            if (rd > d * 1.8f) {
+                // the short way
+                if (route(RoadClass.COUNTRY, gate(a.centre, b.centre.x, b.centre.z), gate(b.centre, a.centre.x, a.centre.z), 0f, 0f, 0f, 0f) != null) {
+                    linked.add(pair(a.id, b.id));
+                    shortcuts++;
+                }
+            } else if (rd < d * 1.7f && backRoads < maxBack && (a.size != Town.Size.HAMLET || b.size != Town.Size.HAMLET)
+                    && Noise.rnd(a.id, b.id, seed + 1610) < 0.6f) {
+                // the long way: through a point well off to the side, on the inland side
+                float mx = (a.centre.x + b.centre.x) * 0.5f, mz = (a.centre.z + b.centre.z) * 0.5f;
+                float ux = (b.centre.x - a.centre.x) / d, uz = (b.centre.z - a.centre.z) / d, nx = -uz, nz = ux;
+                float off = d * (0.3f + 0.12f * Noise.rnd(b.id, a.id, seed + 1611));
+                float[] best = null;
+                float bestInland = -1e9f;
+                for (int side = -1; side <= 1; side += 2) {
+                    float px = mx + nx * off * side, pz = mz + nz * off * side;
+                    float inland = -terrain.coastOver(px, pz);
+                    if (inland < 700f || terrain.cityDistance(px, pz) < 2500f || terrain.natural(px, pz) > 420f) continue;
+                    if (router.roadNear(px, pz, 3)) continue;                  // a road already runs there
+                    if (inland > bestInland) { bestInland = inland; best = new float[]{px, pz}; }
+                }
+                if (best == null) continue;
+                RoadNode ga = gate(a.centre, best[0], best[1]), gb = gate(b.centre, best[0], best[1]);
+                List<float[]> p1 = router.path(ga.x, ga.z, best[0], best[1], RoadClass.COUNTRY, false);
+                List<float[]> p2 = p1 == null ? null : router.path(best[0], best[1], gb.x, gb.z, RoadClass.COUNTRY, false);
+                if (p2 == null) continue;
+                float len = pathLength(p1) + pathLength(p2);
+                if (len > d * 2.4f) continue;          // a real alternative, not a huge detour
+                RoadNode mid = addNode(best[0], best[1], RoadNode.Kind.JUNCTION);
+                RoadEdge e1 = route(RoadClass.COUNTRY, ga, mid, 0f, 0f, 0f, 0f);
+                RoadEdge e2 = e1 == null ? null : route(RoadClass.COUNTRY, mid, gb, 0f, 0f, 0f, 0f);
+                if (e2 != null) backRoads++;
+            }
+        }
+    }
+
+    private static float pathLength(List<float[]> p) {
+        float l = 0f;
+        for (int i = 1; i < p.size(); i++) l += (float) Math.hypot(p.get(i)[0] - p.get(i - 1)[0], p.get(i)[1] - p.get(i - 1)[1]);
+        return l;
+    }
+
+    /** Shortest distance by road between two nodes over the roads built so far (infinity if none). */
+    private float roadDistance(int from, int to) {
+        int n = nodes.size();
+        float[] d = new float[n];
+        Arrays.fill(d, Float.MAX_VALUE);
+        d[from] = 0f;
+        java.util.PriorityQueue<float[]> q = new java.util.PriorityQueue<>((x, y) -> Float.compare(x[0], y[0]));
+        q.add(new float[]{0f, from});
+        while (!q.isEmpty()) {
+            float[] f = q.poll();
+            int u = (int) f[1];
+            if (f[0] > d[u]) continue;
+            if (u == to) return d[u];
+            for (int eid : nodes.get(u).edges) {
+                RoadEdge e = edges.get(eid);
+                int v = e.a == u ? e.b : e.a;
+                float nd = d[u] + e.len;
+                if (nd < d[v]) { d[v] = nd; q.add(new float[]{nd, v}); }
+            }
+        }
+        return Float.MAX_VALUE;
     }
 
     private static long pair(int a, int b) { return a < b ? ((long) a << 32) | b : ((long) b << 32) | a; }
@@ -889,6 +987,17 @@ public final class RoadNetwork implements java.io.Serializable {
                 if (Math.abs(h[c] - (h0 + (h1 - h0) * t)) > 40f) return false;
             }
             return true;
+        }
+
+        /** True if a road has been routed through any cell within {@code r} cells of (x, z). */
+        boolean roadNear(float x, float z, int r) {
+            int i0 = ci(x), j0 = cj(z);
+            for (int j = Math.max(0, j0 - r); j <= Math.min(n - 1, j0 + r); j++)
+                for (int i = Math.max(0, i0 - r); i <= Math.min(n - 1, i0 + r); i++) {
+                    int u = used[j * n + i];
+                    if (u > 0 && u < 100) return true;
+                }
+            return false;
         }
 
         boolean near(int a, int b) { return Math.abs(a % n - b % n) <= 2 && Math.abs(a / n - b / n) <= 2; }
