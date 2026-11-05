@@ -24,6 +24,7 @@ The Android app is in `android-app/`; it reuses the platform-independent engine 
 - Build a debug APK with `gradle :android-app:assembleDebug`.
 - Find it at `android-app/build/outputs/apk/debug/android-app-debug.apk`.
 - The Android GitHub Actions workflow builds and uploads the APK as `DriveHard-Android-debug`.
+- Phones with OpenGL ES 3.0 (nearly all) draw the game on the GPU (`core/gl/GlRenderer`): the same frame as the CPU renderer (same sky, ground map, sea, 15-bit colour and dither, ported to shaders), drawn at the game's low resolution and scaled up unfiltered, 30 frames a second. The CPU only runs the game, so the phone stays much cooler. Chunk meshes and ground tiles are uploaded to video memory as they stream in and freed when they stream out. Phones without OpenGL ES 3.0, or where the GPU set-up fails, use the CPU renderer.
 - Landscape orientation is required. The game renders at a resolution matched to the screen's shape (no letterboxing).
 - Touch the left side anywhere to get a floating stick (walk / steer). On foot: JUMP and CAR on the right, drag the rest of the right side to look around. Driving: GAS and BRAKE pedals (hold brake to reverse) and EXIT.
 - Tap the minimap to open the island map: drag to pan, pinch or +/- to zoom, < > to step through places nearest first, tap a place and TRAVEL to fast travel. The pause button (top left) or Back opens the menu.
@@ -31,5 +32,12 @@ The Android app is in `android-app/`; it reuses the platform-independent engine 
 ## Windows
 
 See [README-WINDOWS.md](README-WINDOWS.md) for Windows packaging and Xbox/keyboard controls. The desktop app and Android app are built independently; Android does not include the Swing desktop frontend or its JNA dependency.
+
+GPU renderer test (desktop, no phone needed): `tools/gl/` runs the GPU renderer headless on the system's OpenGL ES driver (Mesa works) through Java's foreign function API, and writes CPU-vs-GPU screenshots (`GlShot`), the HUD composited on a phone-sized screen (`GlHudShot`) and a streaming soak test (`GlStream`). Needs JDK 21 with `--enable-preview`:
+
+```
+javac --release 21 --enable-preview -d build/gl $(find app/src/main/java/com/harlequinxd/drivehard/core -name '*.java') tools/gl/*.java
+java --enable-preview --enable-native-access=ALL-UNNAMED -cp build/gl GlShot build/glshot
+```
 
 Build automation: `.github/workflows/android.yml` and `.github/workflows/build-windows.yml`.

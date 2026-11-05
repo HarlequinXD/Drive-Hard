@@ -9,14 +9,22 @@ import android.graphics.Paint;
 import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.Typeface;
+import android.opengl.GLES30;
+import android.opengl.GLSurfaceView;
 import android.os.Bundle;
 import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
+import android.widget.FrameLayout;
+
+import javax.microedition.khronos.egl.EGLConfig;
+import javax.microedition.khronos.opengles.GL10;
 
 import com.harlequinxd.drivehard.core.Game;
+import com.harlequinxd.drivehard.core.gl.GlRenderer;
+import com.harlequinxd.drivehard.core.render.SoftRenderer;
 import com.harlequinxd.drivehard.core.map.MapData;
 import com.harlequinxd.drivehard.core.ui.LoadScreen;
 import com.harlequinxd.drivehard.core.ui.MapView;
@@ -24,13 +32,18 @@ import com.harlequinxd.drivehard.core.ui.MapView;
 /**
  * Android front end. The game renders at a low resolution matched to the screen's shape (so
  * nothing is letterboxed), and the core draws the minimap, HUD, map, pause menu and loading
- * screens into that frame exactly like the desktop build. The touch controls are drawn on top at
+ * screens into that frame exactly like the desktop build.
+ *
+ * Phones with OpenGL ES 3.0 draw the game on the GPU ({@link GlRenderer}, in a GLSurfaceView
+ * under the controls), 30 frames a second: far less work for the CPU, so the phone stays cooler.
+ * Without it (or if the GPU set-up fails) the game falls back to the CPU renderer. The touch controls are drawn on top at
  * full screen resolution: a floating stick on the left, and on the right either JUMP / CAR with
  * camera drag, or GAS / BRAKE / EXIT pedals when driving. Tap the minimap for the map, the pause
  * button (or Back) for the menu.
  */
 public final class DriveHardActivity extends Activity {
     private GameView gameView;
+    private GLSurfaceView glView;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -51,19 +64,36 @@ public final class DriveHardActivity extends Activity {
             lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
             getWindow().setAttributes(lp);
         }
-        gameView = new GameView();
-        setContentView(gameView);
+        android.app.ActivityManager am = (android.app.ActivityManager) getSystemService(ACTIVITY_SERVICE);
+        boolean gles3 = am != null && am.getDeviceConfigurationInfo().reqGlEsVersion >= 0x30000;
+        gameView = new GameView(gles3);
+        if (gles3) {
+            glView = new GLSurfaceView(this);
+            glView.setEGLContextClientVersion(3);
+            glView.setPreserveEGLContextOnPause(true);
+            glView.setRenderer(gameView);
+            glView.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
+            gameView.glView = glView;
+            FrameLayout root = new FrameLayout(this);
+            root.addView(glView, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+            root.addView(gameView, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+            setContentView(root);
+        } else {
+            setContentView(gameView);
+        }
         hideSystemUi();
     }
 
     @Override protected void onResume() {
         super.onResume();
+        if (glView != null) glView.onResume();
         if (gameView != null) gameView.resume();
         hideSystemUi();
     }
 
     @Override protected void onPause() {
         if (gameView != null) gameView.pause();
+        if (glView != null) glView.onPause();
         super.onPause();
     }
 
@@ -94,7 +124,7 @@ public final class DriveHardActivity extends Activity {
 
     private enum Screen { GAME, MAP, PAUSE }
 
-    private final class GameView extends View implements Runnable {
+    private final class GameView extends View implements Runnable, GLSurfaceView.Renderer {
         private static final int RES_H = 240, MAX_W = 520;
         private static final int ACCENT = 0xFFE0263A;
         private volatile int W, H;
@@ -126,9 +156,17 @@ public final class DriveHardActivity extends Activity {
         private boolean mapMoved;
         private final java.util.concurrent.ConcurrentLinkedQueue<float[]> mapOps = new java.util.concurrent.ConcurrentLinkedQueue<>();
         private float hintTime = 8f;
+        // GPU drawing (GL thread)
+        private volatile boolean gpu;
+        GLSurfaceView glView;
+        private GlRenderer glRenderer;
+        private volatile int screenW, screenH;
+        private long lastGlFrame;
+        private Thread pacer;
 
-        GameView() {
+        GameView(boolean gpu) {
             super(DriveHardActivity.this);
+            this.gpu = gpu;
             setFocusable(true);
             pixels.setFilterBitmap(false);
             setLayerType(View.LAYER_TYPE_HARDWARE, null);
@@ -144,6 +182,17 @@ public final class DriveHardActivity extends Activity {
                 loop = new Thread(this, "drive-hard-android");
                 loop.start();
             }
+            if (gpu && (pacer == null || !pacer.isAlive())) {
+                // the GPU draws 30 frames a second (half the screen's rate: cooler, and plenty)
+                pacer = new Thread(() -> {
+                    while (running && gpu) {
+                        if (!paused && glView != null) glView.requestRender();
+                        postInvalidateOnAnimation();
+                        try { Thread.sleep(33); } catch (InterruptedException e) { return; }
+                    }
+                }, "drive-hard-frames");
+                pacer.start();
+            }
         }
 
         void pause() {
@@ -154,6 +203,7 @@ public final class DriveHardActivity extends Activity {
 
         void close() {
             running = false;
+            if (pacer != null) pacer.interrupt();
             if (loop != null) {
                 loop.interrupt();
                 try { loop.join(1500); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
@@ -196,7 +246,7 @@ public final class DriveHardActivity extends Activity {
                 loadScreen.reset("Starting up");
                 postInvalidate();
                 g = new Game(Game.DEFAULT_SEED, loadScreen::set, true);
-                g.setResolution(W, H);
+                if (!gpu) g.setResolution(W, H);
                 game = g;
                 long previous = System.nanoTime();
                 while (running) {
@@ -215,6 +265,14 @@ public final class DriveHardActivity extends Activity {
                         previous = System.nanoTime();
                         continue;
                     }
+                    if (gpu) {
+                        // the GL thread draws the frames; this thread only loads and travels
+                        if (quit) { runOnUiThread(DriveHardActivity.this::finish); return; }
+                        Thread.sleep(16);
+                        continue;
+                    }
+                    // the CPU renderer (no OpenGL ES 3, or the GPU set-up failed)
+                    if (!(g.renderer instanceof SoftRenderer)) g.setResolution(W, H);
                     switch (screen) {
                         case MAP: mapFrame(g); break;
                         case PAUSE: pauseFrame(g); break;
@@ -263,7 +321,7 @@ public final class DriveHardActivity extends Activity {
             g.update(dt, x, y, yaw, pitch, doJump, x, doGas ? 1f : 0f, doBrake ? 1f : 0f, doCar);
             g.render();
             hintTime -= dt;
-            System.arraycopy(g.renderer.fb, 0, fb, 0, fb.length);
+            sceneToFrame(g);
             int r = minimapRadius();
             mapView.drawMinimap(fb, W, H, W - r - 8, r + 8, r, g);
             mapView.drawHud(fb, W, H, g, 34, 6);
@@ -283,7 +341,11 @@ public final class DriveHardActivity extends Activity {
                     case 1: mapView.zoomBy(op[1]); break;
                     case 2: {
                         String hit = mapView.tap(g, op[1], op[2], W, H);
-                        if (hit.equals("travel") && mapView.selected != null) { pendingTravel = mapView.selected; return; }
+                        if (hit.equals("travel") && mapView.selected != null) {
+                            travelling = true;          // (the GL thread stops drawing the game first)
+                            pendingTravel = mapView.selected;
+                            return;
+                        }
                         if (hit.equals("close")) { screen = Screen.GAME; return; }
                         break;
                     }
@@ -315,7 +377,7 @@ public final class DriveHardActivity extends Activity {
                 }
             }
             g.render();
-            System.arraycopy(g.renderer.fb, 0, fb, 0, fb.length);
+            sceneToFrame(g);
             mapView.drawMenu(fb, W, H, "PAUSED", MENU, -1, new String[]{
                     "#ON FOOT",
                     "LEFT STICK     WALK",
@@ -334,8 +396,72 @@ public final class DriveHardActivity extends Activity {
             publish();
         }
 
+        /** The HUD draws over the scene: the CPU frame itself, or a clear layer over the GPU's. */
+        private void sceneToFrame(Game g) {
+            if (g.renderer.fb != null) System.arraycopy(g.renderer.fb, 0, fb, 0, fb.length);
+            else java.util.Arrays.fill(fb, 0);
+        }
+
         private void publish() {
+            if (glRenderer != null && game != null && game.renderer == glRenderer) {
+                glRenderer.present(screenW, screenH, Math.round(viewLeft), Math.round(viewTop),
+                        Math.round(W * viewScale), Math.round(H * viewScale), fb);
+                return;
+            }
             synchronized (frame) { frame.setPixels(fb, 0, W, 0, 0, W, H); }
+        }
+
+        private void layout(int sw, int sh) {
+            viewScale = Math.min(sw / (float) W, sh / (float) H);
+            viewLeft = (sw - W * viewScale) * 0.5f;
+            viewTop = (sh - H * viewScale) * 0.5f;
+        }
+
+        // ------------------------------------------------------------------ GL thread
+
+        @Override public void onSurfaceCreated(GL10 unused, EGLConfig config) {
+            // a new context: everything the GPU held is gone and is uploaded again
+            if (glRenderer != null) glRenderer.contextLost();
+        }
+
+        @Override public void onSurfaceChanged(GL10 unused, int width, int height) {
+            screenW = width;
+            screenH = height;
+        }
+
+        @Override public void onDrawFrame(GL10 unused) {
+            if (!gpu || W == 0 || loadScreen == null) {
+                GLES30.glClearColor(0f, 0f, 0f, 1f);
+                GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT);
+                return;
+            }
+            try {
+                if (glRenderer == null) glRenderer = new GlRenderer(new AndroidGl(), W, H);
+                layout(screenW, screenH);
+                Game g = game;
+                if (g == null || travelling) {
+                    glRenderer.presentImage(screenW, screenH, Math.round(viewLeft), Math.round(viewTop),
+                            Math.round(W * viewScale), Math.round(H * viewScale), loadScreen.render(), W, H);
+                    lastGlFrame = 0;
+                    return;
+                }
+                if (g.renderer != glRenderer) g.useRenderer(glRenderer);
+                long now = System.nanoTime();
+                float dt = lastGlFrame == 0 ? 1 / 30f : Math.min(0.05f, (now - lastGlFrame) / 1_000_000_000f);
+                lastGlFrame = now;
+                if (paused) return;
+                switch (screen) {
+                    case MAP: mapFrame(g); break;
+                    case PAUSE: pauseFrame(g); break;
+                    default: gameFrame(g, dt); break;
+                }
+            } catch (Throwable e) {
+                // no usable GPU path on this phone: carry on with the CPU renderer
+                android.util.Log.e("DriveHard", "GPU renderer failed, using the CPU renderer", e);
+                gpu = false;
+                if (glRenderer != null) glRenderer.contextLost();
+                runOnUiThread(() -> { if (glView != null) glView.setVisibility(View.GONE); });
+            }
         }
 
         private void travel(Game g, MapData.Label destination) {
@@ -364,13 +490,23 @@ public final class DriveHardActivity extends Activity {
 
         @Override protected void onDraw(Canvas canvas) {
             super.onDraw(canvas);
-            canvas.drawColor(Color.BLACK);
             Bitmap frame = this.frame;
             LoadScreen loadScreen = this.loadScreen;
+            if (gpu) {
+                // the GPU draws the game underneath: only the controls (and any error) go here
+                if (W > 0) layout(getWidth(), getHeight());
+                if (!error.isEmpty()) {
+                    paint.setColor(0xFFFF8A80);
+                    paint.setTextSize(16 * density);
+                    paint.setTypeface(Typeface.DEFAULT_BOLD);
+                    canvas.drawText(error, 24 * density, 40 * density, paint);
+                }
+                if (game != null && !travelling && screen == Screen.GAME) drawControls(canvas);
+                return;
+            }
+            canvas.drawColor(Color.BLACK);
             if (frame == null || loadScreen == null) { postInvalidateDelayed(33); return; }
-            viewScale = Math.min(getWidth() / (float) W, getHeight() / (float) H);
-            viewLeft = (getWidth() - W * viewScale) * 0.5f;
-            viewTop = (getHeight() - H * viewScale) * 0.5f;
+            layout(getWidth(), getHeight());
             RectF dst = new RectF(viewLeft, viewTop, viewLeft + W * viewScale, viewTop + H * viewScale);
             if (game == null || travelling) {
                 loadBitmap.setPixels(loadScreen.render(), 0, W, 0, 0, W, H);

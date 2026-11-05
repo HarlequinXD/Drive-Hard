@@ -671,11 +671,17 @@ public final class MapView {
         }
     }
 
+    /**
+     * Paints opaque colour c over d with coverage a (0..256). The alpha channel blends too, so the
+     * HUD also works on a clear (premultiplied) layer drawn over the GPU's frame; over an opaque
+     * frame it stays opaque.
+     */
     private static int blend(int d, int c, int a) {
+        int al = (d >>> 24) + (((255 - (d >>> 24)) * a) >> 8);
         int r = ((d >> 16) & 255) + ((((c >> 16) & 255) - ((d >> 16) & 255)) * a >> 8);
         int g = ((d >> 8) & 255) + ((((c >> 8) & 255) - ((d >> 8) & 255)) * a >> 8);
         int b = (d & 255) + (((c & 255) - (d & 255)) * a >> 8);
-        return 0xFF000000 | (r << 16) | (g << 8) | b;
+        return (Math.min(255, al) << 24) | (r << 16) | (g << 8) | b;
     }
 
     private static int mix(int a, int b, float t) {

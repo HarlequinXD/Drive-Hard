@@ -14,6 +14,7 @@ import com.harlequinxd.drivehard.core.model.CharacterSpec;
 import com.harlequinxd.drivehard.core.model.Cars;
 import com.harlequinxd.drivehard.core.model.Flora;
 import com.harlequinxd.drivehard.core.render.Geo;
+import com.harlequinxd.drivehard.core.render.Renderer;
 import com.harlequinxd.drivehard.core.render.SoftRenderer;
 import com.harlequinxd.drivehard.core.render.Texture;
 import com.harlequinxd.drivehard.core.sim.Pedestrians;
@@ -76,7 +77,7 @@ public final class Game {
     private final SpriteCache.Entry[] carEntries = new SpriteCache.Entry[Cars.STYLES];
     private final SpriteCache.Entry[] pedEntries = new SpriteCache.Entry[100];
     private final Random rnd = new Random(7);
-    public SoftRenderer renderer;
+    public Renderer renderer;
     private final float[] move = new float[2];
     public float time;
     /** Time of day, season and weather. */
@@ -222,9 +223,15 @@ public final class Game {
     }
 
     public void setResolution(int w, int h) {
-        if (renderer != null) renderer.dispose();
-        renderer = new SoftRenderer(w, h);
-        renderer.setThreads(Math.min(4, Math.max(1, Runtime.getRuntime().availableProcessors() - 1)));
+        SoftRenderer soft = new SoftRenderer(w, h);
+        soft.setThreads(Math.min(4, Math.max(1, Runtime.getRuntime().availableProcessors() - 1)));
+        useRenderer(soft);
+    }
+
+    /** Draws with the given renderer from now on (the CPU renderer, or the GPU one on phones). */
+    public void useRenderer(Renderer r) {
+        if (renderer != null && renderer != r) renderer.dispose();
+        renderer = r;
         renderer.textures = textures;
         renderer.ground = city.groundSource();
         renderer.setFogColor(0xBCD8EA);
@@ -298,7 +305,7 @@ public final class Game {
         city.chunks.update(player.x, player.z);
         city.chunks.ensureAround(player.x, player.z);
         if (renderer != null) {
-            SoftRenderer vr = renderer;
+            Renderer vr = renderer;
             float half = (float) Math.atan(vr.W * 0.5f / vr.focal());
             traffic.view(vr.ex, vr.ez, vr.fwdX(), vr.fwdZ(), half);
         }
@@ -605,7 +612,7 @@ public final class Game {
     // ------------------------------------------------------------------ render
 
     public void render() {
-        SoftRenderer r = renderer;
+        Renderer r = renderer;
         r.time = time;
         r.lookAt(cam.eyeX, cam.eyeY, cam.eyeZ, cam.tx, cam.ty, cam.tz);
         r.begin();
@@ -642,7 +649,7 @@ public final class Game {
         r.weatherOverlay();
     }
 
-    private void drawVehicle(SoftRenderer r, Vehicle v) {
+    private void drawVehicle(Renderer r, Vehicle v) {
         SpriteCache.Entry e = carEntries[v.style];
         if (e == null) e = car(v.style);
         if (!e.ready()) return;
@@ -654,7 +661,7 @@ public final class Game {
         carsDrawn++;
     }
 
-    private void drawPlayer(SoftRenderer r) {
+    private void drawPlayer(Renderer r) {
         Player p = player;
         drawWaterFx(r);
         SpriteCache.Entry se = swimEntry;
@@ -781,7 +788,7 @@ public final class Game {
         }
     }
 
-    private void drawWaterFx(SoftRenderer r) {
+    private void drawWaterFx(Renderer r) {
         for (WaterFx f : waterFx) {
             float t = f.age / f.life;
             if (f.splash) {
@@ -797,7 +804,7 @@ public final class Game {
         }
     }
 
-    private void drawSprites(Chunk c, SoftRenderer r, Terrain terrain) {
+    private void drawSprites(Chunk c, Renderer r, Terrain terrain) {
         float[] sp = c.sprites;
         float tree2 = treeDist * treeDist, shrub2 = shrubDist * shrubDist, small2 = smallSpriteDist * smallSpriteDist;
         for (int i = 0; i < c.spriteCount; i++) {
@@ -840,7 +847,7 @@ public final class Game {
         }
     }
 
-    private void drawTraffic(SoftRenderer r) {
+    private void drawTraffic(Renderer r) {
         float lim = carDist * carDist;
         for (Traffic.Car c : traffic.cars) {
             float dx = c.x - r.ex, dz = c.z - r.ez;
@@ -859,7 +866,7 @@ public final class Game {
         }
     }
 
-    private void drawPedestrians(SoftRenderer r) {
+    private void drawPedestrians(Renderer r) {
         float lim = pedDist * pedDist;
         for (Pedestrians.Ped p : pedestrians.peds) {
             float dx = p.x - r.ex, dz = p.z - r.ez;
@@ -877,7 +884,7 @@ public final class Game {
         }
     }
 
-    private static void sprite(SoftRenderer r, int tex, SpriteSheet s, int dir, int frame, float x, float y, float z, float bias) {
+    private static void sprite(Renderer r, int tex, SpriteSheet s, int dir, int frame, float x, float y, float z, float bias) {
         int u = s.frameX(dir, frame), v = s.frameY(dir, frame);
         r.billboard(tex, x, y, z, s.left(), s.right(), s.bottom(), s.top(), u, v, u + s.frameW, v + s.frameH, bias);
     }
