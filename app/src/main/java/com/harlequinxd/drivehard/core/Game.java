@@ -9,6 +9,7 @@ import com.harlequinxd.drivehard.core.game.OrbitCamera;
 import com.harlequinxd.drivehard.core.game.Player;
 import com.harlequinxd.drivehard.core.game.Vehicle;
 import com.harlequinxd.drivehard.core.model.Animations;
+import com.harlequinxd.drivehard.core.model.Pose;
 import com.harlequinxd.drivehard.core.model.CharacterModel;
 import com.harlequinxd.drivehard.core.model.CharacterSpec;
 import com.harlequinxd.drivehard.core.model.Cars;
@@ -56,14 +57,14 @@ public final class Game {
     private final float[] door = new float[2];
     private final List<Vehicle> trafficObstacles = new ArrayList<>();
     public final boolean lowMemory;
-    public final SpriteSheet sheet, lamps, signals, umbrellas, poles;
+    public final SpriteSheet lamps, signals, umbrellas, poles;
+    /** The player: hand-pixelled parts on the animation skeleton. */
+    public final com.harlequinxd.drivehard.core.model.Puppet puppet = new com.harlequinxd.drivehard.core.model.Puppet();
     /** The player swimming (wider frames, anchored at the waterline) and the splash burst. */
     public final SpriteSheet splashSheet;
     private final int splashTex;
-    /** The swimming sheet is baked when she first wades in and dropped again when unused. */
-    private SpriteCache.Entry swimEntry;
     private final int[] rippleTex = new int[com.harlequinxd.drivehard.core.tex.PropTextures.RIPPLE_FRAMES];
-    private final int playerTex, lampTex, signalTex, umbrellaTex, poleTex;
+    private final int lampTex, signalTex, umbrellaTex, poleTex;
     public final Texture[] textures = new Texture[4096];
     private int nextTex;
     /** The game data folder for this island (null when there is none). */
@@ -114,7 +115,6 @@ public final class Game {
         // the character and prop sprites bake on another core while the island is generated
         final SpriteSheet[] baked = new SpriteSheet[5];
         Thread baker = new Thread(() -> {
-            baked[0] = new SpriteBaker().bake(new CharacterModel(CharacterSpec.player()), Animations.LAND);
             baked[1] = PropSprites.lamp();
             baked[2] = PropSprites.signals();
             baked[3] = PropSprites.umbrellas();
@@ -149,7 +149,6 @@ public final class Game {
         try { baker.join(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
         for (int i = 0; i < lib.list.size(); i++) textures[i] = lib.list.get(i);
         nextTex = lib.list.size();
-        sheet = baked[0];
         lamps = baked[1];
         signals = baked[2];
         umbrellas = baked[3];
@@ -164,7 +163,7 @@ public final class Game {
             splashTex = addTexture(new Texture(512, sh, atlas));
         }
         for (int i = 0; i < rippleTex.length; i++) rippleTex[i] = addTexture(com.harlequinxd.drivehard.core.tex.PropTextures.ripple(i));
-        playerTex = addTexture(Texture.padded(sheet.pixels, sheet.width, sheet.height));
+        puppet.tex = addTexture(puppet.atlas);
         lampTex = addTexture(Texture.padded(lamps.pixels, lamps.width, lamps.height));
         signalTex = addTexture(Texture.padded(signals.pixels, signals.width, signals.height));
         umbrellaTex = addTexture(Texture.padded(umbrellas.pixels, umbrellas.width, umbrellas.height));
@@ -351,15 +350,6 @@ public final class Game {
                 popT += dt;
                 if (popT > 0.15f && player.onGround) mode = Mode.ON_FOOT;
                 break;
-        }
-        if (player.waterDepth > 0.3f || player.swimming) {
-            if (swimEntry == null || !cache.alive(swimEntry))
-                swimEntry = cache.get("swim", GROUP_PLAYER, 100, () -> {
-                    SpriteBaker b = new SpriteBaker();
-                    b.frameW = 96; b.frameH = 64; b.anchorX = 48; b.anchorY = 40;
-                    return b.bake(new CharacterModel(CharacterSpec.player()), Animations.SWIM);
-                });
-            cache.touch(swimEntry);
         }
         updateWaterFx(dt);
         driveCamera(dt);
@@ -664,37 +654,15 @@ public final class Game {
     private void drawPlayer(Renderer r) {
         Player p = player;
         drawWaterFx(r);
-        SpriteCache.Entry se = swimEntry;
-        if (p.swimming && se != null && cache.alive(se) && se.ready()) {
-            // only what is above the surface is drawn: the sheet is anchored at the waterline
-            cache.touch(se);
-            SpriteSheet ss = se.sheet;
-            int swimTex = se.tex;
-            int f = Animations.firstFrame(p.anim, Animations.SWIM) + p.animFrame;
-            int dir = ss.directionFor(p.facing, cam.yaw);
-            int u = ss.frameX(dir, f), v = ss.frameY(dir, f);
-            r.billboard(swimTex, p.x, p.y, p.z, ss.left(), ss.right(), 0f, ss.top(), u, v, u + ss.frameW, v + ss.anchorY, -0.8f);
-            return;
-        }
         float gy = city.groundHeight(p.x, p.z, Player.RADIUS, p.y + 0.01f, 0.01f);
         float air = Math.min(1f, (p.y - gy) / 3f);
-        if (p.waterDepth < 0.15f)
+        if (p.waterDepth < 0.15f && !p.swimming)
             r.groundQuad(lib.shadow, p.x, gy + 0.02f, p.z, 0.38f * (1f - air * 0.4f), SoftRenderer.MODE_SHADOW, SoftRenderer.L_SHADOW);
-        SpriteSheet s = sheet;
-        boolean swimFallback = p.swimming;              // swim sheet still baking: head and shoulders only
-        Animations.Anim an = p.anim.ordinal() >= Animations.Anim.SWIM_TREAD.ordinal() ? Animations.Anim.IDLE : p.anim;
-        int dir = s.directionFor(p.facing, cam.yaw), frame = Animations.firstFrame(an) + (an == p.anim ? p.animFrame : 0);
-        if (swimFallback || (p.waterDepth > 0.02f && p.y < 0f && mode == Mode.ON_FOOT)) {
-            // wading: cut the sprite at the water surface (her legs are under it)
-            float under = swimFallback ? 1.25f : Math.min(s.top() - 0.1f, -p.y);
-            float py = swimFallback ? p.y - 1.25f : p.y;
-            int u = s.frameX(dir, frame), v = s.frameY(dir, frame);
-            int cut = (int) (under * s.pixelsPerMeter);
-            r.billboard(playerTex, p.x, py, p.z, s.left(), s.right(), under, s.top(), u, v, u + s.frameW, v + s.anchorY - cut, -0.8f);
-            return;
-        }
+        // the sprite puppet on her skeleton; in water only what is above the surface is drawn
+        Pose pose = Animations.poseAt(p.anim, p.animPhase(), p.animFrame);
+        float clip = p.swimming ? p.y : (p.waterDepth > 0.02f && p.y < 0f ? 0f : -1e9f);
         // while hopping in, draw her just in front of the car so she reads as climbing in
-        sprite(r, playerTex, s, dir, frame, p.x, p.y, p.z, mode == Mode.ENTERING ? -1.6f : -0.8f);
+        puppet.draw(r, p.x, p.y, p.z, p.facing, pose, clip, mode == Mode.ENTERING ? -1.6f : -0.8f);
     }
 
     // ------------------------------------------------------------------ water effects

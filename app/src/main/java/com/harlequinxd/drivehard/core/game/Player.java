@@ -29,6 +29,12 @@ public final class Player {
     public float splashImpact;
     /** Animation cycle phase 0..1 of the current loop (strokes, strides), for effects. */
     public float cyclePhase() { return phase; }
+
+    /** Where she is in the current animation, 0..1 (continuous, for the sprite puppet). */
+    public float animPhase() {
+        float p = anim == Anim.IDLE ? idleTime * 1.6f / Anim.IDLE.frames : phase;
+        return p - (float) Math.floor(p);
+    }
     public float facing;               // yaw, facing vector = (sin, 0, cos)
     public boolean onGround = true;
 

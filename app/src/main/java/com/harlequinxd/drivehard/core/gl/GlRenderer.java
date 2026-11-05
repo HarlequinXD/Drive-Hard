@@ -786,6 +786,23 @@ public final class GlRenderer extends Renderer {
         statPolys++;
     }
 
+    @Override public void spriteQuad(int texId, float[] corners, float[] uvTexels, float bias) {
+        int q = addQuad(texId, L_OBJECT, 1);
+        if (q < 0) return;
+        Texture t = textures[texId];
+        System.arraycopy(corners, 0, dynPos, q * 12, 12);
+        for (int k = 0; k < 4; k++) {
+            dynUv[q * 8 + k * 2] = uvTexels[k * 2] / t.w;
+            dynUv[q * 8 + k * 2 + 1] = uvTexels[k * 2 + 1] / t.h;
+        }
+        float cxw = (corners[0] + corners[6]) * 0.5f, czw = (corners[2] + corners[8]) * 0.5f;
+        float vz = (cxw - ex) * fx + (czw - ez) * fz;
+        dynLit[q * 3] = 1f;
+        dynLit[q * 3 + 1] = 1f;
+        dynLit[q * 3 + 2] = vz > near ? Math.max(0.3f, Math.min(3.9f, vz / Math.max(near, vz + bias))) : 1f;
+        statPolys++;
+    }
+
     @Override public void groundQuad(int texId, float x, float y, float z, float r, int mode, int layer, float bias) {
         int q = addQuad(texId, layer, modeFlags(mode));
         if (q < 0) return;

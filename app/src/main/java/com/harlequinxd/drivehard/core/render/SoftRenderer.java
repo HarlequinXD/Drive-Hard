@@ -942,6 +942,14 @@ public final class SoftRenderer extends Renderer {
         submit(p, wuv, wl, 4, texId, layer, mode, 0f, false);
     }
 
+    private final float[] sq = new float[12], suv = new float[8], sl = {1f, 1f, 1f, 1f};
+
+    @Override public void spriteQuad(int texId, float[] corners, float[] uvTexels, float bias) {
+        System.arraycopy(corners, 0, sq, 0, 12);
+        System.arraycopy(uvTexels, 0, suv, 0, 8);
+        submit(sq, suv, sl, 4, texId, L_OBJECT, MODE_ALPHA, bias, false);
+    }
+
     private final float[] vq = new float[4 * VA];
 
     /**

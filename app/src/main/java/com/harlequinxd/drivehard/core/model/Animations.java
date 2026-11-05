@@ -67,6 +67,20 @@ public final class Animations {
         }
     }
 
+    /** A pose anywhere in a looping animation (p 0..1, between the baked frames); jumps by frame. */
+    public static Pose poseAt(Anim anim, float p, int frame) {
+        switch (anim) {
+            case IDLE: return idle(p);
+            case WALK: return walk(p);
+            case RUN: return run(p);
+            case WADE: return wade(p);
+            case SWIM_TREAD: return tread(p);
+            case SWIM_BREAST: return breaststroke(p);
+            case SWIM_FREE: return freestyle(p);
+            default: return jump(frame);
+        }
+    }
+
     private static float pos(float v) { return v > 0 ? v : 0; }
 
     private static void arms(Pose o, float rxL, float rxR, float out, float elbowL, float elbowR) {

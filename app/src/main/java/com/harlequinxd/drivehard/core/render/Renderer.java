@@ -172,6 +172,12 @@ public abstract class Renderer {
     /** Rotated flat quad on the ground (e.g. a car's shadow): half length along yaw, half width across. */
     public abstract void groundQuadRotated(int texId, float x, float y, float z, float halfLen, float halfWid, float yaw, int mode, int layer);
 
+    /**
+     * A cut-out sprite on any flat quad (puppet parts): corners bottom-left, bottom-right,
+     * top-right, top-left (world xyz), uv in texels; sorted with the objects, nearer by -bias metres.
+     */
+    public abstract void spriteQuad(int texId, float[] corners, float[] uvTexels, float bias);
+
     /** Draws everything submitted since {@link #begin}. */
     public abstract void flush();
 
