@@ -21,15 +21,41 @@ public final class PropSprites {
         return b.bakeStatic(v);
     }
 
-    /** One of the 100 car styles at 16 view angles. */
+    /**
+     * A car style at 16 view angles: its pixel-art blueprint drawn in every direction, the frames
+     * cropped to the car (so the sheet holds no empty margins).
+     */
     public static SpriteSheet car(int style) {
-        int[] f = com.harlequinxd.drivehard.core.model.Cars.frame(style);
-        SpriteBaker b = baker(f[0], f[1], f[2], f[3], com.harlequinxd.drivehard.core.model.Cars.PPM);
-        b.directions = 16;
-        b.outline = true;
-        List<List<Part>> v = new ArrayList<>();
-        v.add(com.harlequinxd.drivehard.core.model.Cars.build(style));
-        return b.bakeStatic(v);
+        PixelCars kit = new PixelCars();
+        PixelCars.Model m = com.harlequinxd.drivehard.core.model.Cars.model(style);
+        int paint = com.harlequinxd.drivehard.core.model.Cars.paint(style);
+        int FW = PixelCars.FW, FH = PixelCars.FH;
+        int[][] views = new int[16][];
+        int x0 = FW, y0 = FH, x1 = -1, y1 = -1;
+        for (int a = 0; a < 16; a++) {
+            int[] px = kit.draw(m, paint, a);
+            views[a] = px;
+            for (int y = 0; y < FH; y++)
+                for (int x = 0; x < FW; x++)
+                    if (px[y * FW + x] != 0) {
+                        if (x < x0) x0 = x; if (x > x1) x1 = x;
+                        if (y < y0) y0 = y; if (y > y1) y1 = y;
+                    }
+        }
+        if (x1 < 0) { x0 = 0; y0 = 0; x1 = FW - 1; y1 = FH - 1; }
+        x0 = Math.max(0, x0 - 1); y0 = Math.max(0, y0 - 1);
+        x1 = Math.min(FW - 1, x1 + 1); y1 = Math.min(FH - 1, y1 + 1);
+        int fw = x1 - x0 + 1, fh = y1 - y0 + 1;
+        int W = 256;
+        while (W < fw * 4) W <<= 1;
+        int perRow = W / fw, rows = (16 + perRow - 1) / perRow, H = rows * fh;
+        int[] atlas = new int[W * H];
+        for (int a = 0; a < 16; a++) {
+            int ox = (a % perRow) * fw, oy = (a / perRow) * fh;
+            int[] px = views[a];
+            for (int y = 0; y < fh; y++) System.arraycopy(px, (y0 + y) * FW + x0, atlas, (oy + y) * W + ox, fw);
+        }
+        return new SpriteSheet(atlas, W, H, fw, fh, 1, 16, perRow, FW / 2 - x0, PixelCars.GROUND - y0, PixelCars.PPM);
     }
 
     /** Pedestrian frames: idle (4) then walk (8). */

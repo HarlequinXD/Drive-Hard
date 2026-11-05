@@ -261,6 +261,9 @@ public final class Game {
     }
 
     public void requestCar() { car(rnd.nextInt(Cars.STYLES)); }
+
+    /** Starts baking one car style's sprites (tools, previews). */
+    public void requestCarStyle(int style) { car(Math.floorMod(style, Cars.STYLES)); }
     public void requestPed() { ped(rnd.nextInt(100)); }
 
     // ------------------------------------------------------------------ update
