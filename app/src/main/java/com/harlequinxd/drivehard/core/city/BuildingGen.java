@@ -38,6 +38,20 @@ final class BuildingGen {
         this.ch = ch;
     }
 
+    private boolean isBlank(int tex) {
+        for (int f : lib.facades(Kind.BLANK)) if (f == tex) return true;
+        return false;
+    }
+
+    /** True if a texture is one of the storey-sized facade pictures (with windows painted on). */
+    private boolean isFacade(int tex) {
+        for (Kind k : Kind.values()) {
+            if (k == Kind.BLANK || k == Kind.HOUSE || k == Kind.HOUSE_WOOD) continue;
+            for (int f : lib.facades(k)) if (f == tex) return true;
+        }
+        return false;
+    }
+
     private int pick(Kind k) {
         int[] a = lib.facades(k);
         return a[r.nextInt(a.length)];
@@ -119,6 +133,35 @@ final class BuildingGen {
         t.groundH = hasGround ? groundH : floorH;
         t.storeyH = floorH;
         int cols = Math.max(1, Math.round(len / 2f));
+        if (tex >= 0 && isBlank(tex)) {
+            // party / side walls: plain material, no windows (one polygon per storey)
+            for (int f = 0; f < floors; f++) t.storey(f, cols, Sectors.PLAIN, 0);
+            if (hasGround && (ground == -1 || ground == -2)) {
+                int units = Math.max(1, Math.round(len / 5.5f));
+                t.storey(0, units, Sectors.FULL, 0);
+                t.litGround = true;
+                for (int u = 0; u < units; u++) t.tex[0][u] = shopSet[r.nextInt(shopSet.length)];
+            }
+            return t;
+        }
+        if (storeys >= 1 && tex >= 0 && isFacade(tex)) {
+            // tall buildings: every upper storey is the facade picture (painted windows that light
+            // up at night) repeated along the face: one polygon per storey instead of five per window
+            for (int f = hasGround ? 1 : 0; f < floors; f++) t.storey(f, cols, Sectors.FULL, tex);
+            if (hasGround && !(ground == -1 || ground == -2)) {
+                t.storey(0, cols, Sectors.PLAIN, 0);
+                if (streetSide) { t.kind[0][cols / 2] = Sectors.DOOR; t.tex[0][cols / 2] = lib.houseDoor[r.nextInt(lib.houseDoor.length)]; }
+            }
+            if (hasGround && (ground == -1 || ground == -2)) {
+                int units = Math.max(1, Math.round(len / 5.5f));
+                t.storey(0, units, Sectors.FULL, 0);
+                t.litGround = true;
+                for (int u = 0; u < units; u++)
+                    t.tex[0][u] = ground == -2 ? (u == units / 2 ? lib.lobbies[r.nextInt(lib.lobbies.length)] : lib.facades(Kind.GLASS)[0])
+                            : shopSet[r.nextInt(shopSet.length)];
+            }
+            return t;
+        }
         // real buildings repeat one window layout up the whole facade: pick the columns once
         // (mirrored, so the facade is symmetric) and one or two window types
         boolean[] mask = new boolean[cols];
@@ -232,7 +275,12 @@ final class BuildingGen {
      */
     private void block(float x0, float z0, float x1, float z1, float base, boolean[] street, boolean[] shops, int[] shopSet,
                        Kind front, Kind back, int floors, float floorH, boolean bigSign, int signs) {
-        int fTex = pick(front), bTex = pick(back), side = pick(Kind.BLANK);
+        // rear walls of shops and offices still have windows (stairs, back rooms, toilets)
+        if (back == Kind.BLANK && front != Kind.BLANK && floors > 1) back = Kind.SHOPHOUSE;
+        int fTex = pick(front), bTex = pick(back);
+        // exposed side walls mostly carry the back facade's windows; some are blank
+        Kind sideKind = back == Kind.BLANK || r.nextFloat() < 0.3f ? Kind.BLANK : back;
+        int side = pick(sideKind);
         // no pencil towers: at most 2.5 times as tall as the building is wide
         float narrow = Math.min(x1 - x0, z1 - z0);
         floors = Math.max(1, Math.min(floors, (int) (narrow * 2.5f / floorH)));
@@ -245,7 +293,7 @@ final class BuildingGen {
             int tex = street[s] ? fTex : (s == N || s == S ? bTex : side);
             t[s] = facade(len(s, x0, z0, x1, z1), groundH, floors - 1, floorH, tex,
                     shops[s] ? -1 : tex, shopSet, street[s]);
-            Kind k = street[s] ? front : (s == N || s == S ? back : Kind.BLANK);
+            Kind k = street[s] ? front : (s == N || s == S ? back : sideKind);
             t[s].glowFacade = k != Kind.BLANK && k != Kind.WAREHOUSE;     // only facades with windows light up
             if (street[s] && signs > 0 && floors > 1) verticalSigns(s, x0, z0, x1, z1, base + groundH + 0.6f, top, signs);
         }

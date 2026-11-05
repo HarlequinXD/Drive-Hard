@@ -9,9 +9,23 @@ package com.harlequinxd.drivehard.core.render;
 public final class Ground {
     /** Tile edge in metres, texels per tile edge at mip 0, height samples per tile edge (cells + 1). */
     public static final float TILE = 64f;
-    public static final int RES = 512, HCELLS = 8;
-    public static final float TEXEL = TILE / RES, HCELL = TILE / HCELLS;
-    public static final int MIPS = 7;
+    public static final int HCELLS = 8;
+    public static final float HCELL = TILE / HCELLS;
+    /** Painted texels per tile edge at mip 0 (512 = 8 per metre; low-memory mode 256). */
+    public static int RES = 512;
+    public static float TEXEL = TILE / RES;
+
+    /**
+     * Low-memory mode (phones): ground painted at 4 texels per metre, a quarter of the memory per
+     * tile. Must be set before any ground is painted.
+     */
+    public static void lowMemory(boolean on) {
+        RES = on ? 256 : 512;
+        TEXEL = TILE / RES;
+        MIPS = on ? 6 : 7;
+    }
+    /** Mip levels (the smallest is 8x8 texels). */
+    public static int MIPS = 7;
     /** Cells per tile edge of the water map. */
     public static final int WRES = 64;
 

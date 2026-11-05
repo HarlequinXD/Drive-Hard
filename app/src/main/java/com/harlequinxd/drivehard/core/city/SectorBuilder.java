@@ -92,7 +92,7 @@ final class SectorBuilder {
     }
 
     /** Roof tiles: tile size along the roof axes, so the ordering table sorts small pieces. */
-    private static final float ROOF_TILE = 2.5f;
+    private static final float ROOF_TILE = 6f;
 
     /**
      * A roof (or the top of a block) as square tiles: the sector polygon cut along its own tile
@@ -190,13 +190,29 @@ final class SectorBuilder {
             if (row == maxFloors) rowTop = maxTop;
             if (row >= 0 && rowBottom >= maxTop) break;
             boolean storey = row >= 0 && row < maxFloors;
-            int cols = storey && row < tiles.cols.length && tiles.cols[row] > 0 ? tiles.cols[row] : Math.max(1, (int) Math.ceil(faceLen / WALL_TILE));
+            int cols = storey && row < tiles.cols.length && tiles.cols[row] > 0 ? tiles.cols[row] : Math.max(1, (int) Math.ceil(faceLen / (row < 0 ? 4f : WALL_TILE)));
             float tileW = faceLen / cols;
             int firstCol = Math.max(0, (int) Math.floor(minPos / tileW));
             int lastCol = Math.min(cols - 1, (int) Math.floor(Math.max(minPos, maxPos - 1e-4f) / tileW));
             for (int col = firstCol; col <= lastCol; col++) {
                 float a = Math.max(minPos, col * tileW), b = Math.min(maxPos, (col + 1) * tileW);
-                if (b - a < 0.01f) continue;
+                // runs of identical plain or full-facade tiles become one polygon (the texture repeats)
+                int runEnd = col;
+                if (row >= 0) {
+                    byte k0 = storey && tiles.kind[row] != null && col < tiles.kind[row].length ? tiles.kind[row][col] : Sectors.PLAIN;
+                    int t0 = storey && tiles.tex[row] != null && col < tiles.tex[row].length ? tiles.tex[row][col] : 0;
+                    if (k0 == Sectors.PLAIN || k0 == Sectors.FULL) {
+                        while (runEnd < lastCol) {
+                            int c2 = runEnd + 1;
+                            byte k1 = storey && tiles.kind[row] != null && c2 < tiles.kind[row].length ? tiles.kind[row][c2] : Sectors.PLAIN;
+                            int t1 = storey && tiles.tex[row] != null && c2 < tiles.tex[row].length ? tiles.tex[row][c2] : 0;
+                            if (k1 != k0 || (k0 == Sectors.FULL && t1 != t0)) break;
+                            runEnd = c2;
+                        }
+                        b = Math.min(maxPos, (runEnd + 1) * tileW);
+                    }
+                }
+                if (b - a < 0.01f) { col = runEnd; continue; }
                 float s0 = (a - pos0) / wall.len, s1 = (b - pos0) / wall.len;
                 float ax = wall.x0 + (wall.x1 - wall.x0) * s0, az = wall.z0 + (wall.z1 - wall.z0) * s0;
                 float bx = wall.x0 + (wall.x1 - wall.x0) * s1, bz = wall.z0 + (wall.z1 - wall.z0) * s1;
@@ -212,7 +228,7 @@ final class SectorBuilder {
                 float wt0 = top0 + (top1 - top0) * s0, wt1 = top0 + (top1 - top0) * s1;
                 float lo0 = Math.max(wb0, rowBottom), lo1 = Math.max(wb1, rowBottom);
                 float hi0 = Math.min(wt0, rowTop), hi1 = Math.min(wt1, rowTop);
-                if (Math.max(hi0 - lo0, hi1 - lo1) < 0.01f) continue;
+                if (Math.max(hi0 - lo0, hi1 - lo1) < 0.01f) { col = runEnd; continue; }
                 if (hi0 < lo0) hi0 = lo0;
                 if (hi1 < lo1) hi1 = lo1;
                 if (row < 0) {
@@ -237,6 +253,7 @@ final class SectorBuilder {
                         materialPatch(gb, wall, ax, az, bx, bz, a, b, lo0, lo1, hi0, hi1, mat, tiles.matScale);
                     }
                 }
+                col = runEnd;
             }
             rowBottom = rowTop;
         }

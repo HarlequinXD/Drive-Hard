@@ -123,19 +123,33 @@ public final class SpriteCache {
             if (capacity[g] <= 0) continue;
             List<Entry> ready = new ArrayList<>();
             for (Entry x : entries.values()) if (x.group == g && x.ready()) ready.add(x);
+            // stream out what has not been drawn for a while, even under capacity
+            for (Entry x : ready) {
+                if (frame - x.lastUse <= IDLE_FRAMES) continue;
+                evict(x);
+            }
+            ready.removeIf(x -> !x.ready());
             if (ready.size() <= capacity[g]) continue;
             ready.sort((a, b) -> Long.compare(a.lastUse, b.lastUse));
             for (int i = 0; i < ready.size() - capacity[g]; i++) {
                 Entry x = ready.get(i);
                 if (frame - x.lastUse < 2) break;            // still on screen
-                textures[x.tex] = null;
-                freeSlots.add(x.tex);
-                x.tex = -1;
-                x.sheet = null;
-                x.queued = false;
-                entries.remove(x.key);
+                evict(x);
             }
         }
+    }
+
+    /** Frames a sheet may go unused (about 40 s at 30 fps) before its memory is given back. */
+    public static final int IDLE_FRAMES = 1200;
+
+    private void evict(Entry x) {
+        if (x.tex < 0) return;
+        textures[x.tex] = null;
+        freeSlots.add(x.tex);
+        x.tex = -1;
+        x.sheet = null;
+        x.queued = false;
+        entries.remove(x.key);
     }
 
     /** Synchronously bakes everything queued (desktop tools / tests). */

@@ -33,6 +33,20 @@ public final class Geo {
     public float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE, minZ = Float.MAX_VALUE;
     public float maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE, maxZ = -Float.MAX_VALUE;
 
+    /** Shrinks the arrays to the polygons actually stored (call once a batch is complete). */
+    public void trim() {
+        int n = Math.max(1, count);
+        if (tex.length == n) return;
+        pos = Arrays.copyOf(pos, n * 12);
+        uv = Arrays.copyOf(uv, n * 8);
+        light = Arrays.copyOf(light, n * 4);
+        nrm = Arrays.copyOf(nrm, n * 3);
+        bias = Arrays.copyOf(bias, n);
+        tex = Arrays.copyOf(tex, n);
+        meta = Arrays.copyOf(meta, n);
+        if (alpha != null) alpha = Arrays.copyOf(alpha, n * 4);
+    }
+
     private void grow() {
         int n = tex.length * 2;
         pos = Arrays.copyOf(pos, n * 12);

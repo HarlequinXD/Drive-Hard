@@ -86,7 +86,7 @@ public final class DriveHardActivity extends Activity {
     private enum Screen { GAME, MAP, PAUSE }
 
     private final class GameView extends View implements Runnable {
-        private static final int RES_H = 288, MAX_W = 640;
+        private static final int RES_H = 240, MAX_W = 520;
         private static final int ACCENT = 0xFFE0263A;
         private volatile int W, H;
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -179,14 +179,14 @@ public final class DriveHardActivity extends Activity {
             try {
                 while (running && (getWidth() == 0 || getHeight() == 0)) Thread.sleep(20);
                 H = RES_H;
-                W = Math.min(MAX_W, Math.max(384, Math.round(RES_H * getWidth() / (float) getHeight()) & ~1));
+                W = Math.min(MAX_W, Math.max(320, Math.round(RES_H * getWidth() / (float) getHeight()) & ~1));
                 fb = new int[W * H];
                 frame = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888);
                 loadBitmap = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888);
                 loadScreen = new LoadScreen(W, H);
                 loadScreen.reset("Starting up");
                 postInvalidate();
-                g = new Game(Game.DEFAULT_SEED, loadScreen::set);
+                g = new Game(Game.DEFAULT_SEED, loadScreen::set, true);
                 g.setResolution(W, H);
                 game = g;
                 long previous = System.nanoTime();

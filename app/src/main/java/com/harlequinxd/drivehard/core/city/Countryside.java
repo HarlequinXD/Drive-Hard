@@ -52,6 +52,8 @@ public final class Countryside {
         float rx, rz;   // driveway end at the road edge
         /** Painted ground areas {x0, z0, x1, z1, texture}. */
         List<float[]> ground;
+        /** The painted ground areas packed {x0, z0, x1, z1, texture}* once placement is done. */
+        float[] groundPacked;
     }
 
     private final HashMap<Long, List<Site>> sites = new HashMap<>();
@@ -64,6 +66,18 @@ public final class Countryside {
         this.lib = lib;
         this.seed = (int) seed;
         place();
+        // placement bookkeeping is no longer needed; pack every site's ground into one array
+        taken = null;
+        for (List<Site> list : sites.values()) {
+            for (Site st : list) {
+                if (st.ground == null) continue;
+                float[] pk = new float[st.ground.size() * 5];
+                for (int i = 0; i < st.ground.size(); i++) System.arraycopy(st.ground.get(i), 0, pk, i * 5, 5);
+                st.groundPacked = pk;
+                st.ground = null;
+            }
+            if (list instanceof ArrayList) ((ArrayList<Site>) list).trimToSize();
+        }
     }
 
     // ------------------------------------------------------------------ land use
@@ -312,7 +326,7 @@ public final class Countryside {
 
     // ------------------------------------------------------------------ site placement
 
-    private final HashSet<Long> taken = new HashSet<>();
+    private HashSet<Long> taken = new HashSet<>();
 
     private static long cellKey(int x, int z) { return ((long) x << 32) ^ (z & 0xFFFFFFFFL); }
 
@@ -613,13 +627,14 @@ public final class Countryside {
         // one query at the centre clears the whole lot when the nearest road is beyond its corners
         float half = (float) Math.hypot(x1 - x0, z1 - z0) * 0.5f;
         boolean open = roads.roadClearance((x0 + x1) * 0.5f, (z0 + z1) * 0.5f, half + 1f) > half + 0.5f;
-        for (int j = 0; j <= 2; j++)
-            for (int i = 0; i <= 2; i++) {
-                float x = x0 + 1f + (x1 - x0 - 2f) * i / 2f, z = z0 + 1f + (z1 - z0 - 2f) * j / 2f;
-                if (!open && roads.roadClearance(x, z, 20f) < 0.5f) return false;
-                float h = terrain.height(x, z);
-                lo = Math.min(lo, h); hi = Math.max(hi, h);
-            }
+        // the four corners and the middle; the natural ground is enough to judge the slope
+        for (int k = 0; k < 5; k++) {
+            float fi = k == 4 ? 0.5f : (k & 1), fj = k == 4 ? 0.5f : (k >> 1);
+            float x = x0 + 1f + (x1 - x0 - 2f) * fi, z = z0 + 1f + (z1 - z0 - 2f) * fj;
+            if (!open && roads.roadClearance(x, z, 20f) < 0.5f) return false;
+            float h = terrain.natural(x, z);
+            lo = Math.min(lo, h); hi = Math.max(hi, h);
+        }
         return hi - lo < 4f;
     }
 
@@ -643,7 +658,7 @@ public final class Countryside {
                 break;
             case APAATO: {
                 float ax0 = s.x0, ax1 = s.x1, az0 = s.z0, az1 = s.z1;
-                if (s.ground != null) {      // on a town lot: set back behind a car park
+                if (s.groundPacked != null) {      // on a town lot: set back behind a car park
                     ax0 += 1f; ax1 -= 1f;
                     if (s.face == 0) { az0 += 6f; az1 = Math.min(az1 - 1f, az0 + 10f); } else { az1 -= 6f; az0 = Math.max(az0 + 1f, az1 - 10f); }
                 }
@@ -769,9 +784,10 @@ public final class Countryside {
                 List<Site> list = sites.get(ChunkManager.key(cx, cz));
                 if (list == null) continue;
                 for (Site s : list) {
-                    if (s.ground != null) {
-                        for (float[] g : s.ground)
-                            if (!(g[2] < ax0 || g[0] > ax1 || g[3] < az0 || g[1] > az1)) sink.yard(g[0], g[1], g[2], g[3], (int) g[4]);
+                    if (s.groundPacked != null) {
+                        float[] g = s.groundPacked;
+                        for (int i = 0; i < g.length; i += 5)
+                            if (!(g[i + 2] < ax0 || g[i] > ax1 || g[i + 3] < az0 || g[i + 1] > az1)) sink.yard(g[i], g[i + 1], g[i + 2], g[i + 3], (int) g[i + 4]);
                         continue;
                     }
                     float[] r;

@@ -63,6 +63,7 @@ public final class RoadNetwork {
         buildIndex();
         indexNodes();
         for (RoadNode nd : nodes) ring(nd);
+        farmCells = null;                 // only needed while placing farms
         buildTime = (System.nanoTime() - t0) / 1e6f;
     }
 
@@ -1238,7 +1239,7 @@ public final class RoadNetwork {
 
     /** Farmsteads: {x0, z0, x1, z1, face (0=N,1=S,2=W,3=E: side toward the lane), seed}. */
     public final List<float[]> farms = new ArrayList<>();
-    private final java.util.HashSet<Long> farmCells = new java.util.HashSet<>();
+    private java.util.HashSet<Long> farmCells = new java.util.HashSet<>();
 
     /**
      * Places farmsteads beside country roads and highways. Each gets its own access lane that

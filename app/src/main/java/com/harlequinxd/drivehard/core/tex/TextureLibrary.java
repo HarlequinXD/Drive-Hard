@@ -23,8 +23,8 @@ public final class TextureLibrary {
 
     public final int[][] jp = new int[JpTextures.Kind.values().length][];
     public static final int SHOP_COUNT = 520;
-    public final int[] shops = new int[SHOP_COUNT];
-    public final int[] shopCategory = new int[SHOP_COUNT];
+    public final int[] shops;
+    public final int[] shopCategory;
     public final int[] lobbies;
     public final int[] roofs, signs, vending, stationSigns, koban, fireDoors;
     /** Countryside: rice paddies (flooded, green, golden), cabbage, ploughed soil, tea, greenhouse vinyl, gravel, guardrail. */
@@ -37,7 +37,13 @@ public final class TextureLibrary {
     public final List<String> shopNames = new ArrayList<>();
     public static final String[] STATIONS = {"MINATO-CHUO", "SAKURAGAOKA", "HIGASHI-HAMA"};
 
-    public TextureLibrary(long seed) {
+    public TextureLibrary(long seed) { this(seed, false); }
+
+    /** @param lowMemory phones: a third of the shopfront variants and half the facade variants */
+    public TextureLibrary(long seed, boolean lowMemory) {
+        int shopCount = lowMemory ? SHOP_COUNT / 3 : SHOP_COUNT;
+        shops = new int[shopCount];
+        shopCategory = new int[shopCount];
         asphalt = add(asphalt(seed, false));
         asphaltPatched = add(asphalt(seed + 1, true));
         sidewalk = add(sidewalk(seed));
@@ -70,6 +76,7 @@ public final class TextureLibrary {
 
         Random r = new Random(seed);
         int[] counts = {24, 10, 30, 20, 14, 16, 20, 8, 3, 8, 16};
+        if (lowMemory) for (int k = 0; k < counts.length; k++) counts[k] = Math.max(2, counts[k] / 2);
         JpTextures.Kind[] kinds = JpTextures.Kind.values();
         int s = 1000;
         for (int k = 0; k < kinds.length; k++) {
@@ -77,7 +84,7 @@ public final class TextureLibrary {
             for (int i = 0; i < counts[k]; i++) jp[k][i] = add(JpTextures.facade(r, kinds[k], s++));
         }
         String[] name = new String[1];
-        for (int i = 0; i < SHOP_COUNT; i++) {
+        for (int i = 0; i < shops.length; i++) {
             int cat = i % JpTextures.CATEGORIES.length;
             shopCategory[i] = cat;
             shops[i] = add(JpTextures.shop(cat, s++, name));

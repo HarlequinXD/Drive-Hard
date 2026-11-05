@@ -59,6 +59,7 @@ public final class ChunkManager {
         Chunk c = loaded.get(k);
         if (c != null) return c;
         c = city.generate(cx, cz);
+        for (com.harlequinxd.drivehard.core.render.Geo g : c.batches) g.trim();
         Chunk prev = loaded.putIfAbsent(k, c);
         if (prev == null) generatedTotal++;
         return prev != null ? prev : c;

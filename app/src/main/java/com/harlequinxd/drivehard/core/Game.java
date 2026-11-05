@@ -32,7 +32,7 @@ import java.util.concurrent.ThreadLocalRandom;
 /** Platform-independent game: streamed island, player, traffic, pedestrians, flora and the renderer. */
 public final class Game {
     public static final int GROUP_FLORA = 0, GROUP_CARS = 1, GROUP_PEDS = 2;
-    public static final int CAR_CACHE = 24, PED_CACHE = 16;
+    public static final int CAR_CACHE = 24, PED_CACHE = 16, GROUP_PLAYER = 3;
 
     public final TextureLibrary lib;
     public final City city;
@@ -54,10 +54,13 @@ public final class Game {
     private float camIdle;
     private final float[] door = new float[2];
     private final List<Vehicle> trafficObstacles = new ArrayList<>();
+    public final boolean lowMemory;
     public final SpriteSheet sheet, lamps, signals, umbrellas, poles;
     /** The player swimming (wider frames, anchored at the waterline) and the splash burst. */
-    public final SpriteSheet swimSheet, splashSheet;
-    private final int swimTex, splashTex;
+    public final SpriteSheet splashSheet;
+    private final int splashTex;
+    /** The swimming sheet is baked when she first wades in and dropped again when unused. */
+    private SpriteCache.Entry swimEntry;
     private final int[] rippleTex = new int[com.harlequinxd.drivehard.core.tex.PropTextures.RIPPLE_FRAMES];
     private final int playerTex, lampTex, signalTex, umbrellaTex, poleTex;
     public final Texture[] textures = new Texture[4096];
@@ -92,17 +95,37 @@ public final class Game {
         return ThreadLocalRandom.current().nextLong();
     }
 
-    public Game(long seed, Progress progress) {
+    public Game(long seed, Progress progress) { this(seed, progress, false); }
+
+    /**
+     * @param lowMemory phones: ground painted at half resolution, fewer chunks kept loaded,
+     *                  a shorter view distance
+     */
+    public Game(long seed, Progress progress, boolean lowMemory) {
+        this.lowMemory = lowMemory;
+        com.harlequinxd.drivehard.core.render.Ground.lowMemory(lowMemory);
         env = new Environment(seed);
         if (progress != null) progress.step("Painting building textures", 0.00f);
-        lib = new TextureLibrary(seed);
+        lib = new TextureLibrary(seed, lowMemory);
         if (progress != null) progress.step("Baking characters and props", 0.10f);
-        CharacterModel playerModel = new CharacterModel(CharacterSpec.player());
-        sheet = new SpriteBaker().bake(playerModel, Animations.LAND);
-        SpriteBaker swimBaker = new SpriteBaker();
-        swimBaker.frameW = 96; swimBaker.frameH = 64; swimBaker.anchorX = 48; swimBaker.anchorY = 40;
-        swimSheet = swimBaker.bake(playerModel, Animations.SWIM);
-        swimTex = lib.add(Texture.padded(swimSheet.pixels, swimSheet.width, swimSheet.height));
+        // the character and prop sprites bake on another core while the island is generated
+        final SpriteSheet[] baked = new SpriteSheet[5];
+        Thread baker = new Thread(() -> {
+            baked[0] = new SpriteBaker().bake(new CharacterModel(CharacterSpec.player()), Animations.LAND);
+            baked[1] = PropSprites.lamp();
+            baked[2] = PropSprites.signals();
+            baked[3] = PropSprites.umbrellas();
+            baked[4] = PropSprites.utilityPole();
+        }, "sprite-baker");
+        baker.start();
+        if (progress != null) progress.step("Raising the island", 0.14f);
+        city = new City(lib, seed, progress == null ? null : (what, done) -> progress.step(what, 0.14f + done * 0.66f));
+        try { baker.join(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        sheet = baked[0];
+        lamps = baked[1];
+        signals = baked[2];
+        umbrellas = baked[3];
+        poles = baked[4];
         {
             int sf = 8, sw = 48, sh = 48, perRow = 512 / sw;
             int[] frames = com.harlequinxd.drivehard.core.tex.PropTextures.splash(sf, sw, sh, 4242);
@@ -113,18 +136,13 @@ public final class Game {
             splashTex = lib.add(new Texture(512, sh, atlas));
         }
         for (int i = 0; i < rippleTex.length; i++) rippleTex[i] = lib.add(com.harlequinxd.drivehard.core.tex.PropTextures.ripple(i));
-        lamps = PropSprites.lamp();
-        signals = PropSprites.signals();
-        umbrellas = PropSprites.umbrellas();
-        poles = PropSprites.utilityPole();
         playerTex = lib.add(Texture.padded(sheet.pixels, sheet.width, sheet.height));
         lampTex = lib.add(Texture.padded(lamps.pixels, lamps.width, lamps.height));
         signalTex = lib.add(Texture.padded(signals.pixels, signals.width, signals.height));
         umbrellaTex = lib.add(Texture.padded(umbrellas.pixels, umbrellas.width, umbrellas.height));
         poleTex = lib.add(Texture.padded(poles.pixels, poles.width, poles.height));
         for (int i = 0; i < lib.list.size(); i++) textures[i] = lib.list.get(i);
-        cache = new SpriteCache(textures, lib.list.size(), new int[]{0, CAR_CACHE, PED_CACHE});
-
+        cache = new SpriteCache(textures, lib.list.size(), new int[]{0, lowMemory ? 10 : CAR_CACHE, lowMemory ? 10 : PED_CACHE, 1});
         // plants bake in the background, most common species first
         Flora[] order = {Flora.GINKGO, Flora.ZELKOVA, Flora.SAKURA, Flora.BLACK_PINE, Flora.MAPLE, Flora.CEDAR,
                 Flora.CAMPHOR, Flora.BAMBOO, Flora.AZALEA, Flora.BOXWOOD, Flora.CAMELLIA, Flora.HYDRANGEA};
@@ -132,8 +150,6 @@ public final class Game {
             final Flora f = order[i];
             flora[f.ordinal()] = cache.get("flora:" + f, GROUP_FLORA, i, () -> PropSprites.flora(f));
         }
-        if (progress != null) progress.step("Raising the island", 0.14f);
-        city = new City(lib, seed, progress == null ? null : (what, done) -> progress.step(what, 0.14f + done * 0.66f));
         traffic = new Traffic(city, r -> pickReady(carEntries, r));
         pedestrians = new Pedestrians(city, r -> pickReady(pedEntries, r));
         traffic.obstacles = trafficObstacles;
@@ -154,10 +170,13 @@ public final class Game {
         if (progress != null) progress.step("Drawing the map", 0.80f);
         map = new com.harlequinxd.drivehard.core.map.MapData(city);
         if (progress != null) progress.step("Streaming the streets around you", 0.84f);
-        city.chunks.loadRadius = 150f;
+        // only what the camera can reach is kept: the view ends at 120 m, so chunks stream in a
+        // little beyond that and are dropped soon after they fall out of range
+        city.chunks.loadRadius = lowMemory ? 110f : 140f;
         city.chunks.loadAllNow(player.x, player.z, progress == null ? null
                 : (what, done) -> progress.step(what, 0.84f + done * 0.15f));
-        city.chunks.loadRadius = 200f;
+        city.chunks.loadRadius = lowMemory ? 140f : 165f;
+        city.chunks.unloadRadius = lowMemory ? 170f : 210f;
         city.chunks.start();
         for (int i = 0; i < 6; i++) { requestCar(); requestPed(); }
         cache.start();
@@ -293,6 +312,15 @@ public final class Game {
                 popT += dt;
                 if (popT > 0.15f && player.onGround) mode = Mode.ON_FOOT;
                 break;
+        }
+        if (player.waterDepth > 0.3f || player.swimming) {
+            if (swimEntry == null || !cache.alive(swimEntry))
+                swimEntry = cache.get("swim", GROUP_PLAYER, 100, () -> {
+                    SpriteBaker b = new SpriteBaker();
+                    b.frameW = 96; b.frameH = 64; b.anchorX = 48; b.anchorY = 40;
+                    return b.bake(new CharacterModel(CharacterSpec.player()), Animations.SWIM);
+                });
+            cache.touch(swimEntry);
         }
         updateWaterFx(dt);
         driveCamera(dt);
@@ -597,9 +625,12 @@ public final class Game {
     private void drawPlayer(SoftRenderer r) {
         Player p = player;
         drawWaterFx(r);
-        if (p.swimming) {
+        SpriteCache.Entry se = swimEntry;
+        if (p.swimming && se != null && cache.alive(se) && se.ready()) {
             // only what is above the surface is drawn: the sheet is anchored at the waterline
-            SpriteSheet ss = swimSheet;
+            cache.touch(se);
+            SpriteSheet ss = se.sheet;
+            int swimTex = se.tex;
             int f = Animations.firstFrame(p.anim, Animations.SWIM) + p.animFrame;
             int dir = ss.directionFor(p.facing, cam.yaw);
             int u = ss.frameX(dir, f), v = ss.frameY(dir, f);
@@ -611,14 +642,16 @@ public final class Game {
         if (p.waterDepth < 0.15f)
             r.groundQuad(lib.shadow, p.x, gy + 0.02f, p.z, 0.38f * (1f - air * 0.4f), SoftRenderer.MODE_SHADOW, SoftRenderer.L_SHADOW);
         SpriteSheet s = sheet;
-        if (p.anim.ordinal() >= Animations.Anim.SWIM_TREAD.ordinal()) { p.anim = Animations.Anim.IDLE; p.animFrame = 0; }
-        int dir = s.directionFor(p.facing, cam.yaw), frame = Animations.firstFrame(p.anim) + p.animFrame;
-        if (p.waterDepth > 0.02f && p.y < 0f && mode == Mode.ON_FOOT) {
+        boolean swimFallback = p.swimming;              // swim sheet still baking: head and shoulders only
+        Animations.Anim an = p.anim.ordinal() >= Animations.Anim.SWIM_TREAD.ordinal() ? Animations.Anim.IDLE : p.anim;
+        int dir = s.directionFor(p.facing, cam.yaw), frame = Animations.firstFrame(an) + (an == p.anim ? p.animFrame : 0);
+        if (swimFallback || (p.waterDepth > 0.02f && p.y < 0f && mode == Mode.ON_FOOT)) {
             // wading: cut the sprite at the water surface (her legs are under it)
-            float under = Math.min(s.top() - 0.1f, -p.y);
+            float under = swimFallback ? 1.25f : Math.min(s.top() - 0.1f, -p.y);
+            float py = swimFallback ? p.y - 1.25f : p.y;
             int u = s.frameX(dir, frame), v = s.frameY(dir, frame);
             int cut = (int) (under * s.pixelsPerMeter);
-            r.billboard(playerTex, p.x, p.y, p.z, s.left(), s.right(), under, s.top(), u, v, u + s.frameW, v + s.anchorY - cut, -0.8f);
+            r.billboard(playerTex, p.x, py, p.z, s.left(), s.right(), under, s.top(), u, v, u + s.frameW, v + s.anchorY - cut, -0.8f);
             return;
         }
         // while hopping in, draw her just in front of the car so she reads as climbing in
