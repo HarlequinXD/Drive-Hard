@@ -135,6 +135,7 @@ public final class TextureLibrary implements java.io.Serializable {
         walkStrip = add(FarmTextures.walkStrip(asp, 1.75f));
         mouthTown = add(FarmTextures.mouth(asp, 9f, 3f, 2.75f, false, true));
         houseTextures((int) seed);
+        houseKits(seed, lowMemory);
     }
 
     // ------------------------------------------------------------------ house generator parts
@@ -285,6 +286,79 @@ public final class TextureLibrary implements java.io.Serializable {
     public Texture[] array() { return list.toArray(new Texture[0]); }
 
     public int[] facades(JpTextures.Kind k) { return jp[k.ordinal()]; }
+
+    /** Whole-house kits (shape + one painted texture for all four walls): suburban and farm. */
+    public HouseKits.Kit[] suburbKits, farmKits;
+
+    private int pickIdx(int[] ids, Object[] kinds, Random r, Object... want) {
+        java.util.List<Integer> ok = new java.util.ArrayList<>();
+        for (int i = 0; i < ids.length; i++) for (Object w : want) if (kinds[i] == w) { ok.add(i); break; }
+        if (ok.isEmpty()) return r.nextInt(ids.length);
+        return ok.get(r.nextInt(ok.size()));
+    }
+
+    /** Designs and paints the house kits (in parallel). */
+    private void houseKits(long seed, boolean lowMemory) {
+        int ns = lowMemory ? 14 : 30, nf = lowMemory ? 5 : 10;
+        HouseKits.Kit[] kits = new HouseKits.Kit[ns + nf];
+        HouseKits.Parts[] parts = new HouseKits.Parts[ns + nf];
+        HouseTextures.Material S = HouseTextures.Material.SIDING, U = HouseTextures.Material.STUCCO, B = HouseTextures.Material.BOARDS,
+                T = HouseTextures.Material.TILE, K = HouseTextures.Material.BRICK, P = HouseTextures.Material.PANEL,
+                L = HouseTextures.Material.PLASTER, C = HouseTextures.Material.CHARRED;
+        int[] trims = {0xEEEEEA, 0x3A3A3C, 0x6A5444, 0x8A8E92, 0x2E3A4A, 0xC8C0B0};
+        int[] rails = {0xB8BCC0, 0x3A3A3E, 0xE8E8E4, 0xDDE6EC, 0x6A5444, 0x9AA4AE};
+        for (int i = 0; i < kits.length; i++) {
+            boolean farm = i >= ns;
+            Random r = new Random(seed * 977 + i * 7919);
+            HouseKits.Kit k = new HouseKits.Kit();
+            k.farm = farm;
+            k.floors = farm ? (r.nextInt(3) == 0 ? 1 : 2) : (r.nextInt(4) == 0 ? 1 : 2);
+            k.W = farm ? 9f + r.nextFloat() * 5f : 7f + r.nextFloat() * 5f;
+            k.D = farm ? 7.5f + r.nextFloat() * 3.5f : 6.5f + r.nextFloat() * 3.5f;
+            k.floorH = 2.8f + r.nextFloat() * 0.25f;
+            int roll = r.nextInt(100);
+            k.roof = farm ? (roll < 55 ? HouseKits.HIP : HouseKits.GABLE)
+                    : roll < 35 ? HouseKits.GABLE : roll < 50 ? HouseKits.GABLE_FRONT : roll < 75 ? HouseKits.HIP : roll < 88 ? HouseKits.SHED : HouseKits.FLAT;
+            float pitch = farm ? 0.5f + r.nextFloat() * 0.2f : 0.35f + r.nextFloat() * 0.25f;
+            switch (k.roof) {
+                case HouseKits.GABLE: k.rise = pitch * k.D * 0.5f; break;
+                case HouseKits.GABLE_FRONT: k.rise = pitch * k.W * 0.5f; break;
+                case HouseKits.HIP: k.rise = pitch * Math.min(k.W, k.D) * 0.5f; break;
+                case HouseKits.SHED: k.rise = (0.15f + r.nextFloat() * 0.12f) * k.D; break;
+                default: k.rise = 0f;
+            }
+            HouseKits.Parts p = new HouseKits.Parts();
+            int m1 = farm ? pickIdx(houseMat, houseMatKind, r, B, L, C, U) : pickIdx(houseMat, houseMatKind, r, S, S, U, T, P, K);
+            int m2 = r.nextInt(3) == 0 ? (farm ? pickIdx(houseMat, houseMatKind, r, L, U) : pickIdx(houseMat, houseMatKind, r, S, U, P)) : m1;
+            p.mat1 = list.get(houseMat[m1]);
+            p.mat2 = list.get(houseMat[m2]);
+            p.twoTone = m1 != m2;
+            HouseTextures.Window[] wk = houseWinKind;
+            p.win = list.get(houseWin[farm ? pickIdx(houseWin, wk, r, HouseTextures.Window.LATTICE, HouseTextures.Window.SHOJI, HouseTextures.Window.SLIDING)
+                    : pickIdx(houseWin, wk, r, HouseTextures.Window.SLIDING, HouseTextures.Window.SHUTTER_BOX, HouseTextures.Window.CASEMENT)]);
+            p.small = list.get(houseWin[pickIdx(houseWin, wk, r, HouseTextures.Window.FROSTED, HouseTextures.Window.SLIT)]);
+            p.garden = list.get(houseWin[pickIdx(houseWin, wk, r, HouseTextures.Window.GARDEN, HouseTextures.Window.SLIDING)]);
+            int di = farm ? pickIdx(houseDoor, houseDoorKind, r, HouseTextures.Door.SLIDING_LATTICE, HouseTextures.Door.SLIDING_GLASS)
+                    : pickIdx(houseDoor, houseDoorKind, r, HouseTextures.Door.WOOD, HouseTextures.Door.METAL, HouseTextures.Door.DARK);
+            p.door = list.get(houseDoor[di]);
+            p.wideDoor = houseDoorKind[di] == HouseTextures.Door.SLIDING_LATTICE || houseDoorKind[di] == HouseTextures.Door.SLIDING_GLASS;
+            p.foundation = list.get(foundation);
+            p.trim = trims[r.nextInt(trims.length)];
+            p.rail = rails[r.nextInt(rails.length)];
+            p.balcony = !farm && k.floors > 1 && r.nextInt(5) < 2;
+            p.hisashi = farm || r.nextInt(4) == 0;
+            p.doorLeft = r.nextBoolean();
+            p.winH = 1.0f + r.nextFloat() * 0.35f;
+            k.roofTex = houseRoof[farm ? pickIdx(houseRoof, houseRoofKind, r, HouseTextures.Roof.KAWARA) : r.nextInt(houseRoof.length)];
+            kits[i] = k;
+            parts[i] = p;
+        }
+        Texture[] painted = new Texture[kits.length];
+        java.util.stream.IntStream.range(0, kits.length).parallel().forEach(i -> painted[i] = HouseKits.paint(kits[i], parts[i], seed * 13 + i));
+        for (int i = 0; i < kits.length; i++) kits[i].tex = add(painted[i]);
+        suburbKits = java.util.Arrays.copyOf(kits, ns);
+        farmKits = java.util.Arrays.copyOfRange(kits, ns, ns + nf);
+    }
 
     /** One building look from {@link FacadeLayers}: texture ids of its parts. */
     public static final class BuildingStyle implements java.io.Serializable {

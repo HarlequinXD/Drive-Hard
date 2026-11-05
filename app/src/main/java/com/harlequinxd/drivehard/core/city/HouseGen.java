@@ -3,6 +3,7 @@ package com.harlequinxd.drivehard.core.city;
 import com.harlequinxd.drivehard.core.game.Box;
 import com.harlequinxd.drivehard.core.render.Geo;
 import com.harlequinxd.drivehard.core.render.Sectors;
+import com.harlequinxd.drivehard.core.tex.HouseKits;
 import com.harlequinxd.drivehard.core.tex.HouseTextures;
 import com.harlequinxd.drivehard.core.tex.TextureLibrary;
 
@@ -346,74 +347,148 @@ final class HouseGen {
         float u0 = lay[0], v0 = lay[1], u1 = lay[2], v1 = lay[3];
         float w = u1 - u0, dep = v1 - v0;
         float floor0 = base + PLINTH;
-        boolean ridgeU = w >= dep * 0.85f;
-        List<Mass> masses = new ArrayList<>();
-        // the main block, then at most one lean-to wing that only touches it (never overlaps)
-        Plan plan = d.plan;
-        if ((plan == Plan.L_FRONT || plan == Plan.L_BACK) && (dep < 9f || w < 8f)) plan = Plan.RECT;
-        if ((plan == Plan.ANNEX || plan == Plan.UPPER_PART || plan == Plan.OFFSET) && w < 9.5f) plan = Plan.RECT;
-        Mass main;
-        Mass wing = null;
-        switch (plan) {
-            case L_FRONT: {
-                float fd = Math.min(dep * 0.32f, 3.6f), ww = Math.max(3.6f, w * d.wingFrac);
-                main = new Mass(u0, v0 + fd, u1, v1, d.floors, d.roof, ridgeU);
-                wing = d.leftDoor ? new Mass(u1 - ww, v0, u1, v0 + fd, 1, RoofType.SHED, true)
-                        : new Mass(u0, v0, u0 + ww, v0 + fd, 1, RoofType.SHED, true);
-                wing.shedHigh = 1; wing.abut[1] = true; main.abut[0] = false;
-                break;
-            }
-            case L_BACK: {
-                float bd = Math.min(dep * 0.35f, 4f), ww = Math.max(3.6f, w * d.wingFrac);
-                main = new Mass(u0, v0, u1, v1 - bd, d.floors, d.roof, ridgeU);
-                wing = d.leftDoor ? new Mass(u0, v1 - bd, u0 + ww, v1, 1, RoofType.SHED, true)
-                        : new Mass(u1 - ww, v1 - bd, u1, v1, 1, RoofType.SHED, true);
-                wing.shedHigh = 0; wing.abut[0] = true;
-                break;
-            }
-            case ANNEX: case UPPER_PART: case OFFSET: {
-                float aw = Math.min(w * 0.32f, 4.2f);
-                boolean left = !d.leftDoor;
-                main = left ? new Mass(u0 + aw, v0, u1, v1, d.floors, d.roof, (w - aw) >= dep * 0.85f)
-                        : new Mass(u0, v0, u1 - aw, v1, d.floors, d.roof, (w - aw) >= dep * 0.85f);
-                float inset = plan == Plan.OFFSET ? 1.2f : 0f;
-                wing = left ? new Mass(u0, v0 + inset, u0 + aw, v1, 1, RoofType.SHED, false)
-                        : new Mass(u1 - aw, v0 + inset, u1, v1, 1, RoofType.SHED, false);
-                wing.shedHigh = left ? 3 : 2;
-                wing.abut[left ? 3 : 2] = true;
-                break;
-            }
-            default:
-                main = new Mass(u0, v0, u1, v1, d.floors, d.roof, ridgeU);
-                break;
-        }
-        if (d.roof == RoofType.SHED) main.shedHigh = d.shedBack ? 1 : 0;
-        // no skinny towers: one storey per 3.5 m of the narrower side at most
-        float narrow = Math.min(main.u1 - main.u0, main.v1 - main.v0);
-        main.floors = Math.max(1, Math.min(main.floors, (int) (narrow / 3.5f)));
-        main.top = floor0 + main.floors * d.floorH;
-        main.roofHigh = main.top + 4f;
-        masses.add(main);
-        if (wing != null) {
-            // the lean-to's high side tucks under the main block's eaves or its upper-floor windows
-            float high = main.floors >= 2 ? floor0 + d.floorH + 0.45f : main.top - 0.25f;
-            float run = wing.shedHigh < 2 ? wing.v1 - wing.v0 : wing.u1 - wing.u0;
-            float pitch = Math.min(d.pitch, 0.35f);
-            wing.top = Math.max(floor0 + 2.3f, high - pitch * run);   // wall top at the low side
-            wingPitch = Math.max(0.08f, (high - wing.top) / Math.max(1f, run));
-            wing.roofHigh = wing.top + wingPitch * run;
-            masses.add(wing);
-        }
-        // trims for this house
-        trimTex = lib.fascia[Math.floorMod(d.id * 7 + 3, lib.fascia.length)];
-        gutterTex = lib.gutter[Math.floorMod(d.id * 5 + 1, lib.gutter.length)];
-        for (Mass m : masses) massGeometry(d, m, m == main, masses, floor0, base);
+        // one closed shape from a house kit: walls straight up from the plinth into the roof,
+        // everything on them painted into the kit's texture
+        HouseKits.Kit kit = pickKit(d, w, dep);
+        boolean mirror = ((d.id >> 3) & 1) == 1;
+        kitGeometry(kit, mirror, u0, v0, u1, v1, base);
+        Mass main = new Mass(u0, v0, u1, v1, kit.floors, d.roof, true);
+        main.top = base + kit.eave();
         extras(d, main, base, lot, W, D, lay, westNeighbor);
-        for (Mass m : masses) {
-            float ax = Math.min(wx(m.u0, m.v0), wx(m.u1, m.v1)), bx = Math.max(wx(m.u0, m.v0), wx(m.u1, m.v1));
-            float az = Math.min(wz(m.u0, m.v0), wz(m.u1, m.v1)), bz = Math.max(wz(m.u0, m.v0), wz(m.u1, m.v1));
-            ch.boxes.add(new Box(ax, base - 1.5f, az, bx, m.top + 1.5f, bz));
+        float ax = Math.min(wx(u0, v0), wx(u1, v1)), bx = Math.max(wx(u0, v0), wx(u1, v1));
+        float az = Math.min(wz(u0, v0), wz(u1, v1)), bz = Math.max(wz(u0, v0), wz(u1, v1));
+        ch.boxes.add(new Box(ax, base - 1.5f, az, bx, base + kit.eave() + kit.rise, bz));
+    }
+
+    /**
+     * The kit that best fits a footprint: same farm/suburban family, at most the storeys the
+     * design wants (and the footprint allows), closest proportions; one of the best few by the
+     * design's number, so neighbours differ.
+     */
+    private HouseKits.Kit pickKit(Design d, float w, float dep) {
+        HouseKits.Kit[] kits = d.farm ? lib.farmKits : lib.suburbKits;
+        int maxFloors = Math.max(1, Math.min(d.floors, (int) (Math.min(w, dep) / 3.5f)));
+        HouseKits.Kit[] best = new HouseKits.Kit[3];
+        float[] score = {Float.MAX_VALUE, Float.MAX_VALUE, Float.MAX_VALUE};
+        for (HouseKits.Kit k : kits) {
+            float sc = Math.abs((float) Math.log(w / k.W)) + Math.abs((float) Math.log(dep / k.D)) + (k.floors > maxFloors ? 5f : k.floors < maxFloors ? 0.4f : 0f);
+            for (int i = 0; i < 3; i++)
+                if (sc < score[i]) {
+                    for (int j = 2; j > i; j--) { score[j] = score[j - 1]; best[j] = best[j - 1]; }
+                    score[i] = sc; best[i] = k;
+                    break;
+                }
         }
+        HouseKits.Kit k = best[Math.floorMod(d.id * 2654435761L >> 7, 3)];
+        return k != null ? k : best[0];
+    }
+
+    /**
+     * The house as one closed shape, in the kit's texture: four walls from the base up (each a
+     * quad, gable ends a quad and a triangle on top), the roof slopes starting exactly at the
+     * wall tops (no overhang), and a foundation strip down to the ground where the lot slopes.
+     */
+    private void kitGeometry(HouseKits.Kit k, boolean mirror, float u0, float v0, float u1, float v1, float base) {
+        // faces: left and right corners seen from outside, outward normal
+        float[][] faces = {
+                {u1, v0, u0, v0, 0f, -1f},     // front
+                {u0, v1, u1, v1, 0f, 1f},      // back
+                {u0, v0, u0, v1, -1f, 0f},     // left (seen from outside)
+                {u1, v1, u1, v0, 1f, 0f}};     // right
+        for (int f = 0; f < 4; f++) {
+            float[] q = faces[f];
+            float ua = q[0], va = q[1], ub = q[2], vb = q[3], nu = q[4], nv = q[5];
+            int tf = mirror && f >= HouseKits.LEFT ? 5 - f : f;      // mirrored: the sides swap
+            float h = k.height(tf);
+            float tA = k.top(f, 0f), tB = k.top(f, 1f), tM = k.top(f, 0.5f);
+            float[] uvA0 = kitUV(tf, mirror, 0f, 0f, h), uvB0 = kitUV(tf, mirror, 1f, 0f, h);
+            float[] uvA1 = kitUV(tf, mirror, 0f, tA, h), uvB1 = kitUV(tf, mirror, 1f, tB, h);
+            poly(new float[]{ua, base, va, ub, base, vb, ub, base + tB, vb, ua, base + tA, va},
+                    new float[]{uvA0[0], uvA0[1], uvB0[0], uvB0[1], uvB1[0], uvB1[1], uvA1[0], uvA1[1]},
+                    k.tex, nu, 0f, nv, 0f, 0);
+            if (tM > Math.max(tA, tB) + 0.05f) {
+                // the gable: a triangle up to the ridge
+                float[] uvM = kitUV(tf, mirror, 0.5f, tM, h);
+                poly(new float[]{ua, base + tA, va, ub, base + tB, vb, (ua + ub) * 0.5f, base + tM, (va + vb) * 0.5f},
+                        new float[]{uvA1[0], uvA1[1], uvB1[0], uvB1[1], uvM[0], uvM[1]}, k.tex, nu, 0f, nv, 0f, 0);
+            }
+            // foundation down to the ground where the lot falls away
+            float ga = gb.h(wx(ua, va), wz(ua, va)), gbb = gb.h(wx(ub, vb), wz(ub, vb));
+            if (Math.min(ga, gbb) < base - 0.03f) {
+                float len = (float) Math.hypot(ub - ua, vb - va);
+                float ya = Math.min(base, ga) - 0.3f, yb = Math.min(base, gbb) - 0.3f;
+                poly(new float[]{ua, ya, va, ub, yb, vb, ub, base, vb, ua, base, va},
+                        new float[]{0, -ya * 0.5f, len * 0.5f, -yb * 0.5f, len * 0.5f, -base * 0.5f, 0, -base * 0.5f},
+                        lib.foundation, nu, 0f, nv, 0f, 0);
+            }
+        }
+        float e = base + k.eave(), ridge = e + k.rise;
+        int rt = k.roofTex;
+        float um = (u0 + u1) * 0.5f, vm = (v0 + v1) * 0.5f;
+        switch (k.roof) {
+            case HouseKits.GABLE:
+                slope(new float[]{u0, e, v0, u1, e, v0, u1, ridge, vm, u0, ridge, vm}, rt);
+                slope(new float[]{u1, e, v1, u0, e, v1, u0, ridge, vm, u1, ridge, vm}, rt);
+                break;
+            case HouseKits.GABLE_FRONT:
+                slope(new float[]{u0, e, v1, u0, e, v0, um, ridge, v0, um, ridge, v1}, rt);
+                slope(new float[]{u1, e, v0, u1, e, v1, um, ridge, v1, um, ridge, v0}, rt);
+                break;
+            case HouseKits.HIP: {
+                float w = u1 - u0, dd = v1 - v0;
+                if (w >= dd) {
+                    float hi = dd * 0.5f;
+                    slope(new float[]{u0, e, v0, u1, e, v0, u1 - hi, ridge, vm, u0 + hi, ridge, vm}, rt);
+                    slope(new float[]{u1, e, v1, u0, e, v1, u0 + hi, ridge, vm, u1 - hi, ridge, vm}, rt);
+                    slope(new float[]{u0, e, v1, u0, e, v0, u0 + hi, ridge, vm}, rt);
+                    slope(new float[]{u1, e, v0, u1, e, v1, u1 - hi, ridge, vm}, rt);
+                } else {
+                    float hi = w * 0.5f;
+                    slope(new float[]{u0, e, v1, u0, e, v0, um, ridge, v0 + hi, um, ridge, v1 - hi}, rt);
+                    slope(new float[]{u1, e, v0, u1, e, v1, um, ridge, v1 - hi, um, ridge, v0 + hi}, rt);
+                    slope(new float[]{u0, e, v0, u1, e, v0, um, ridge, v0 + hi}, rt);
+                    slope(new float[]{u1, e, v1, u0, e, v1, um, ridge, v1 - hi}, rt);
+                }
+                break;
+            }
+            case HouseKits.SHED:
+                slope(new float[]{u0, e, v0, u1, e, v0, u1, ridge, v1, u0, ridge, v1}, rt);
+                break;
+            default:
+                slope(new float[]{u0, e, v0, u1, e, v0, u1, e, v1, u0, e, v1}, lib.roofMembrane);
+                break;
+        }
+    }
+
+    /** Texture coordinates in a kit's texture of a point {@code t} across face quarter {@code tf} at height {@code y} above the base. */
+    private static float[] kitUV(int tf, boolean mirror, float t, float y, float h) {
+        float tt = mirror ? 1f - t : t;
+        float px = (tf & 1) * HouseKits.Q + 0.5f + tt * (HouseKits.Q - 1);
+        float py = (tf >> 1) * HouseKits.Q + 0.5f + (1f - y / h) * (HouseKits.Q - 1);
+        return new float[]{px / HouseKits.SIZE, py / HouseKits.SIZE};
+    }
+
+    /** A roof plane (3 or 4 local points, upward-facing), its tiles laid in 2 m squares down the slope. */
+    private void slope(float[] q, int tex) {
+        int n = q.length / 3;
+        // normal from the first three points, turned upward
+        float ax = q[3] - q[0], ay = q[4] - q[1], az = q[5] - q[2], bx = q[6] - q[0], by = q[7] - q[1], bz = q[8] - q[2];
+        float nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
+        if (ny < 0f) { nx = -nx; ny = -ny; nz = -nz; }
+        float nl = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
+        nx /= nl; ny /= nl; nz /= nl;
+        // tile axes: along the eave (horizontal in the plane) and down the slope
+        float hx = -nz, hz = nx, hl = (float) Math.hypot(hx, hz);
+        if (hl < 1e-3f) { hx = 1f; hz = 0f; } else { hx /= hl; hz /= hl; }
+        float[] uv = new float[n * 2];
+        for (int i = 0; i < n; i++) {
+            float x = q[i * 3], y = q[i * 3 + 1], z = q[i * 3 + 2];
+            uv[i * 2] = (x * hx + z * hz) * 0.5f;
+            // distance up the slope from the horizontal plane through y = 0, along the slope
+            float down = ny > 0.999f ? (x * hz - z * hx) : y / (float) Math.sqrt(Math.max(1e-4f, 1f - ny * ny));
+            uv[i * 2 + 1] = -down * 0.5f;
+        }
+        poly(q, uv, tex, nx, ny, nz, 0f, 0);
     }
 
     private float wingPitch;
@@ -930,23 +1005,7 @@ final class HouseGen {
     // ------------------------------------------------------------------ extras
 
     private void extras(Design d, Mass main, float base, boolean lot, float W, float D, float[] lay, boolean westNeighbor) {
-        // a/c outdoor unit against the side wall (on a little stand), one more on the upper floor
-        {
-            float nx = wx(main.u0 - 1f, main.v0) - wx(main.u0, main.v0), nz = wz(main.u0 - 1f, main.v0) - wz(main.u0, main.v0);
-            float v = main.v0 + Math.min(1.6f, (main.v1 - main.v0) * 0.3f);
-            gb.wallUnit(wx(main.u0, v), wz(main.u0, v), nx, nz, 0.8f, base + 0.15f, 0.62f, 0.3f, lib.aircon, lib.airconSide);
-            if (main.floors >= 2 && (d.id & 1) == 0) {
-                float v2 = main.v0 + (main.v1 - main.v0) * 0.65f;
-                gb.wallUnit(wx(main.u0, v2), wz(main.u0, v2), nx, nz, 0.8f, base + PLINTH + d.floorH + 0.3f, 0.62f, 0.3f, lib.aircon, lib.airconSide);
-            }
-        }
-        // balcony on the upper floor of the front, built in front of the balcony door it serves
-        if (d.balcony && main.floors >= 2 && !Float.isNaN(balconyU0)) {
-            float bu0 = Math.max(main.u0 + 0.2f, balconyU0 - 0.55f), bu1 = Math.min(main.u1 - 0.2f, balconyU1 + 0.55f);
-            float nx = wx(bu0, main.v0 - 1f) - wx(bu0, main.v0), nz = wz(bu0, main.v0 - 1f) - wz(bu0, main.v0);
-            gb.balcony(wx(bu0, main.v0), wz(bu0, main.v0), wx(bu1, main.v0), wz(bu1, main.v0),
-                    nx, nz, base + PLINTH + d.floorH, 1.0f, 1.05f, lib.balconyFront, lib.balconySlab);
-        }
+        // (air conditioners and balconies are painted on the house kit)
         if (!lot) return;
         // carport: four posts and a flat polycarbonate roof
         if (!Float.isNaN(lay[4])) {

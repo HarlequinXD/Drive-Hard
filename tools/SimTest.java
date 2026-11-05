@@ -98,7 +98,7 @@ public class SimTest {
         check("chunk surfaces are emitted as polygon meshes", !generated.batches.isEmpty() && noRaycastSurfaces(generated));
         check("generated buildings contain culled polygons", containsOneSidedPolygons(generated));
         check("generated details retain double-sided polygons", containsDoubleSidedPolygons(generated));
-        check("city windows and doors are integrated into wall polygons", cityFacadesUseOpenings(c, textures));
+        check("houses are whole kits with their windows and doors painted on", housesAreKits(c, textures));
         // ---- traffic: cars keep moving, turn, and never run a red light
         com.harlequinxd.drivehard.core.sim.Traffic tr = new com.harlequinxd.drivehard.core.sim.Traffic(c, r -> r.nextInt(100));
         tr.spawnMin = 5f; tr.spawnMax = 400f; tr.despawn = 2000f; tr.target = 40;
@@ -555,6 +555,29 @@ public class SimTest {
                 for (int texture : laneTextures)
                     if (mesh.tex[i] == texture) return true;
         return false;
+    }
+
+    /**
+     * Houses are single closed shapes in a house kit's texture: some chunk polygons use kit
+     * textures, and no house window or door texture is drawn as a polygon of its own.
+     */
+    static boolean housesAreKits(City city, TextureLibrary textures) {
+        java.util.Set<Integer> kits = new java.util.HashSet<>(), loose = new java.util.HashSet<>();
+        for (var k : textures.suburbKits) kits.add(k.tex);
+        for (var k : textures.farmKits) kits.add(k.tex);
+        for (int t : textures.houseWin) loose.add(t);
+        boolean kitSeen = false, looseSeen = false;
+        for (com.harlequinxd.drivehard.core.road.Town t : city.roads.towns) {
+            if (t.grid == null) continue;
+            Chunk chunk = city.generate(ChunkManager.chunkOf(t.centre.x), ChunkManager.chunkOf(t.centre.z));
+            for (var batch : chunk.batches)
+                for (int k = 0; k < batch.count; k++) {
+                    if (kits.contains(batch.tex[k])) kitSeen = true;
+                    if (loose.contains(batch.tex[k])) looseSeen = true;
+                }
+            if (kitSeen) break;
+        }
+        return kitSeen && !looseSeen;
     }
 
     static boolean cityFacadesUseOpenings(City city, TextureLibrary textures) {
