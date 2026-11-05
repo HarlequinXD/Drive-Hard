@@ -154,6 +154,7 @@ public final class Pedestrians {
         int firstJ=Math.max(0,bj-1), lastJ=Math.min(area.nz-1,bj+1);
         bi=firstI+rnd.nextInt(lastI-firstI+1);
         bj=firstJ+rnd.nextInt(lastJ-firstJ+1);
+        if (area.signalized && !city.blockActive(bi, bj)) return;      // the city grid outside its outline is countryside
         float per = perimeter(ai,bi,bj);
         float p = rnd.nextFloat() * per;
         loopPoint(ai,bi,bj,p,lp);
@@ -233,6 +234,7 @@ public final class Pedestrians {
         dx *= q.dir; dz *= q.dir;
         int tbi = q.bi + (int) dx, tbj = q.bj + (int) dz;
         if (tbi < 0 || tbj < 0 || tbi >= area.nx || tbj >= area.nz) return;
+        if (area.signalized && !city.blockActive(tbi, tbj)) return;      // no built-up block across there
         loopPoint(q.area,q.bi,q.bj,cornerP(q.area,q.bi,q.bj,c),lp);
         q.sx = lp[0]; q.sz = lp[1];
         // mirrored corner on the target block

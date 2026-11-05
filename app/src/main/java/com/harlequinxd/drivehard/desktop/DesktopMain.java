@@ -2,388 +2,426 @@ package com.harlequinxd.drivehard.desktop;
 
 import com.harlequinxd.drivehard.core.Game;
 import com.harlequinxd.drivehard.core.map.MapData;
+import com.harlequinxd.drivehard.core.ui.LoadScreen;
+import com.harlequinxd.drivehard.core.ui.MapView;
+
 import java.awt.*;
 import java.awt.event.*;
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import javax.swing.*;
 
-/** Native Windows desktop frontend retaining Drive Hard's original software renderer and game simulation. */
+/**
+ * Windows desktop front end: keyboard + mouse and Xbox controller (XInput).
+ *
+ * Game: WASD / arrows or left stick to walk and steer, W / RT gas, S / LT brake, mouse (click
+ * the window to capture it) or right stick for the camera, Space / A jump, E / F / Y get in or
+ * out, M / Tab / View for the map, Esc / Start for the pause menu, F11 fullscreen.
+ * Map: drag / WASD / stick to pan, wheel / + - / triggers to zoom, Q E / LB RB to step through
+ * places, click / Enter / A to pick a place and travel, Esc / B to go back.
+ * The loading and fast-travel screens, the minimap, the HUD and the map are all drawn by the
+ * shared core UI, so the desktop and Android builds look the same.
+ */
 public final class DesktopMain extends JPanel implements KeyListener, Runnable {
-    private static final int W=480, H=320;
-    private static final float MIN_MAP_ZOOM=0.5f, MAX_MAP_ZOOM=12f;
+    private static final int W = 480, H = 320;
+    private enum Screen { GAME, MAP, PAUSE }
+
     private final Set<Integer> keys = ConcurrentHashMap.newKeySet();
-    private final AtomicInteger mapWheelSteps = new AtomicInteger(), mapZoomClicks = new AtomicInteger();
-    private final AtomicInteger mapDragX = new AtomicInteger(), mapDragY = new AtomicInteger();
+    private final ConcurrentLinkedQueue<Integer> taps = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<float[]> clicks = new ConcurrentLinkedQueue<>();
+    private final AtomicInteger wheel = new AtomicInteger(), lookX = new AtomicInteger(), lookY = new AtomicInteger();
+    private final AtomicInteger dragX = new AtomicInteger(), dragY = new AtomicInteger();
     private final XboxInput pad = new XboxInput();
-    private final BufferedImage image = new BufferedImage(W,H,BufferedImage.TYPE_INT_ARGB);
-    private volatile String loading = "Loading world...";
+    private final BufferedImage image = new BufferedImage(W, H, BufferedImage.TYPE_INT_RGB);
+    private final int[] pixels = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
+    private final LoadScreen loadScreen = new LoadScreen(W, H);
+    private final BufferedImage loadImage = new BufferedImage(W, H, BufferedImage.TYPE_INT_RGB);
+    private final MapView mapView = new MapView();
+    private volatile String error = "";
     private volatile Game game;
-    private volatile boolean running = true;
-    private volatile boolean fullscreen;
+    private volatile boolean running = true, travelling, imageReady;
+    private volatile Screen screen = Screen.GAME;
+    private int menuIndex;
+    private boolean fullscreen;
     private JFrame window;
     private Rectangle windowedBounds;
-    private boolean lastJump,lastCar,lastFullscreen;
-    private volatile boolean imageReady;
-    private volatile boolean controllerConnected;
+    private int padPrev;
+    private float hintTime = 9f;
     private float fps;
-    private volatile boolean mapOpen, travelMenu;
-    private volatile float mapCursorX, mapCursorZ;
-    private volatile MapData.Label selectedDestination;
-    private boolean lastSelect, lastConfirm, lastCancel;
-    private float mapZoom=1f, mapViewX, mapViewZ;
-    private float mapZoomRepeat;
-    private volatile int pointerX, pointerY;
-    private volatile boolean mapDragging;
-    private BufferedImage mapImage;
-    private volatile boolean mapImageReady;
 
+    // mouse capture for camera look
+    private volatile boolean captured, dragging;
+    private Robot robot;
+    private int lastMouseX, lastMouseY;
+    private final Cursor blankCursor = Toolkit.getDefaultToolkit().createCustomCursor(
+            new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB), new Point(0, 0), "none");
+
+    private static final String[] MENU = {"RESUME", "MAP", "FULLSCREEN", "QUIT TO DESKTOP"};
 
     private DesktopMain() {
         setBackground(Color.BLACK);
         setFocusable(true);
+        setFocusTraversalKeysEnabled(false);       // Tab opens the map
         addKeyListener(this);
-        addMouseWheelListener(e -> { if(mapOpen) mapWheelSteps.addAndGet(e.getWheelRotation()); });
+        try { robot = new Robot(); } catch (Throwable ignored) { robot = null; }
+        addMouseWheelListener(e -> wheel.addAndGet(e.getWheelRotation()));
         addMouseListener(new MouseAdapter() {
             @Override public void mousePressed(MouseEvent e) {
-                if (!mapOpen || !SwingUtilities.isLeftMouseButton(e)) return;
                 requestFocusInWindow();
-                pointerX=e.getX(); pointerY=e.getY(); mapDragging=true;
+                lastMouseX = e.getX(); lastMouseY = e.getY();
+                if (screen == Screen.GAME && game != null && !travelling) { capture(true); return; }
+                if (SwingUtilities.isLeftMouseButton(e)) dragging = true;
             }
-            @Override public void mouseReleased(MouseEvent e) {
-                if (SwingUtilities.isLeftMouseButton(e)) mapDragging=false;
-            }
+            @Override public void mouseReleased(MouseEvent e) { dragging = false; }
             @Override public void mouseClicked(MouseEvent e) {
-                if (!mapOpen || !SwingUtilities.isLeftMouseButton(e)) return;
-                float x=toInternalX(e.getX()), y=toInternalY(e.getY());
-                if (y>=2 && y<19 && x>=W-48 && x<W-28) mapZoomClicks.incrementAndGet();
-                else if (y>=2 && y<19 && x>=W-25 && x<W-5) mapZoomClicks.decrementAndGet();
+                if (screen != Screen.GAME && SwingUtilities.isLeftMouseButton(e) && e.getClickCount() >= 1)
+                    clicks.add(new float[]{toInternalX(e.getX()), toInternalY(e.getY())});
             }
         });
         addMouseMotionListener(new MouseMotionAdapter() {
-            @Override public void mouseMoved(MouseEvent e) { pointerX=e.getX(); pointerY=e.getY(); }
+            @Override public void mouseMoved(MouseEvent e) { look(e); }
             @Override public void mouseDragged(MouseEvent e) {
-                if (mapOpen && mapDragging) {
-                    mapDragX.addAndGet(e.getX()-pointerX);
-                    mapDragY.addAndGet(e.getY()-pointerY);
+                if (captured) { look(e); return; }
+                if (dragging) {
+                    dragX.addAndGet(e.getX() - lastMouseX);
+                    dragY.addAndGet(e.getY() - lastMouseY);
                 }
-                pointerX=e.getX(); pointerY=e.getY();
+                lastMouseX = e.getX(); lastMouseY = e.getY();
             }
         });
-        setPreferredSize(new Dimension(1200,800));
+        setPreferredSize(new Dimension(1200, 800));
+        // the load / travel screen animates on its own while the game thread is busy generating
+        new javax.swing.Timer(33, e -> { if (game == null || travelling) repaint(); }).start();
     }
+
+    private void look(MouseEvent e) {
+        if (!captured) { lastMouseX = e.getX(); lastMouseY = e.getY(); return; }
+        Point c = centre();
+        int dx = e.getXOnScreen() - c.x, dy = e.getYOnScreen() - c.y;
+        if (dx == 0 && dy == 0) return;
+        lookX.addAndGet(dx);
+        lookY.addAndGet(dy);
+        if (robot != null) robot.mouseMove(c.x, c.y);
+    }
+
+    private Point centre() {
+        Point p = new Point(getWidth() / 2, getHeight() / 2);
+        try { SwingUtilities.convertPointToScreen(p, this); } catch (Throwable ignored) { }
+        return p;
+    }
+
+    private void capture(boolean on) {
+        if (robot == null) on = false;
+        if (captured == on) return;
+        captured = on;
+        SwingUtilities.invokeLater(() -> {
+            setCursor(captured ? blankCursor : Cursor.getDefaultCursor());
+            if (captured) { Point c = centre(); robot.mouseMove(c.x, c.y); }
+        });
+        lookX.set(0);
+        lookY.set(0);
+    }
+
     public static void main(String[] args) {
         SwingUtilities.invokeLater(() -> {
             DesktopMain view = new DesktopMain();
-            JFrame frame = new JFrame("Drive Hard - Windows");
+            JFrame frame = new JFrame("Drive Hard");
             view.window = frame;
             frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
             frame.addWindowListener(new WindowAdapter() {
-                @Override public void windowClosing(WindowEvent e) { view.running=false; }
+                @Override public void windowClosing(WindowEvent e) { view.running = false; }
+                @Override public void windowDeactivated(WindowEvent e) { view.focusLost(); }
             });
             frame.setContentPane(view);
-            frame.pack(); frame.setLocationRelativeTo(null); frame.setVisible(true);
+            frame.pack();
+            frame.setLocationRelativeTo(null);
+            frame.setVisible(true);
             view.requestFocusInWindow();
-            new Thread(view,"drive-hard-loop").start();
+            new Thread(view, "drive-hard-loop").start();
         });
     }
+
+    private void focusLost() {
+        keys.clear();
+        capture(false);
+        if (game != null && screen == Screen.GAME) { screen = Screen.PAUSE; menuIndex = 0; }
+    }
+
+    // ------------------------------------------------------------------ main loop
+
     @Override public void run() {
         try {
-            Game g = new Game(Game.randomSeed(), s -> loading=s);
-            g.setResolution(W,H);
-            game=g;
-            mapCursorX=g.mapX(); mapCursorZ=g.mapZ();
-            mapImage = new BufferedImage(MapData.SIZE,MapData.SIZE,BufferedImage.TYPE_INT_ARGB);
-            mapImage.setRGB(0,0,MapData.SIZE,MapData.SIZE,g.map.relief,0,MapData.SIZE);
-            mapImageReady=true;
-            long previous=System.nanoTime(), stat=previous;
-            int frames=0;
-            while(running) {
-                long start=System.nanoTime();
-                float dt=Math.min(.05f,(start-previous)/1_000_000_000f);
-                previous=start;
-                boolean connected=pad.poll();
-                controllerConnected=connected;
-                boolean select=down(KeyEvent.VK_M)||(connected&&pad.button(XboxInput.BACK));
-                boolean confirm=down(KeyEvent.VK_ENTER)||(connected&&pad.button(XboxInput.A));
-                boolean cancel=down(KeyEvent.VK_ESCAPE)||(connected&&pad.button(XboxInput.B));
-                if(select&&!lastSelect) {
-                    mapOpen=!mapOpen; travelMenu=false; selectedDestination=null;
-                    if(mapOpen) { mapCursorX=g.mapX(); mapCursorZ=g.mapZ(); mapViewX=mapCursorX; mapViewZ=mapCursorZ; mapZoom=2.2f; }
-                }
-                lastSelect=select;
-                if(mapOpen) {
-                    if(cancel&&!lastCancel) { if(travelMenu) travelMenu=false; else mapOpen=false; }
-                    if(travelMenu) {
-                        if(confirm&&!lastConfirm && selectedDestination!=null) {
-                            g.fastTravel(selectedDestination);
-                            mapOpen=false; travelMenu=false;
-                        }
-                    } else {
-                        float padX=connected?pad.lx()+pad.rx():0f;
-                        float padZ=connected?-pad.ly()-pad.ry():0f;
-                        if(connected) {
-                            if(pad.button(XboxInput.DPAD_LEFT)) padX-=1f;
-                            if(pad.button(XboxInput.DPAD_RIGHT)) padX+=1f;
-                            if(pad.button(XboxInput.DPAD_UP)) padZ-=1f;
-                            if(pad.button(XboxInput.DPAD_DOWN)) padZ+=1f;
-                        }
-                        float panX=clamp(mapPanAxis(padX)+((down(KeyEvent.VK_D)||down(KeyEvent.VK_RIGHT))?1:0)-((down(KeyEvent.VK_A)||down(KeyEvent.VK_LEFT))?1:0));
-                        float panZ=clamp(mapPanAxis(padZ)+((down(KeyEvent.VK_S)||down(KeyEvent.VK_DOWN))?1:0)-((down(KeyEvent.VK_W)||down(KeyEvent.VK_UP))?1:0));
-                        float zoomIn=Math.max(connected?pad.rt():0f,connected&&pad.button(XboxInput.RIGHT_SHOULDER)?1f:0f)+((down(KeyEvent.VK_EQUALS)||down(KeyEvent.VK_ADD)||down(KeyEvent.VK_PAGE_UP)||down(KeyEvent.VK_CLOSE_BRACKET))?1:0);
-                        float zoomOut=Math.max(connected?pad.lt():0f,connected&&pad.button(XboxInput.LEFT_SHOULDER)?1f:0f)+((down(KeyEvent.VK_MINUS)||down(KeyEvent.VK_SUBTRACT)||down(KeyEvent.VK_PAGE_DOWN)||down(KeyEvent.VK_OPEN_BRACKET))?1:0);
-                        int wheelSteps=mapWheelSteps.getAndSet(0);
-                        int zoomClicks=mapZoomClicks.getAndSet(0);
-                        boolean zoomingIn=zoomIn>0.08f, zoomingOut=zoomOut>0.08f;
-                        int heldZoomSteps=0;
-                        if(zoomingIn!=zoomingOut) {
-                            mapZoomRepeat-=dt;
-                            if(mapZoomRepeat<=0f) { heldZoomSteps=zoomingIn?1:-1; mapZoomRepeat=0.08f; }
-                        } else mapZoomRepeat=0f;
-                        mapZoom=Math.max(MIN_MAP_ZOOM,Math.min(MAX_MAP_ZOOM,mapZoom*(float)Math.exp((heldZoomSteps-wheelSteps+zoomClicks)*0.22f)));
-                        int panelWidth=Math.min(getWidth(),(int)((long)getHeight()*W/H));
-                        int panelHeight=(int)((long)panelWidth*H/W);
-                        float dragX=panelWidth>0?mapDragX.getAndSet(0)*W/(float)panelWidth:0f;
-                        float dragY=panelHeight>0?mapDragY.getAndSet(0)*H/(float)panelHeight:0f;
-                        float mapUnitsPerPixel=g.map.extent/(mapZoom*H);
-                        mapViewX-=dragX*mapUnitsPerPixel;
-                        mapViewZ-=dragY*mapUnitsPerPixel;
-                        if(dragX!=0f || dragY!=0f) { mapCursorX=mapViewX; mapCursorZ=mapViewZ; }
-                        float speed=(g.map.extent/mapZoom)*85f*dt;
-                        mapCursorX=Math.max(g.map.x0,Math.min(g.map.x0+g.map.extent,mapCursorX+panX*speed));
-                        mapCursorZ=Math.max(g.map.z0,Math.min(g.map.z0+g.map.extent,mapCursorZ+panZ*speed));
-                        mapViewX=mapCursorX;
-                        mapViewZ=mapCursorZ;
-                        clampMapView(g);
-                        if(confirm&&!lastConfirm) {
-                            MapData.Label nearest=null; float best=12f*mapUnitsPerPixel;
-                            for(MapData.Label label:g.map.labels) {
-                                if(label.rank==4) continue;
-                                float d=(float)Math.hypot(label.x-mapCursorX,label.z-mapCursorZ);
-                                if(d<best) {best=d;nearest=label;}
-                            }
-                            if(nearest!=null) { selectedDestination=nearest; travelMenu=true; }
-                        }
-                    }
-                    lastConfirm=confirm;lastCancel=cancel;
-                    synchronized(image) { renderMapFrame(g); imageReady=true; }
-                    repaint();
-                    java.util.concurrent.locks.LockSupport.parkNanos(16_666_667L);
-                    previous=System.nanoTime();
-                    continue;
-                }
-                lastConfirm=confirm;lastCancel=cancel;
-                float lx=connected?pad.lx():0f, ly=connected?pad.ly():0f;
-                float rx=connected?pad.rx():0f, ry=connected?pad.ry():0f;
-                float x=clamp(lx+((down(KeyEvent.VK_D)||down(KeyEvent.VK_RIGHT))?1:0)-((down(KeyEvent.VK_A)||down(KeyEvent.VK_LEFT))?1:0));
-                float y=clamp(ly+((down(KeyEvent.VK_W)||down(KeyEvent.VK_UP))?1:0)-((down(KeyEvent.VK_S)||down(KeyEvent.VK_DOWN))?1:0));
-                boolean jump=down(KeyEvent.VK_SPACE)||(connected&&pad.button(XboxInput.A));
-                boolean car=down(KeyEvent.VK_E)||(connected&&pad.button(XboxInput.Y));
-                boolean fs=down(KeyEvent.VK_F11)||(connected&&pad.button(XboxInput.START));
-                if(fs&&!lastFullscreen) SwingUtilities.invokeLater(this::toggleFullscreen);
-                lastFullscreen=fs;
-                float steer=clamp(x);
-                float gas=connected?pad.rt():0f;
-                float brake=connected?pad.lt():0f;
-                if(down(KeyEvent.VK_W)||down(KeyEvent.VK_UP)) gas=1f;
-                if(down(KeyEvent.VK_S)||down(KeyEvent.VK_DOWN)) brake=1f;
-                g.update(dt,x,y,-rx*2.5f*dt,-ry*1.7f*dt,jump&&!lastJump,steer,gas,brake,car&&!lastCar);
-                lastJump=jump;lastCar=car;
-                g.render();
-                int[] pixels=((DataBufferInt)image.getRaster().getDataBuffer()).getData();
-                synchronized(image) {
-                    System.arraycopy(g.renderer.fb,0,pixels,0,pixels.length);
-                    renderMapFrame(g);
-                    imageReady=true;
+            loadScreen.reset("Starting up");
+            Game g = new Game(Game.randomSeed(), loadScreen::set);
+            g.setResolution(W, H);
+            game = g;
+            long previous = System.nanoTime(), stat = previous;
+            int frames = 0;
+            while (running) {
+                long start = System.nanoTime();
+                float dt = Math.min(.05f, (start - previous) / 1_000_000_000f);
+                previous = start;
+                frameTaps.clear();
+                Integer t;
+                while ((t = taps.poll()) != null) frameTaps.add(t);
+                boolean connected = pad.poll();
+                int buttons = connected ? pad.buttons() : 0;
+                int pressed = buttons & ~padPrev;
+                padPrev = buttons;
+                if (tapped(KeyEvent.VK_F11)) SwingUtilities.invokeLater(this::toggleFullscreen);
+                switch (screen) {
+                    case MAP: mapFrame(g, dt, connected, pressed); break;
+                    case PAUSE: pauseFrame(g, connected, pressed); break;
+                    default: gameFrame(g, dt, connected, pressed); break;
                 }
                 repaint();
                 frames++;
-                if(start-stat>1_000_000_000L) {fps=frames*1_000_000_000f/(start-stat);frames=0;stat=start;}
-                long wait=16_666_667L-(System.nanoTime()-start);
-                if(wait>0) java.util.concurrent.locks.LockSupport.parkNanos(wait);
+                if (start - stat > 1_000_000_000L) { fps = frames * 1_000_000_000f / (start - stat); frames = 0; stat = start; }
+                long wait = 16_666_667L - (System.nanoTime() - start);
+                if (wait > 0) java.util.concurrent.locks.LockSupport.parkNanos(wait);
             }
-        } catch(Throwable e) {
+        } catch (Throwable e) {
             e.printStackTrace();
-            loading="Error: "+e;
+            error = "Error: " + e;
+            travelling = true;
             repaint();
-        } finally { if(game!=null) game.dispose(); }
+        } finally {
+            if (game != null) game.dispose();
+        }
     }
-    private static float clamp(float x) {return Math.max(-1f,Math.min(1f,x));}
-    private static float clamp(float x,float min,float max) {return Math.max(min,Math.min(max,x));}
-    private static float mapPanAxis(float input) {
-        float magnitude=Math.abs(input);
-        return Math.copySign((float)Math.pow(magnitude,0.3f),input);
+
+    private void gameFrame(Game g, float dt, boolean connected, int pressed) {
+        if (tapped(KeyEvent.VK_ESCAPE) || (pressed & XboxInput.START) != 0) {
+            capture(false);
+            screen = Screen.PAUSE;
+            menuIndex = 0;
+            return;
+        }
+        if (tapped(KeyEvent.VK_M) || tapped(KeyEvent.VK_TAB) || (pressed & XboxInput.BACK) != 0) {
+            openMap(g);
+            return;
+        }
+        float lx = connected ? pad.lx() : 0f, ly = connected ? pad.ly() : 0f;
+        float rx = connected ? pad.rx() : 0f, ry = connected ? pad.ry() : 0f;
+        float x = clamp(lx + (key(KeyEvent.VK_D, KeyEvent.VK_RIGHT) ? 1 : 0) - (key(KeyEvent.VK_A, KeyEvent.VK_LEFT) ? 1 : 0));
+        float y = clamp(ly + (key(KeyEvent.VK_W, KeyEvent.VK_UP) ? 1 : 0) - (key(KeyEvent.VK_S, KeyEvent.VK_DOWN) ? 1 : 0));
+        boolean jump = tapped(KeyEvent.VK_SPACE) || (pressed & XboxInput.A) != 0;
+        boolean car = tapped(KeyEvent.VK_E) || tapped(KeyEvent.VK_F) || tapped(KeyEvent.VK_ENTER) || (pressed & XboxInput.Y) != 0;
+        float gas = connected ? pad.rt() : 0f, brake = connected ? pad.lt() : 0f;
+        if (key(KeyEvent.VK_W, KeyEvent.VK_UP)) gas = 1f;
+        if (key(KeyEvent.VK_S, KeyEvent.VK_DOWN)) brake = 1f;
+        float yaw = -rx * 2.6f * dt - lookX.getAndSet(0) * 0.0045f;
+        float pitch = -ry * 1.7f * dt - lookY.getAndSet(0) * 0.003f;
+        g.update(dt, x, y, yaw, pitch, jump, x, gas, brake, car);
+        g.render();
+        hintTime -= dt;
+        synchronized (image) {
+            System.arraycopy(g.renderer.fb, 0, pixels, 0, pixels.length);
+            mapView.drawMinimap(pixels, W, H, W - 50, 50, 42, g);
+            mapView.drawHud(pixels, W, H, g, 6, 6);
+            mapView.drawHints(pixels, W, H, connected
+                    ? "LS MOVE  RS CAMERA  RT GAS  LT BRAKE  A JUMP  Y CAR  VIEW MAP  START MENU"
+                    : (captured ? "WASD MOVE  MOUSE CAMERA  SPACE JUMP  E CAR  M MAP  ESC MENU"
+                    : "CLICK TO CAPTURE THE MOUSE  -  WASD MOVE  E CAR  M MAP  ESC MENU"), Math.min(1f, hintTime));
+            imageReady = true;
+        }
     }
+
+    private void openMap(Game g) {
+        capture(false);
+        mapView.open(g);
+        screen = Screen.MAP;
+        clicks.clear();
+        dragX.set(0);
+        dragY.set(0);
+        wheel.set(0);
+    }
+
+    private void mapFrame(Game g, float dt, boolean connected, int pressed) {
+        mapView.hints = connected
+                ? "LS PAN  LT RT ZOOM  LB RB PLACES  A SELECT  Y ME  B BACK"
+                : "DRAG / WASD PAN  WHEEL ZOOM  Q E PLACES  CLICK / ENTER SELECT  ESC BACK";
+        boolean back = tapped(KeyEvent.VK_ESCAPE) || (pressed & XboxInput.B) != 0;
+        boolean toggle = tapped(KeyEvent.VK_M) || tapped(KeyEvent.VK_TAB) || (pressed & XboxInput.BACK) != 0;
+        boolean confirm = tapped(KeyEvent.VK_ENTER) || tapped(KeyEvent.VK_SPACE) || (pressed & XboxInput.A) != 0;
+        if (toggle) { screen = Screen.GAME; return; }
+        if (mapView.dialog) {
+            if (back) { mapView.dialog = false; }
+            else if (confirm) { travel(g, mapView.selected); return; }
+        } else {
+            if (back) { screen = Screen.GAME; return; }
+            if (confirm) mapView.pickAtCursor(g, H);
+            if (tapped(KeyEvent.VK_Q) || (pressed & XboxInput.LEFT_SHOULDER) != 0) mapView.cycle(-1);
+            if (tapped(KeyEvent.VK_E) || (pressed & XboxInput.RIGHT_SHOULDER) != 0) mapView.cycle(1);
+            if (tapped(KeyEvent.VK_C) || (pressed & XboxInput.Y) != 0) { mapView.viewX = mapView.cursorX = g.mapX(); mapView.viewZ = mapView.cursorZ = g.mapZ(); }
+            float ax = (connected ? pad.lx() + pad.rx() : 0f) + (key(KeyEvent.VK_D, KeyEvent.VK_RIGHT) ? 1 : 0) - (key(KeyEvent.VK_A, KeyEvent.VK_LEFT) ? 1 : 0);
+            float az = (connected ? -pad.ly() - pad.ry() : 0f) + (key(KeyEvent.VK_S, KeyEvent.VK_DOWN) ? 1 : 0) - (key(KeyEvent.VK_W, KeyEvent.VK_UP) ? 1 : 0);
+            if (connected) {
+                if (pad.button(XboxInput.DPAD_LEFT)) ax -= 1f;
+                if (pad.button(XboxInput.DPAD_RIGHT)) ax += 1f;
+                if (pad.button(XboxInput.DPAD_UP)) az -= 1f;
+                if (pad.button(XboxInput.DPAD_DOWN)) az += 1f;
+            }
+            if (ax != 0f || az != 0f) mapView.steer(g, clamp(ax), clamp(az), dt, H);
+            float zoomIn = (connected ? pad.rt() : 0f) + (key(KeyEvent.VK_EQUALS, KeyEvent.VK_ADD) || key(KeyEvent.VK_PAGE_UP) ? 1f : 0f);
+            float zoomOut = (connected ? pad.lt() : 0f) + (key(KeyEvent.VK_MINUS, KeyEvent.VK_SUBTRACT) || key(KeyEvent.VK_PAGE_DOWN) ? 1f : 0f);
+            mapView.zoomBy((float) Math.exp((zoomIn - zoomOut) * 2.2f * dt));
+            int w = wheel.getAndSet(0);
+            if (w != 0) mapView.zoomBy((float) Math.pow(1.25f, -w));
+            float sx = scaleX(), sy = scaleY();
+            int ddx = dragX.getAndSet(0), ddy = dragY.getAndSet(0);
+            if (ddx != 0 || ddy != 0) mapView.pan(g, ddx * sx, ddy * sy, H);
+        }
+        float[] c;
+        while ((c = clicks.poll()) != null) {
+            String hit = mapView.tap(g, c[0], c[1], W, H);
+            if (hit.equals("travel")) { travel(g, mapView.selected); return; }
+            if (hit.equals("close")) { screen = Screen.GAME; return; }
+        }
+        synchronized (image) {
+            mapView.drawFull(pixels, W, H, g);
+            imageReady = true;
+        }
+    }
+
+    private void pauseFrame(Game g, boolean connected, int pressed) {
+        if (tapped(KeyEvent.VK_ESCAPE) || (pressed & (XboxInput.START | XboxInput.B)) != 0) { screen = Screen.GAME; return; }
+        if (tapped(KeyEvent.VK_W) || tapped(KeyEvent.VK_UP) || (pressed & XboxInput.DPAD_UP) != 0) menuIndex = (menuIndex + MENU.length - 1) % MENU.length;
+        if (tapped(KeyEvent.VK_S) || tapped(KeyEvent.VK_DOWN) || (pressed & XboxInput.DPAD_DOWN) != 0) menuIndex = (menuIndex + 1) % MENU.length;
+        int choose = -1;
+        if (tapped(KeyEvent.VK_ENTER) || tapped(KeyEvent.VK_SPACE) || (pressed & XboxInput.A) != 0) choose = menuIndex;
+        float[] c;
+        while ((c = clicks.poll()) != null)
+            for (int i = 0; i < mapView.menuBoxes.size(); i++) {
+                int[] b = mapView.menuBoxes.get(i);
+                if (c[0] >= b[0] && c[0] < b[2] && c[1] >= b[1] && c[1] < b[3]) choose = menuIndex = i;
+            }
+        if (choose == 0) { screen = Screen.GAME; return; }
+        if (choose == 1) { openMap(g); return; }
+        if (choose == 2) SwingUtilities.invokeLater(this::toggleFullscreen);
+        if (choose == 3) { running = false; SwingUtilities.invokeLater(() -> window.dispose()); System.exit(0); }
+        g.render();
+        synchronized (image) {
+            System.arraycopy(g.renderer.fb, 0, pixels, 0, pixels.length);
+            mapView.drawMenu(pixels, W, H, "PAUSED", MENU, menuIndex, new String[]{
+                    "#KEYBOARD AND MOUSE",
+                    "WASD / ARROWS   WALK, STEER",
+                    "W / S           GAS / BRAKE",
+                    "MOUSE           CAMERA",
+                    "SPACE           JUMP",
+                    "E / F           GET IN / OUT",
+                    "M / TAB         MAP",
+                    "F11             FULLSCREEN",
+                    "",
+                    "#XBOX CONTROLLER" + (connected ? "  (CONNECTED)" : ""),
+                    "LS              WALK, STEER",
+                    "RT / LT         GAS / BRAKE",
+                    "RS              CAMERA",
+                    "A  JUMP     Y  GET IN / OUT",
+                    "VIEW  MAP   START  MENU",
+            });
+            imageReady = true;
+        }
+    }
+
+    /** Fast travel behind the travel screen (the world around the destination is built first). */
+    private void travel(Game g, MapData.Label destination) {
+        if (destination == null) return;
+        float km = (float) Math.hypot(destination.x - g.mapX(), destination.z - g.mapZ()) / 1000f;
+        loadScreen.reset("Finding a street");
+        loadScreen.heading("TRAVELLING TO " + destination.name.toUpperCase(), String.format("%.1f KM", km));
+        travelling = true;
+        repaint();
+        try {
+            g.fastTravel(destination, loadScreen::set);
+        } finally {
+            // hold the full bar for a moment so the screen never just flickers
+            long until = System.nanoTime() + 400_000_000L;
+            while (System.nanoTime() < until) java.util.concurrent.locks.LockSupport.parkNanos(20_000_000L);
+            screen = Screen.GAME;
+            mapView.dialog = false;
+            keys.clear();
+            hintTime = 4f;
+            travelling = false;
+        }
+    }
+
+    // ------------------------------------------------------------------ helpers
+
+    private final java.util.HashSet<Integer> frameTaps = new java.util.HashSet<>();
+
+    private boolean tapped(int code) { return frameTaps.contains(code); }
+
+    private boolean key(int a) { return keys.contains(a); }
+
+    private boolean key(int a, int b) { return keys.contains(a) || keys.contains(b); }
+
+    private static float clamp(float x) { return Math.max(-1f, Math.min(1f, x)); }
+
+    private int drawWidth() { return Math.min(getWidth(), (int) ((long) getHeight() * W / H)); }
+
+    private float scaleX() { int dw = drawWidth(); return dw <= 0 ? 1f : W / (float) dw; }
+
+    private float scaleY() { int dw = drawWidth(), dh = (int) ((long) dw * H / W); return dh <= 0 ? 1f : H / (float) dh; }
+
     private float toInternalX(int x) {
-        int dw=Math.min(getWidth(),(int)((long)getHeight()*W/H));
-        return dw<=0?-1f:(x-(getWidth()-dw)/2f)*W/dw;
+        int dw = drawWidth();
+        return dw <= 0 ? -1f : (x - (getWidth() - dw) / 2f) * W / dw;
     }
+
     private float toInternalY(int y) {
-        int dw=Math.min(getWidth(),(int)((long)getHeight()*W/H)),dh=(int)((long)dw*H/W);
-        return dh<=0?-1f:(y-(getHeight()-dh)/2f)*H/dh;
+        int dw = drawWidth(), dh = (int) ((long) dw * H / W);
+        return dh <= 0 ? -1f : (y - (getHeight() - dh) / 2f) * H / dh;
     }
-    private void clampMapView(Game g) {
-        float viewHeight=g.map.extent/mapZoom, viewWidth=viewHeight*W/H;
-        float halfX=Math.min(g.map.extent*0.5f,viewWidth*0.5f),halfZ=Math.min(g.map.extent*0.5f,viewHeight*0.5f);
-        mapViewX=clamp(mapViewX,g.map.x0+halfX,g.map.x0+g.map.extent-halfX);
-        mapViewZ=clamp(mapViewZ,g.map.z0+halfZ,g.map.z0+g.map.extent-halfZ);
-    }
-    private boolean down(int k) {return keys.contains(k);}
+
     private void toggleFullscreen() {
-        Rectangle previousBounds=window.getBounds();
-        Rectangle screenBounds=window.getGraphicsConfiguration().getBounds();
+        Rectangle previousBounds = window.getBounds();
+        Rectangle screenBounds = window.getGraphicsConfiguration().getBounds();
         window.dispose();
-        fullscreen=!fullscreen;
+        fullscreen = !fullscreen;
         window.setUndecorated(fullscreen);
         window.setResizable(!fullscreen);
-        if(fullscreen) {
-            windowedBounds=previousBounds;
+        if (fullscreen) {
+            windowedBounds = previousBounds;
             window.setBounds(screenBounds);
         } else {
-            window.setBounds(windowedBounds!=null?windowedBounds:new Rectangle(0,0,1200,800));
-            if(windowedBounds==null) window.setLocationRelativeTo(null);
-            windowedBounds=null;
+            window.setBounds(windowedBounds != null ? windowedBounds : new Rectangle(0, 0, 1200, 800));
+            if (windowedBounds == null) window.setLocationRelativeTo(null);
+            windowedBounds = null;
         }
         window.setVisible(true);
         window.toFront();
         requestFocusInWindow();
     }
+
     @Override protected void paintComponent(Graphics g) {
         super.paintComponent(g);
-        if(game==null) {
-            g.setColor(Color.WHITE);g.setFont(new Font(Font.MONOSPACED,Font.BOLD,22));
-            g.drawString("DRIVE HARD",30,60);g.setFont(new Font(Font.MONOSPACED,Font.PLAIN,15));g.drawString(loading,30,90);
+        int width = getWidth(), height = getHeight();
+        int dw = drawWidth(), dh = (int) ((long) dw * H / W);
+        int x = (width - dw) / 2, y = (height - dh) / 2;
+        if (game == null || travelling) {
+            int[] dst = ((DataBufferInt) loadImage.getRaster().getDataBuffer()).getData();
+            System.arraycopy(loadScreen.render(), 0, dst, 0, dst.length);
+            g.drawImage(loadImage, x, y, dw, dh, null);
+            if (!error.isEmpty()) {
+                g.setColor(new Color(255, 120, 110));
+                g.setFont(new Font(Font.MONOSPACED, Font.BOLD, 14));
+                g.drawString(error, x + 20, y + 30);
+            }
             return;
         }
-        int width=getWidth(),height=getHeight();
-        int dw=Math.min(width,(int)((long)height*W/H)),dh=(int)((long)dw*H/W);
-        int x=(width-dw)/2,y=(height-dh)/2;
-        if(imageReady) synchronized(image) { g.drawImage(image,x,y,dw,dh,null); }
-    }
-    /** All HUD/map drawing occurs at the internal game resolution, then scales with the framebuffer. */
-    private void renderMapFrame(Game current) {
-        if(!mapImageReady) return;
-        Graphics2D gg=image.createGraphics();
-        try {
-            gg.setRenderingHint(RenderingHints.KEY_INTERPOLATION,RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
-            gg.setRenderingHint(RenderingHints.KEY_ANTIALIASING,RenderingHints.VALUE_ANTIALIAS_ON);
-            gg.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING,RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
-            if(mapOpen) {
-                gg.setColor(new Color(7,12,18));gg.fillRect(0,0,W,H);
-                drawMap(gg,0,0,W,H,true);
-            } else {
-                int x=W-132,y=8,w=124,h=140,size=112;
-                gg.setColor(new Color(4,10,15,225));gg.fillRoundRect(x,y,w,h,4,4);
-                gg.setColor(new Color(66,94,101));gg.drawRoundRect(x,y,w-1,h-1,4,4);
-                gg.setFont(new Font(Font.MONOSPACED,Font.BOLD,8));gg.setColor(new Color(231,239,233));
-                gg.drawString("LOCAL MAP",x+7,y+12);
-                gg.setFont(new Font(Font.MONOSPACED,Font.PLAIN,7));gg.setColor(new Color(120,215,221));
-                gg.drawString("FOLLOW / 14x",x+66,y+12);
-                drawMap(gg,x+6,y+18,size,size,false);
-                gg.setColor(new Color(76,104,111));gg.drawRect(x+6,y+18,size-1,size-1);
-                gg.setFont(new Font(Font.MONOSPACED,Font.PLAIN,7));gg.setColor(new Color(183,200,196));
-                gg.drawString("N",x+10,y+27);gg.drawString("PLAYER",x+15,y+136);
-                gg.setColor(new Color(83,231,243));gg.fillRect(x+7,y+130,4,4);
-            }
-        } finally { gg.dispose(); }
-    }
-    private void drawMap(Graphics2D gg,int x,int y,int width,int height,boolean full) {
-        Game current=game;
-        if(current==null || mapImage==null) return;
-        MapData m=current.map;
-        // Zooming is performed in world-space and never in window pixels.
-        float cx=full?mapViewX:current.mapX();
-        float cz=full?mapViewZ:current.mapZ();
-        float visible=m.extent/(full?mapZoom:14f);
-        float worldWidth=visible;
-        float worldHeight=visible*height/(float)width;
-        if(full) { worldHeight=m.extent/mapZoom; worldWidth=worldHeight*width/(float)height; }
-        float left=cx-worldWidth/2f,top=cz-worldHeight/2f;
-        Graphics2D g=(Graphics2D)gg.create();
-        try {
-            g.setColor(new Color(14,23,30));g.fillRect(x,y,width,height);
-            g.setClip(x,y,width,height);
-            int ix=x+Math.round((m.x0-left)*width/worldWidth);
-            int iy=y+Math.round((m.z0-top)*height/worldHeight);
-            int iw=Math.max(1,Math.round(m.extent*width/worldWidth));
-            int ih=Math.max(1,Math.round(m.extent*height/worldHeight));
-            g.drawImage(mapImage,ix,iy,iw,ih,null);
-            for(MapData.Road road:m.roads) {
-                g.setColor(road.cls.city?new Color(244,235,195):new Color(215,201,154));
-                for(int i=1;i<road.x.length;i++) {
-                    int ax=x+Math.round((road.x[i-1]-left)*width/worldWidth);
-                    int ay=y+Math.round((road.z[i-1]-top)*height/worldHeight);
-                    int bx=x+Math.round((road.x[i]-left)*width/worldWidth);
-                    int by=y+Math.round((road.z[i]-top)*height/worldHeight);
-                    g.drawLine(ax,ay,bx,by);
-                }
-            }
-            if(full) {
-                for(MapData.Label label:m.labels) {
-                    int maxRank=mapZoom<1.6f?0:mapZoom<2.8f?1:mapZoom<5f?2:3;
-                    if(label.rank>maxRank)continue;
-                    int lx=x+Math.round((label.x-left)*width/worldWidth);
-                    int lz=y+Math.round((label.z-top)*height/worldHeight);
-                    if(lx<x || lx>=x+width || lz<y || lz>=y+height)continue;
-                    g.setColor(new Color(255,217,85));g.fillRect(lx-2,lz-2,5,5);
-                    g.setColor(Color.BLACK);g.drawRect(lx-2,lz-2,5,5);
-                    g.setColor(new Color(8,17,22,190));g.fillRect(lx+4,lz-12,label.name.length()*5+4,13);
-                    g.setColor(new Color(244,245,229));g.setFont(new Font(Font.MONOSPACED,Font.BOLD,8));
-                    g.drawString(label.name,lx+5,lz-4);
-                }
-                int mx=x+Math.round((mapCursorX-left)*width/worldWidth);
-                int my=y+Math.round((mapCursorZ-top)*height/worldHeight);
-                g.setColor(Color.WHITE);
-                g.drawLine(mx-7,my,mx-2,my);g.drawLine(mx+2,my,mx+7,my);
-                g.drawLine(mx,my-7,mx,my-2);g.drawLine(mx,my+2,mx,my+7);
-            }
-            int px=x+Math.round((current.mapX()-left)*width/worldWidth);
-            int py=y+Math.round((current.mapZ()-top)*height/worldHeight);
-            drawPlayerMarker(g,px,py,current.mapHeading(),full?7:6);
-            g.setClip(null);
-            if(full) {
-                g.setColor(new Color(4,10,18,215));g.fillRect(0,0,W,20);g.fillRect(0,H-29,W,29);
-                g.setColor(Color.WHITE);g.setFont(new Font(Font.MONOSPACED,Font.BOLD,11));
-                g.drawString("ISLAND MAP",7,14);
-                g.setColor(new Color(160,207,207));g.setFont(new Font(Font.MONOSPACED,Font.BOLD,9));
-                g.drawString(Math.round(mapZoom*100)+"%",W-92,14);
-                g.setColor(controllerConnected?new Color(112,225,171):new Color(217,150,129));
-                g.drawString(controllerConnected?"PAD OK":"PAD --",W-154,14);
-                g.setColor(new Color(59,92,99));g.drawRoundRect(W-48,3,18,14,2,2);g.drawRoundRect(W-25,3,18,14,2,2);
-                g.setColor(new Color(233,242,234));g.setFont(new Font(Font.MONOSPACED,Font.BOLD,11));
-                g.drawString("+",W-43,14);g.drawString("-",W-20,14);
-                g.setFont(new Font(Font.MONOSPACED,Font.PLAIN,9));
-                g.drawString("LS / DPAD / WASD PAN   LB-RB / RT-LT / WHEEL ZOOM",7,H-16);
-                g.drawString("A / ENTER SELECT   B / ESC CLOSE",7,H-5);
-                if(travelMenu&&selectedDestination!=null) {
-                    int bx=65,by=H/2-35,bw=W-130,bh=70;
-                    g.setColor(new Color(7,17,29));g.fillRect(bx,by,bw,bh);
-                    g.setColor(Color.WHITE);g.drawRect(bx,by,bw,bh);
-                    g.setFont(new Font(Font.MONOSPACED,Font.BOLD,12));
-                    g.drawString("FAST TRAVEL: "+selectedDestination.name,bx+12,by+23);
-                    g.setFont(new Font(Font.MONOSPACED,Font.PLAIN,10));
-                    g.drawString("A CONFIRM     B CANCEL",bx+12,by+49);
-                }
-            } else {
-                g.setColor(Color.WHITE);g.drawRect(x,y,width-1,height-1);
-            }
-        } finally {g.dispose();}
+        if (imageReady) synchronized (image) { g.drawImage(image, x, y, dw, dh, null); }
     }
 
-    private static void drawPlayerMarker(Graphics2D g,int x,int y,float heading,int size) {
-        float dx=(float)Math.sin(heading),dy=(float)Math.cos(heading),sx=dy,sy=-dx;
-        int[] xs={x+Math.round(dx*size),x-Math.round(dx*size*0.65f)+Math.round(sx*size*0.6f),x-Math.round(dx*size*0.65f)-Math.round(sx*size*0.6f)};
-        int[] ys={y+Math.round(dy*size),y-Math.round(dy*size*0.65f)+Math.round(sy*size*0.6f),y-Math.round(dy*size*0.65f)-Math.round(sy*size*0.6f)};
-        g.setColor(new Color(83,231,243));g.fillPolygon(xs,ys,3);
-        g.setColor(new Color(4,14,19));g.setStroke(new BasicStroke(1.4f));g.drawPolygon(xs,ys,3);
-        g.setColor(new Color(235,255,248));g.drawLine(x,y,x+Math.round(dx*size*0.65f),y+Math.round(dy*size*0.65f));
-        g.setStroke(new BasicStroke(1f));
+    @Override public void keyPressed(KeyEvent e) {
+        if (keys.add(e.getKeyCode())) taps.add(e.getKeyCode());
     }
 
-    @Override public void keyPressed(KeyEvent e) {keys.add(e.getKeyCode());}
-    @Override public void keyReleased(KeyEvent e) {keys.remove(e.getKeyCode());}
+    @Override public void keyReleased(KeyEvent e) { keys.remove(e.getKeyCode()); }
+
     @Override public void keyTyped(KeyEvent e) { }
 }

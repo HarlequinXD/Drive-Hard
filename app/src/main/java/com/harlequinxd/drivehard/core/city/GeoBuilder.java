@@ -68,6 +68,80 @@ public final class GeoBuilder {
         if (!dry) target().add(p, uv, l, tex, layer, Geo.FLAG_NO_SUBDIV, 0f, false);
     }
 
+    // ------------------------------------------------------------------ wall props
+
+    /**
+     * A box standing against a wall (outdoor a/c unit, meter box): its back is on the wall and
+     * has no polygon. (ax, az) is the point on the wall's face under its centre, (nx, nz) the
+     * wall's outward normal; front, two sides and top.
+     */
+    public void wallUnit(float ax, float az, float nx, float nz, float width, float y0, float height, float depth,
+                         int frontTex, int sideTex) {
+        float tx = -nz, tz = nx;                         // along the wall
+        float hw = width * 0.5f, y1 = y0 + height;
+        float bx0 = ax - tx * hw, bz0 = az - tz * hw, bx1 = ax + tx * hw, bz1 = az + tz * hw;   // back corners
+        float fx0 = bx0 + nx * depth, fz0 = bz0 + nz * depth, fx1 = bx1 + nx * depth, fz1 = bz1 + nz * depth;
+        float lf = sunLight(nx, 0f, nz), ls0 = sunLight(-tx, 0f, -tz), ls1 = sunLight(tx, 0f, tz), lt = sunLight(0f, 1f, 0f);
+        // front: counter-clockwise seen from outside (from +n)
+        quad(new float[]{fx1, y0, fz1, fx0, y0, fz0, fx0, y1, fz0, fx1, y1, fz1}, new float[]{0, 1, 1, 1, 1, 0, 0, 0},
+                new float[]{lf, lf, lf, lf}, frontTex, com.harlequinxd.drivehard.core.render.SoftRenderer.L_OBJECT, Geo.FLAG_NO_SUBDIV | Geo.FLAG_DETAIL, 0f, true);
+        quad(new float[]{fx0, y0, fz0, bx0, y0, bz0, bx0, y1, bz0, fx0, y1, fz0}, new float[]{0, 1, 1, 1, 1, 0, 0, 0},
+                new float[]{ls0, ls0, ls0, ls0}, sideTex, com.harlequinxd.drivehard.core.render.SoftRenderer.L_OBJECT, Geo.FLAG_NO_SUBDIV | Geo.FLAG_DETAIL, 0f, true);
+        quad(new float[]{bx1, y0, bz1, fx1, y0, fz1, fx1, y1, fz1, bx1, y1, bz1}, new float[]{0, 1, 1, 1, 1, 0, 0, 0},
+                new float[]{ls1, ls1, ls1, ls1}, sideTex, com.harlequinxd.drivehard.core.render.SoftRenderer.L_OBJECT, Geo.FLAG_NO_SUBDIV | Geo.FLAG_DETAIL, 0f, true);
+        quad(new float[]{bx0, y1, bz0, bx1, y1, bz1, fx1, y1, fz1, fx0, y1, fz0}, new float[]{0, 0, 1, 0, 1, 1, 0, 1},
+                new float[]{lt, lt, lt, lt}, sideTex, com.harlequinxd.drivehard.core.render.SoftRenderer.L_OBJECT, Geo.FLAG_NO_SUBDIV | Geo.FLAG_DETAIL, 0f, true);
+    }
+
+    /**
+     * A balcony on a wall from (ax, az) to (bx, bz) at floor height y: the slab (floor and
+     * underside), the two side panels and the front; nothing where it meets the wall.
+     */
+    public void balcony(float ax, float az, float bx, float bz, float nx, float nz, float y, float depth, float rail,
+                        int frontTex, int slabTex) {
+        float fx0 = ax + nx * depth, fz0 = az + nz * depth, fx1 = bx + nx * depth, fz1 = bz + nz * depth;
+        float len = (float) Math.hypot(bx - ax, bz - az);
+        int L = com.harlequinxd.drivehard.core.render.SoftRenderer.L_OBJECT;
+        float lt = sunLight(0f, 1f, 0f) * 0.85f, lf = sunLight(nx, 0f, nz);
+        float tx = (bx - ax) / Math.max(1e-4f, len), tz = (bz - az) / Math.max(1e-4f, len);
+        float la = sunLight(-tx, 0f, -tz), lb = sunLight(tx, 0f, tz);
+        // floor slab, seen from above and from below
+        quad(new float[]{ax, y, az, bx, y, bz, fx1, y, fz1, fx0, y, fz0}, new float[]{0, 0, len / 2f, 0, len / 2f, depth / 2f, 0, depth / 2f},
+                new float[]{lt, lt, lt, lt}, slabTex, L, Geo.FLAG_NO_SUBDIV, 0f, true);
+        float top = y + rail;
+        float[] uvF = {0, 1, len / 4f, 1, len / 4f, 0, 0, 0};
+        quad(new float[]{fx0, y - 0.15f, fz0, fx1, y - 0.15f, fz1, fx1, top, fz1, fx0, top, fz0}, uvF,
+                new float[]{lf, lf, lf, lf}, frontTex, L, Geo.FLAG_NO_SUBDIV, 0f, true);
+        float[] uvS = {0, 1, depth / 4f, 1, depth / 4f, 0, 0, 0};
+        quad(new float[]{ax, y - 0.15f, az, fx0, y - 0.15f, fz0, fx0, top, fz0, ax, top, az}, uvS,
+                new float[]{la, la, la, la}, frontTex, L, Geo.FLAG_NO_SUBDIV, 0f, true);
+        quad(new float[]{fx1, y - 0.15f, fz1, bx, y - 0.15f, bz, bx, top, bz, fx1, top, fz1}, uvS,
+                new float[]{lb, lb, lb, lb}, frontTex, L, Geo.FLAG_NO_SUBDIV, 0f, true);
+    }
+
+    /**
+     * Overhead power lines between two cross-arms as one ribbon: an alpha-cut texture of three
+     * wires 0.6 m apart, tiled along the span, sagging in a parabola (4 pieces). (sx, sz) is the
+     * horizontal direction across the wires (along the cross-arm).
+     */
+    public void powerLine(float ax, float ay, float az, float bx, float by, float bz, float sx, float sz, float sag, int tex) {
+        float half = 0.8f;
+        float px = sx * half, pz = sz * half;
+        float len = (float) Math.hypot(bx - ax, bz - az);
+        if (len < 0.5f) return;
+        int n = 4;
+        float[] l = {0.55f, 0.55f, 0.55f, 0.55f};
+        int L = SoftRenderer.L_OBJECT;
+        for (int k = 0; k < n; k++) {
+            float t0 = k / (float) n, t1 = (k + 1) / (float) n;
+            float x0 = ax + (bx - ax) * t0, z0 = az + (bz - az) * t0, y0 = ay + (by - ay) * t0 - sag * 4f * t0 * (1f - t0);
+            float x1 = ax + (bx - ax) * t1, z1 = az + (bz - az) * t1, y1 = ay + (by - ay) * t1 - sag * 4f * t1 * (1f - t1);
+            float u0 = len * t0 / 4f, u1 = len * t1 / 4f;
+            quad(new float[]{x0 - px, y0, z0 - pz, x1 - px, y1, z1 - pz, x1 + px, y1, z1 + pz, x0 + px, y0, z0 + pz},
+                    new float[]{u0, 0f, u1, 0f, u1, 1f, u0, 1f}, l, tex, L, Geo.FLAG_ALPHA | Geo.FLAG_DETAIL | Geo.FLAG_NO_SUBDIV, -0.2f, true);
+        }
+    }
+
     public float h(float x, float z) { return terrain.height(x, z); }
 
     // ------------------------------------------------------------------ floors

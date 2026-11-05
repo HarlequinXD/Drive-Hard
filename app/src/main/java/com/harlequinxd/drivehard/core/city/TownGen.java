@@ -37,21 +37,21 @@ final class TownGen {
         switch (kind) {
             case Countryside.TOWN_HALL: {
                 // set back behind a forecourt, three storeys of offices
-                float[] b = inset(x0, z0, x1, z1, face, 2f, 7f, 2f);
+                float[] b = cap(inset(x0, z0, x1, z1, face, 2f, 7f, 2f), face, 34f, 18f);
                 new BuildingGen(city, lib, gb, r, ch).build(BuildingGen.Type.TOWN_HALL, b[0], b[1], b[2], b[3], street, new boolean[4], city.shopsSuburb);
                 roofSign(b, face, base(b) + 4.6f + 2 * 3.6f + 0.8f, lib.signTownOffice, 10f);
                 flagpole(face == 0 ? b[0] + 2f : b[2] - 2f, face == 0 ? b[1] - 4f : b[3] + 4f);
                 break;
             }
             case Countryside.POST: {
-                float[] b = inset(x0, z0, x1, z1, face, 1f, 4f, 1f);
+                float[] b = cap(inset(x0, z0, x1, z1, face, 1f, 4f, 1f), face, 16f, 12f);
                 new BuildingGen(city, lib, gb, r, ch).build(BuildingGen.Type.POST_OFFICE, b[0], b[1], b[2], b[3], street, street, new int[]{lib.lobbies[0]});
                 roofSign(b, face, base(b) + 4.6f + 3.2f + 0.8f, lib.signPost, Math.min(8f, b[2] - b[0] - 1f));
                 postBox(face == 0 ? b[0] + 1.5f : b[2] - 1.5f, face == 0 ? b[1] - 2f : b[3] + 2f);
                 break;
             }
             case Countryside.CLINIC: {
-                float[] b = inset(x0, z0, x1, z1, face, 1f, 4f, 1f);
+                float[] b = cap(inset(x0, z0, x1, z1, face, 1f, 4f, 1f), face, 16f, 12f);
                 new BuildingGen(city, lib, gb, r, ch).build(BuildingGen.Type.CLINIC, b[0], b[1], b[2], b[3], street, new boolean[4], city.shopsSuburb);
                 roofSign(b, face, base(b) + 2 * 3.2f + 0.8f, lib.signClinic, Math.min(7f, b[2] - b[0] - 1f));
                 break;
@@ -59,6 +59,7 @@ final class TownGen {
             case Countryside.SUPERMARKET: {
                 // the store across the back of the block, car park in front
                 float[] b = face == 0 ? new float[]{x0 + 2f, z1 - 22f, x1 - 2f, z1 - 1f} : new float[]{x0 + 2f, z0 + 1f, x1 - 2f, z0 + 22f};
+                b = cap(b, 1 - face, 44f, 22f);
                 new BuildingGen(city, lib, gb, r, ch).build(BuildingGen.Type.SUPERMARKET, b[0], b[1], b[2], b[3], street, street, new int[]{lib.superWall});
                 roofSign(b, face, base(b) + 4.6f + 0.8f, lib.signSuper, 14f);
                 for (int k = 0; k < 4; k++) {   // car park lamps
@@ -70,6 +71,7 @@ final class TownGen {
             case Countryside.SCHOOL: {
                 // a long three-storey block along the street, the sports ground behind it
                 float[] b = face == 0 ? new float[]{x0 + 3f, z0 + 2f, x1 - 3f, z0 + 14f} : new float[]{x0 + 3f, z1 - 14f, x1 - 3f, z1 - 2f};
+                b = cap(b, face, 56f, 12f);
                 new BuildingGen(city, lib, gb, r, ch).build(BuildingGen.Type.SCHOOL, b[0], b[1], b[2], b[3], street, new boolean[4], city.shopsSuburb);
                 roofSign(b, face, base(b) + 3 * 3.6f + 0.8f, lib.signSchool, 9f);
                 // fence round the ground, a row of cherry trees
@@ -87,6 +89,17 @@ final class TownGen {
             default:
                 break;
         }
+    }
+
+    /**
+     * Keeps a civic building to a real size: at most maxW along the street (centred) and maxD deep
+     * (from the street side, face 0 = north, 1 = south).
+     */
+    private static float[] cap(float[] b, int face, float maxW, float maxD) {
+        float w = b[2] - b[0];
+        if (w > maxW) { float c = (b[0] + b[2]) * 0.5f; b[0] = c - maxW * 0.5f; b[2] = c + maxW * 0.5f; }
+        if (b[3] - b[1] > maxD) { if (face == 0) b[3] = b[1] + maxD; else b[1] = b[3] - maxD; }
+        return b;
     }
 
     /** Building footprint inside a site: side margins, front setback, back margin. */

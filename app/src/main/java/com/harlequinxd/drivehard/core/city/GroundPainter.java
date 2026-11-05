@@ -202,7 +202,7 @@ final class GroundPainter {
                     c = th > -0.4f ? Img.mix(world(lib.sand, 2f, x, z), c, Math.min(1f, (0.05f - th) / 0.45f)) : Img.mix(c, 0xFF1C4A6E, depth * 0.5f);
                 } else {
                     Surface b = cell(grid, x - x0, z - z0);
-                    if (x > city.cityX0 && x < city.cityX1 && z > city.cityZ0 && z < city.cityZ1)
+                    if (city.urban(x, z))
                         c = world(lib.asphalt, 2f, x, z);      // city: streets (blocks stand on it)
                     else {
                         float gx = px * (1f / JS), gz = py * (1f / JS);

@@ -135,6 +135,10 @@ public final class TextureLibrary {
     public HouseTextures.Window[] houseWinKind;
     public HouseTextures.Door[] houseDoorKind;
     public HouseTextures.Roof[] houseRoofKind;
+    /** Building props: a/c unit front and casing, balcony front and slab, power line ribbon. */
+    public int aircon, airconSide, balconyFront, balconySlab, powerLines;
+    /** Alley clutter: beer crates, rubbish bins, cardboard, gas bottles. */
+    public int crateYellow, crateRed, bin, cardboard, gasBottle;
     public int fence, signTownOffice, signPost, signSuper, signSchool, signClinic, signGas, schoolWall, superWall, canopy, field;
 
     private void houseTextures(int seed) {
@@ -207,6 +211,16 @@ public final class TextureLibrary {
         superWall = add(TownTextures.superFront(seed + 3407));
         canopy = add(TownTextures.canopy(seed + 3408));
         field = add(TownTextures.field(seed + 3409));
+        aircon = add(PropTextures.aircon(seed + 3410));
+        airconSide = add(PropTextures.airconSide(seed + 3411));
+        balconyFront = add(PropTextures.balcony(0xD8D4CC, seed + 3412));
+        balconySlab = add(PropTextures.balconySlab(seed + 3413));
+        powerLines = add(PropTextures.powerLines());
+        crateYellow = add(PropTextures.crate(0xFFE0B020, seed + 3414));
+        crateRed = add(PropTextures.crate(0xFFC03028, seed + 3415));
+        bin = add(PropTextures.bin(seed + 3416));
+        cardboard = add(PropTextures.cardboard(seed + 3417));
+        gasBottle = add(PropTextures.gasBottle(seed + 3418));
     }
 
     public int add(Texture t) {

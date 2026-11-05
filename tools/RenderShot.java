@@ -14,7 +14,7 @@ public class RenderShot {
         out = new File(a.length > 0 ? a[0] : "build/preview");
         out.mkdirs();
         long t0 = System.nanoTime();
-        Game g = new Game(com.harlequinxd.drivehard.core.Game.DEFAULT_SEED, s -> System.out.println("  " + s));
+        Game g = new Game(com.harlequinxd.drivehard.core.Game.DEFAULT_SEED, (s, f) -> {});
         System.out.printf("load %.0f ms, %d textures, %d chunks loaded%n",
                 (System.nanoTime() - t0) / 1e6, g.lib.list.size(), g.city.chunks.loadedCount());
         g.setResolution(520, 240);

@@ -42,29 +42,21 @@ final class SectorBuilder {
      * Converts procedural buildings and bridge solids into static polygon batches.
      */
     static void toMeshes(Sectors source, GeoBuilder gb) {
-        Map<EdgeKey, List<Sectors.Wall>> edges = new HashMap<>();
-        for (Sectors.Wall wall : source.walls)
-            edges.computeIfAbsent(new EdgeKey(wall), k -> new ArrayList<>()).add(wall);
-
         for (Sectors.Sector sector : source.sectors) roof(gb, sector);
-        for (List<Sectors.Wall> group : edges.values()) {
-            if (group.size() == 1) {
-                Sectors.Wall wall = group.get(0);
-                wall(gb, wall, wall.front.base - 0.35f, wall.front.base - 0.35f,
-                        wall.front.y(wall.x0, wall.z0), wall.front.y(wall.x1, wall.z1));
-                continue;
+        for (Sectors.Wall wall : source.walls) {
+            // what is outside this wall: another roof (draw only the step above it) or open ground
+            float mx = (wall.x0 + wall.x1) * 0.5f + wall.nx * 0.05f, mz = (wall.z0 + wall.z1) * 0.5f + wall.nz * 0.05f;
+            Sectors.Sector out = null;
+            for (Sectors.Sector o : source.sectors) {
+                if (o == wall.front || !o.contains(mx, mz)) continue;
+                if (out == null || o.y(mx, mz) > out.y(mx, mz)) out = o;
             }
-            group.sort((a, b) -> Float.compare(topAverage(a), topAverage(b)));
-            Sectors.Wall previous = group.get(0);
-            for (int i = 1; i < group.size(); i++) {
-                Sectors.Wall current = group.get(i);
-                float py0 = previous.front.y(current.x0, current.z0);
-                float py1 = previous.front.y(current.x1, current.z1);
-                float cy0 = current.front.y(current.x0, current.z0);
-                float cy1 = current.front.y(current.x1, current.z1);
-                if (Math.max(cy0 - py0, cy1 - py1) > 0.02f)
-                    wall(gb, current, py0, py1, cy0, cy1);
-                previous = current;
+            float top0 = wall.front.y(wall.x0, wall.z0), top1 = wall.front.y(wall.x1, wall.z1);
+            if (out != null) {
+                float b0 = out.y(wall.x0, wall.z0), b1 = out.y(wall.x1, wall.z1);
+                if (Math.max(top0 - b0, top1 - b1) > 0.02f) wall(gb, wall, b0, b1, top0, top1, false);
+            } else {
+                wall(gb, wall, 0f, 0f, top0, top1, true);
             }
         }
         slabs(gb, source.slabs);
@@ -73,37 +65,154 @@ final class SectorBuilder {
         source.slabs.clear();
     }
 
-    private static float topAverage(Sectors.Wall wall) {
-        return (wall.front.y(wall.x0, wall.z0) + wall.front.y(wall.x1, wall.z1)) * 0.5f;
+    /** Roof tiles: tile size along the roof axes, so the ordering table sorts small pieces. */
+    private static final float ROOF_TILE = 2.5f;
+
+    /**
+     * A roof (or the top of a block) as square tiles: the sector polygon cut along its own tile
+     * axes into pieces of {@value #ROOF_TILE} m, each a small polygon.
+     */
+    private static void roof(GeoBuilder gb, Sectors.Sector sector) {
+        float[] poly = sector.poly;
+        int n = poly.length / 2;
+        if (n < 3) return;
+        // work relative to the first point: world coordinates are large
+        float ox = poly[0], oz = poly[1];
+        float ux = sector.ux, uz = sector.uz, vx = sector.vx, vz = sector.vz;
+        float[] loc = new float[n * 2];
+        float u0 = Float.MAX_VALUE, u1 = -Float.MAX_VALUE, v0 = Float.MAX_VALUE, v1 = -Float.MAX_VALUE;
+        for (int i = 0; i < n; i++) {
+            float x = poly[i * 2] - ox, z = poly[i * 2 + 1] - oz;
+            float u = x * ux + z * uz, v = x * vx + z * vz;
+            loc[i * 2] = u; loc[i * 2 + 1] = v;
+            u0 = Math.min(u0, u); u1 = Math.max(u1, u); v0 = Math.min(v0, v); v1 = Math.max(v1, v);
+        }
+        double area = 0.0;
+        for (int i = 0, j = n - 1; i < n; j = i++) area += (double) loc[j * 2] * loc[i * 2 + 1] - (double) loc[i * 2] * loc[j * 2 + 1];
+        if (Math.abs(area) < 1e-3) return;
+        // world winding of the polygon (relative maths): decides the front of every tile
+        double warea = 0.0;
+        for (int i = 0, j = n - 1; i < n; j = i++)
+            warea += (double) (poly[j * 2] - ox) * (poly[i * 2 + 1] - oz) - (double) (poly[i * 2] - ox) * (poly[j * 2 + 1] - oz);
+        // the tile grid is anchored in world space so neighbouring pieces line up
+        float wu = ox * ux + oz * uz, wv = ox * vx + oz * vz;
+        float baseU = (float) (Math.floor(wu / ROOF_TILE) * ROOF_TILE - wu);
+        float baseV = (float) (Math.floor(wv / ROOF_TILE) * ROOF_TILE - wv);
+        float cu0 = baseU + (float) Math.floor((u0 - baseU) / ROOF_TILE) * ROOF_TILE;
+        float cv0 = baseV + (float) Math.floor((v0 - baseV) / ROOF_TILE) * ROOF_TILE;
+        float[] l3 = {sector.light, sector.light, sector.light};
+        for (float cu = cu0; cu < u1 - 1e-3f; cu += ROOF_TILE) {
+            float[] strip = clip(loc, 1f, 0f, cu);
+            if (strip == null) continue;
+            strip = clip(strip, -1f, 0f, -(cu + ROOF_TILE));
+            if (strip == null) continue;
+            for (float cv = cv0; cv < v1 - 1e-3f; cv += ROOF_TILE) {
+                float[] t = clip(strip, 0f, 1f, cv);
+                if (t == null) continue;
+                t = clip(t, 0f, -1f, -(cv + ROOF_TILE));
+                if (t == null) continue;
+                int m = t.length / 2;
+                // back to world (U and V are orthonormal: x = u U + v V), keeping the order
+                float[] w = new float[m * 3];
+                float[] uv = new float[m * 2];
+                for (int k = 0; k < m; k++) {
+                    float u = t[k * 2], v = t[k * 2 + 1];
+                    float x = ox + u * ux + v * vx, z = oz + u * uz + v * vz;
+                    w[k * 3] = x; w[k * 3 + 1] = sector.y(x, z); w[k * 3 + 2] = z;
+                    uv[k * 2] = (u + wu) / sector.us;
+                    uv[k * 2 + 1] = (v + wv) / sector.vs;
+                }
+                // the (u,v) frame may be mirrored relative to (x,z): the tile's world winding follows the polygon's
+                double ta = 0.0;
+                for (int i = 0, j = m - 1; i < m; j = i++)
+                    ta += (double) (w[j * 3] - ox) * (w[i * 3 + 2] - oz) - (double) (w[i * 3] - ox) * (w[j * 3 + 2] - oz);
+                boolean pos = ta > 0;
+                for (int k = 1; k < m - 1; k++) {
+                    int bi = pos ? k + 1 : k, ci = pos ? k : k + 1;
+                    float[] p = {w[0], w[1], w[2], w[bi * 3], w[bi * 3 + 1], w[bi * 3 + 2], w[ci * 3], w[ci * 3 + 1], w[ci * 3 + 2]};
+                    float[] q = {uv[0], uv[1], uv[bi * 2], uv[bi * 2 + 1], uv[ci * 2], uv[ci * 2 + 1]};
+                    gb.quad(p, q, l3, sector.tex, L_OBJECT, Geo.FLAG_NO_SUBDIV, 0f, false);
+                }
+            }
+        }
     }
 
-    private static void roof(GeoBuilder gb, Sectors.Sector sector) {
-        int n = sector.poly.length / 2;
-        if (n < 3) return;
-        float signedArea = 0f;
-        for (int i = 0; i < n; i++) {
-            int j = (i + 1) % n;
-            signedArea += sector.poly[i * 2] * sector.poly[j * 2 + 1]
-                    - sector.poly[j * 2] * sector.poly[i * 2 + 1];
-        }
-        for (int i = 1; i < n - 1; i++) {
-            int b = signedArea > 0f ? i + 1 : i;
-            int c = signedArea > 0f ? i : i + 1;
-            float[] p = {
-                    sector.poly[0], sector.y(sector.poly[0], sector.poly[1]), sector.poly[1],
-                    sector.poly[b * 2], sector.y(sector.poly[b * 2], sector.poly[b * 2 + 1]), sector.poly[b * 2 + 1],
-                    sector.poly[c * 2], sector.y(sector.poly[c * 2], sector.poly[c * 2 + 1]), sector.poly[c * 2 + 1]
-            };
-            float[] uv = {
-                    (sector.poly[0] * sector.ux + sector.poly[1] * sector.uz) / sector.us,
-                    (sector.poly[0] * sector.vx + sector.poly[1] * sector.vz) / sector.vs,
-                    (sector.poly[b * 2] * sector.ux + sector.poly[b * 2 + 1] * sector.uz) / sector.us,
-                    (sector.poly[b * 2] * sector.vx + sector.poly[b * 2 + 1] * sector.vz) / sector.vs,
-                    (sector.poly[c * 2] * sector.ux + sector.poly[c * 2 + 1] * sector.uz) / sector.us,
-                    (sector.poly[c * 2] * sector.vx + sector.poly[c * 2 + 1] * sector.vz) / sector.vs
-            };
-            gb.quad(p, uv, new float[]{sector.light, sector.light, sector.light}, sector.tex, L_OBJECT,
-                    Geo.FLAG_NO_SUBDIV, 0f, false);
+    /** Wall tiles are at most this wide (plain wall runs, foundations, gables). */
+    private static final float WALL_TILE = 2.5f;
+
+    /**
+     * A wall from bottom to top (at its two ends), tile by tile: the foundation below the
+     * floor, each storey's tiles (plain, window, door, shopfront), then the gable or parapet
+     * above. With {@code onGround} the bottom follows the terrain under each tile, so buildings
+     * on slopes never float.
+     */
+    private static void wall(GeoBuilder gb, Sectors.Wall wall, float bottom0, float bottom1, float top0, float top1, boolean onGround) {
+        Sectors.Tiles tiles = wall.tiles;
+        if (tiles == null || wall.len < 0.02f) return;
+        float faceLen = Math.max(wall.faceLen > 0f ? wall.faceLen : wall.len, wall.uOff + wall.len);
+        int maxFloors = tiles.floors;
+        float groundH = Math.max(0.1f, tiles.groundH), storeyH = Math.max(0.1f, tiles.storeyH);
+        float pos0 = wall.uOff, pos1 = wall.uOff + wall.len;
+        float minPos = Math.max(0f, pos0), maxPos = pos1;
+        if (maxPos <= minPos) return;
+        float base = wall.front.base;
+        float maxTop = Math.max(top0, top1);
+        float rowBottom = -1e9f;
+        // rows: the foundation (-1), the storeys, and what stands above them (gable, parapet)
+        for (int row = -1; row <= maxFloors; row++) {
+            float rowTop = row < 0 ? base : (row == 0 ? base + groundH : base + groundH + row * storeyH);
+            if (row == maxFloors) rowTop = maxTop;
+            if (row >= 0 && rowBottom >= maxTop) break;
+            boolean storey = row >= 0 && row < maxFloors;
+            int cols = storey && row < tiles.cols.length && tiles.cols[row] > 0 ? tiles.cols[row] : Math.max(1, (int) Math.ceil(faceLen / WALL_TILE));
+            float tileW = faceLen / cols;
+            int firstCol = Math.max(0, (int) Math.floor(minPos / tileW));
+            int lastCol = Math.min(cols - 1, (int) Math.floor(Math.max(minPos, maxPos - 1e-4f) / tileW));
+            for (int col = firstCol; col <= lastCol; col++) {
+                float a = Math.max(minPos, col * tileW), b = Math.min(maxPos, (col + 1) * tileW);
+                if (b - a < 0.01f) continue;
+                float s0 = (a - pos0) / wall.len, s1 = (b - pos0) / wall.len;
+                float ax = wall.x0 + (wall.x1 - wall.x0) * s0, az = wall.z0 + (wall.z1 - wall.z0) * s0;
+                float bx = wall.x0 + (wall.x1 - wall.x0) * s1, bz = wall.z0 + (wall.z1 - wall.z0) * s1;
+                // the wall's own bottom and top at this tile's two edges
+                float wb0, wb1;
+                if (onGround) {
+                    wb0 = Math.min(base, gb.h(ax, az)) - 0.3f;
+                    wb1 = Math.min(base, gb.h(bx, bz)) - 0.3f;
+                } else {
+                    wb0 = bottom0 + (bottom1 - bottom0) * s0;
+                    wb1 = bottom0 + (bottom1 - bottom0) * s1;
+                }
+                float wt0 = top0 + (top1 - top0) * s0, wt1 = top0 + (top1 - top0) * s1;
+                float lo0 = Math.max(wb0, rowBottom), lo1 = Math.max(wb1, rowBottom);
+                float hi0 = Math.min(wt0, rowTop), hi1 = Math.min(wt1, rowTop);
+                if (Math.max(hi0 - lo0, hi1 - lo1) < 0.01f) continue;
+                if (hi0 < lo0) hi0 = lo0;
+                if (hi1 < lo1) hi1 = lo1;
+                if (row < 0) {
+                    patch(gb, wall, ax, az, bx, bz, lo0, lo1, hi0, hi1, tiles.found,
+                            a * 0.5f, b * 0.5f, -hi0 * 0.5f, -hi1 * 0.5f, -lo0 * 0.5f, -lo1 * 0.5f);
+                    continue;
+                }
+                byte kind = storey && tiles.kind[row] != null && col < tiles.kind[row].length ? tiles.kind[row][col] : Sectors.PLAIN;
+                int tex = storey && tiles.tex[row] != null && col < tiles.tex[row].length ? tiles.tex[row][col] : 0;
+                if (kind == Sectors.FULL) {
+                    float h = Math.max(0.1f, rowTop - rowBottom);
+                    patch(gb, wall, ax, az, bx, bz, lo0, lo1, hi0, hi1, tex,
+                            (a - col * tileW) / tileW, (b - col * tileW) / tileW,
+                            1f - (hi0 - rowBottom) / h, 1f - (hi1 - rowBottom) / h,
+                            1f - (lo0 - rowBottom) / h, 1f - (lo1 - rowBottom) / h);
+                } else {
+                    int mat = row == 0 ? tiles.mat : tiles.matUp;
+                    if (storey && kind != Sectors.PLAIN) {
+                        opening(gb, wall, tiles, kind, tex, mat, rowBottom, rowTop, col, tileW,
+                                ax, az, bx, bz, a, b, lo0, lo1, hi0, hi1);
+                    } else {
+                        materialPatch(gb, wall, ax, az, bx, bz, a, b, lo0, lo1, hi0, hi1, mat, tiles.matScale);
+                    }
+                }
+            }
+            rowBottom = rowTop;
         }
     }
 
@@ -239,62 +348,6 @@ final class SectorBuilder {
             SlabEdgeKey o = (SlabEdgeKey) obj;
             return x0 == o.x0 && z0 == o.z0 && x1 == o.x1 && z1 == o.z1
                     && bottom0 == o.bottom0 && bottom1 == o.bottom1;
-        }
-    }
-
-    private static void wall(GeoBuilder gb, Sectors.Wall wall, float bottom0, float bottom1, float top0, float top1) {
-        Sectors.Tiles tiles = wall.tiles;
-        if (tiles == null || wall.len < 0.02f || Math.max(top0 - bottom0, top1 - bottom1) < 0.02f) return;
-        float faceLen = wall.faceLen > 0f ? wall.faceLen : wall.len;
-        int maxFloors = tiles.floors;
-        float groundH = Math.max(0.1f, tiles.groundH), storeyH = Math.max(0.1f, tiles.storeyH);
-        float pos0 = wall.uOff, pos1 = wall.uOff + wall.len;
-        float minPos = Math.max(0f, pos0), maxPos = Math.min(faceLen, pos1);
-        if (maxPos <= minPos) return;
-        float base = wall.front.base;
-        patch(gb, wall, wall.x0, wall.z0, wall.x1, wall.z1, bottom0, bottom1,
-                Math.min(top0, base), Math.min(top1, base), tiles.found,
-                pos0 * 2f, pos1 * 2f, -bottom0 * 2f, -bottom1 * 2f, -base * 2f, -base * 2f);
-
-        float rowBottom = base;
-        for (int row = 0; row <= maxFloors; row++) {
-            float rowTop = row == 0 ? base + groundH : base + groundH + row * storeyH;
-            if (row == maxFloors) rowTop = Math.max(top0, top1);
-            int cols = row < maxFloors && row < tiles.cols.length ? Math.max(1, tiles.cols[row]) : 1;
-            float tileW = faceLen / cols;
-            int firstCol = Math.max(0, (int) Math.floor(minPos / tileW));
-            int lastCol = Math.min(cols - 1, (int) Math.floor(Math.max(minPos, maxPos - 1e-4f) / tileW));
-            for (int col = firstCol; col <= lastCol; col++) {
-                float a = Math.max(minPos, col * tileW), b = Math.min(maxPos, (col + 1) * tileW);
-                if (b - a < 0.01f) continue;
-                float s0 = (a - pos0) / wall.len, s1 = (b - pos0) / wall.len;
-                float ax = wall.x0 + (wall.x1 - wall.x0) * s0, az = wall.z0 + (wall.z1 - wall.z0) * s0;
-                float bx = wall.x0 + (wall.x1 - wall.x0) * s1, bz = wall.z0 + (wall.z1 - wall.z0) * s1;
-                float lo0 = Math.max(bottom0, rowBottom), lo1 = Math.max(bottom1, rowBottom);
-                float hi0 = Math.min(top0, rowTop), hi1 = Math.min(top1, rowTop);
-                if (Math.max(hi0 - lo0, hi1 - lo1) < 0.01f) continue;
-                byte kind = row < maxFloors && tiles.kind[row] != null && col < tiles.kind[row].length
-                        ? tiles.kind[row][col] : Sectors.PLAIN;
-                int tex = row < maxFloors && tiles.tex[row] != null && col < tiles.tex[row].length
-                        ? tiles.tex[row][col] : 0;
-                if (kind == Sectors.FULL) {
-                    float h = Math.max(0.1f, rowTop - rowBottom);
-                    patch(gb, wall, ax, az, bx, bz, lo0, lo1, hi0, hi1, tex,
-                            (a - col * tileW) / tileW, (b - col * tileW) / tileW,
-                            1f - (hi0 - rowBottom) / h, 1f - (hi1 - rowBottom) / h,
-                            1f - (lo0 - rowBottom) / h, 1f - (lo1 - rowBottom) / h);
-                } else {
-                    int mat = row == 0 ? tiles.mat : tiles.matUp;
-                    if (row < maxFloors && kind != Sectors.PLAIN) {
-                        opening(gb, wall, tiles, kind, tex, mat, rowBottom, rowTop, col, tileW,
-                                ax, az, bx, bz, a, b, lo0, lo1, hi0, hi1);
-                    } else {
-                        materialPatch(gb, wall, ax, az, bx, bz, a, b, lo0, lo1, hi0, hi1, mat, tiles.matScale);
-                    }
-                }
-            }
-            rowBottom = rowTop;
-            if (rowBottom >= Math.max(top0, top1)) break;
         }
     }
 

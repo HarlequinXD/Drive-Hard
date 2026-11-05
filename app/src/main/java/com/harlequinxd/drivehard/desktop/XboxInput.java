@@ -41,6 +41,8 @@ public final class XboxInput {
         }
         return false;
     }
+    /** All buttons as XInput bit flags (0 when no controller). */
+    public int buttons() { return state.Gamepad.wButtons & 0xFFFF; }
     public boolean button(int mask) { return (state.Gamepad.wButtons & mask)!=0; }
     public float lx() { return axis(state.Gamepad.sThumbLX); }
     public float ly() { return axis(state.Gamepad.sThumbLY); }

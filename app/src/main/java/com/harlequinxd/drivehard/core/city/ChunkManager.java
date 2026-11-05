@@ -105,11 +105,20 @@ public final class ChunkManager {
     }
 
     /** Loads everything wanted right now on the calling thread (desktop tools / first frame). */
-    public void loadAllNow(float fx, float fz) {
+    public void loadAllNow(float fx, float fz) { loadAllNow(fx, fz, null); }
+
+    /** Builds every wanted chunk now (in parallel), reporting how many are done. */
+    public void loadAllNow(float fx, float fz, com.harlequinxd.drivehard.core.Game.Progress progress) {
         update(fx, fz);
         List<long[]> copy;
         synchronized (lock) { copy = new ArrayList<>(wanted); wanted.clear(); }
-        copy.parallelStream().forEach(w -> ensure((int) (w[0] >> 32), (int) w[0]));
+        final int total = Math.max(1, copy.size());
+        final java.util.concurrent.atomic.AtomicInteger done = new java.util.concurrent.atomic.AtomicInteger();
+        copy.parallelStream().forEach(w -> {
+            ensure((int) (w[0] >> 32), (int) w[0]);
+            int n = done.incrementAndGet();
+            if (progress != null) progress.step("Streaming the streets around you", n / (float) total);
+        });
     }
 
     private void work() {

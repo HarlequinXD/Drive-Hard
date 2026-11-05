@@ -77,7 +77,8 @@ public final class Game {
     // stats
     public int batchesDrawn, batchesCulled, batchesOccluded, spritesDrawn, carsDrawn, pedsDrawn;
 
-    public interface Progress { void step(String what); }
+    /** Load-screen feedback: what is happening now and how far along (0..1) the whole load is. */
+    public interface Progress { void step(String what, float done); }
 
     /** The island everyone plays on. */
     public static final long DEFAULT_SEED = 20261103L;
@@ -89,9 +90,9 @@ public final class Game {
 
     public Game(long seed, Progress progress) {
         env = new Environment(seed);
-        if (progress != null) progress.step("Painting textures");
+        if (progress != null) progress.step("Painting building textures", 0.00f);
         lib = new TextureLibrary(seed);
-        if (progress != null) progress.step("Baking sprites");
+        if (progress != null) progress.step("Baking characters and props", 0.10f);
         sheet = new SpriteBaker().bake(new CharacterModel(CharacterSpec.player()));
         lamps = PropSprites.lamp();
         signals = PropSprites.signals();
@@ -112,8 +113,8 @@ public final class Game {
             final Flora f = order[i];
             flora[f.ordinal()] = cache.get("flora:" + f, GROUP_FLORA, i, () -> PropSprites.flora(f));
         }
-        if (progress != null) progress.step("Raising the island");
-        city = new City(lib, seed);
+        if (progress != null) progress.step("Raising the island", 0.14f);
+        city = new City(lib, seed, progress == null ? null : (what, done) -> progress.step(what, 0.14f + done * 0.66f));
         traffic = new Traffic(city, r -> pickReady(carEntries, r));
         pedestrians = new Pedestrians(city, r -> pickReady(pedEntries, r));
         traffic.obstacles = trafficObstacles;
@@ -131,15 +132,17 @@ public final class Game {
         player.facing = (float) Math.PI;
         cam.yaw = 0f;
         cam.distance = 6f;
-        if (progress != null) progress.step("Drawing the map");
+        if (progress != null) progress.step("Drawing the map", 0.80f);
         map = new com.harlequinxd.drivehard.core.map.MapData(city);
-        if (progress != null) progress.step("Streaming the city");
+        if (progress != null) progress.step("Streaming the streets around you", 0.84f);
         city.chunks.loadRadius = 150f;
-        city.chunks.loadAllNow(player.x, player.z);
+        city.chunks.loadAllNow(player.x, player.z, progress == null ? null
+                : (what, done) -> progress.step(what, 0.84f + done * 0.15f));
         city.chunks.loadRadius = 200f;
         city.chunks.start();
         for (int i = 0; i < 6; i++) { requestCar(); requestPed(); }
         cache.start();
+        if (progress != null) progress.step("Ready", 1f);
     }
 
     public void dispose() {
@@ -324,22 +327,60 @@ public final class Game {
 
     /** Fast travel to a named location on the existing island map. Call on the game thread. */
     public boolean fastTravel(com.harlequinxd.drivehard.core.map.MapData.Label destination) {
+        return fastTravel(destination, null);
+    }
+
+    /**
+     * Moves the player (and the car they are driving) to a place on the map. They arrive on the
+     * nearest ordinary street there: in a lane and pointing along it when driving, on the kerb when
+     * walking. The streets around the arrival point are built before play resumes (reported through
+     * progress, for the travel screen), and traffic and pedestrians are repopulated around it.
+     */
+    public boolean fastTravel(com.harlequinxd.drivehard.core.map.MapData.Label destination, Progress progress) {
         if (destination == null || mode == Mode.ENTERING || mode == Mode.EXITING) return false;
-        float x = destination.x, z = destination.z;
+        if (progress != null) progress.step("Finding a street in " + destination.name, 0.02f);
+        float x = destination.x, z = destination.z, yaw = driving() && vehicle != null ? vehicle.yaw : player.facing;
+        float[] hit = new float[3], q = new float[5];
+        boolean onRoad = false;
+        for (float reach = 120f; reach <= 960f && !onRoad; reach *= 2f) onRoad = city.roads.nearestDrivable(x, z, reach, hit);
+        if (onRoad) {
+            com.harlequinxd.drivehard.core.road.RoadEdge e = city.roads.edges.get((int) hit[0]);
+            float s = hit[1];
+            float lo = Math.min(e.len * 0.5f, e.clearA + 12f), hi = Math.max(e.len * 0.5f, e.len - e.clearB - 12f);
+            s = Math.max(lo, Math.min(hi, s));        // clear of the junction boxes at either end
+            if (driving() && vehicle != null) {
+                e.lanePoint(s, 1, e.laneOffset(e.oneWay ? 0 : e.cls.lanes - 1), q);
+                x = q[0]; z = q[1];
+            } else {
+                e.point(s, q);
+                // step off the carriageway onto the left kerb / verge
+                float off = e.cls.halfWidth() + (e.cls.city ? City.SIDEWALK * 0.5f : 1.2f);
+                x = q[0] + q[4] * off; z = q[1] - q[3] * off;
+            }
+            yaw = (float) Math.atan2(q[3], q[4]);
+        }
+        // everybody who was around the old spot stays there
+        traffic.cars.clear();
+        pedestrians.peds.clear();
+        if (progress != null) progress.step("Building the streets of " + destination.name, 0.08f);
+        city.chunks.loadAllNow(x, z, progress == null ? null
+                : (what, done) -> progress.step("Building the streets of " + destination.name, 0.08f + done * 0.9f));
         if (driving() && vehicle != null) {
             vehicle.speed = 0f;
-            vehicle.x = x; vehicle.z = z;
-            vehicle.y = city.surface(x, z) + 0.5f;
+            vehicle.x = x; vehicle.z = z; vehicle.yaw = yaw;
+            vehicle.y = city.surface(x, z) + 0.05f;
             player.x = x; player.z = z; player.y = vehicle.y;
         } else {
             player.x = x; player.z = z;
-            player.y = city.surface(x, z) + 0.3f;
+            player.y = city.surface(x, z) + 0.05f;
             player.vx = player.vy = player.vz = 0f;
-            player.onGround = false;
+            player.facing = yaw;
+            player.onGround = true;
         }
-        city.chunks.ensureAround(x, z);
         placeTimer = 0f;
+        cam.yaw = yaw + (float) Math.PI;
         cam.update(x, player.y, z, 0.016f);
+        if (progress != null) progress.step("Arrived", 1f);
         return true;
     }
 
@@ -356,14 +397,18 @@ public final class Game {
         float x = vehicle != null && driving() ? vehicle.x : player.x, z = vehicle != null && driving() ? vehicle.z : player.z;
         com.harlequinxd.drivehard.core.road.RoadNetwork n = city.roads;
         String place;
-        if (x > city.cityX0 - 200f && x < city.cityX1 + 300f && z > city.cityZ0 - 200f && z < city.cityZ1 + 200f) place = City.NAME;
-        else {
+        com.harlequinxd.drivehard.core.road.Town.Region rg = n.regionAt(x, z);
+        String region = rg == null ? "" : rg.name;
+        if (city.nearUrban(x, z, 150f)) {
+            City.Suburb sb = city.suburbAt(x, z);
+            place = sb != null ? sb.name : City.NAME;
+            if (sb != null) region = City.NAME;
+        } else {
             com.harlequinxd.drivehard.core.road.Town t = n.townAt(x, z, 80f);
             place = t == null ? "" : t.name;
         }
-        com.harlequinxd.drivehard.core.road.Town.Region rg = n.regionAt(x, z);
         placeName = place;
-        regionName = rg == null ? "" : rg.name;
+        regionName = region;
     }
 
     private void findNearestCar() {

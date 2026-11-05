@@ -79,7 +79,8 @@ public final class MapData {
             cellRoads[k] = new int[l.size()];
             for (int i = 0; i < l.size(); i++) cellRoads[k][i] = l.get(i);
         }
-        labels.add(new Label(City.NAME, (city.cityX0 + city.cityX1) * 0.5f, (city.cityZ0 + city.cityZ1) * 0.5f, 0, true));
+        labels.add(new Label(City.NAME, city.spawnX, city.spawnZ, 0, true));
+        for (City.Suburb sb : city.suburbs) labels.add(new Label(sb.name, sb.sx, sb.sz, 2, false));
         for (Town tw : n.towns) {
             int rank = tw.size == Town.Size.TOWN ? 1 : (tw.size == Town.Size.VILLAGE ? 2 : 3);
             labels.add(new Label(tw.name, tw.centre.x, tw.centre.z, rank, tw.coastal || tw.spur));
@@ -139,14 +140,39 @@ public final class MapData {
                 }
                 relief[j * SIZE + i] = 0xFF000000 | c;
             }
-        // the city
-        int ci0 = (int) ((city.cityX0 - x0) / px), ci1 = (int) ((city.cityX1 - x0) / px);
-        int cj0 = (int) ((city.cityZ0 - z0) / px), cj1 = (int) ((city.cityZ1 - z0) / px);
-        for (int j = cj0; j <= cj1; j++)
-            for (int i = ci0; i <= ci1; i++) {
-                float x = x0 + (i + 0.5f) * px, z = z0 + (j + 0.5f) * px;
-                if (city.terrain.cityDistance(x, z) <= 0f) relief[j * SIZE + i] = 0xFFB8B2A8;
+        // the built-up city: a fine mask (downtown / suburb) for close zooms, blended into the relief
+        ux0 = city.cityX0 - 200f;
+        uz0 = city.cityZ0 - 200f;
+        un = (int) Math.ceil(Math.max(city.cityX1 - city.cityX0, city.cityZ1 - city.cityZ0) / URBAN_RES) + 16;
+        urban = new byte[un * un];
+        for (int j = 0; j < un; j++)
+            for (int i = 0; i < un; i++) {
+                float x = ux0 + (i + 0.5f) * URBAN_RES, z = uz0 + (j + 0.5f) * URBAN_RES;
+                if (!city.urban(x, z)) continue;
+                urban[j * un + i] = (byte) (city.suburbAt(x, z) != null ? 2 : 1);
             }
+        for (int j = 0; j < SIZE; j++)
+            for (int i = 0; i < SIZE; i++) {
+                float x = x0 + (i + 0.5f) * px, z = z0 + (j + 0.5f) * px;
+                int n = 0, u = 0;
+                for (int q = 0; q < 4; q++) {
+                    int k = urbanAt(x + ((q & 1) - 0.5f) * px * 0.5f, z + ((q >> 1) - 0.5f) * px * 0.5f);
+                    if (k > 0) { n++; u = k; }
+                }
+                if (n > 0) relief[j * SIZE + i] = 0xFF000000 | mix(relief[j * SIZE + i] & 0xFFFFFF, u == 1 ? 0xB0A9A0 : 0xC8BFAE, n / 4f);
+            }
+    }
+
+    /** Built-up mask: 0 open land, 1 downtown, 2 suburb (URBAN_RES metres per cell). */
+    public static final float URBAN_RES = 25f;
+    public byte[] urban;
+    public float ux0, uz0;
+    public int un;
+
+    public int urbanAt(float x, float z) {
+        int i = (int) Math.floor((x - ux0) / URBAN_RES), j = (int) Math.floor((z - uz0) / URBAN_RES);
+        if (i < 0 || j < 0 || i >= un || j >= un) return 0;
+        return urban[j * un + i];
     }
 
     private static int mix(int a, int b, float t) {

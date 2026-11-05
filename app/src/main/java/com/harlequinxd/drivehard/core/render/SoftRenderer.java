@@ -10,7 +10,10 @@ import java.util.Arrays;
  *
  * <ul>
  * <li>The ground is rendered as the background, and polygons and sprites are drawn far-to-near
- *   through a PlayStation-style ordering table grouped by layer and depth.</li>
+ *   through a PlayStation-style ordering table grouped by layer and depth (no Z-buffer between
+ *   polygons).</li>
+ * <li>The ground writes a per-pixel occlusion depth that polygons and sprites only test: hills
+ *   hide the houses, trees and cars behind them.</li>
  * <li>Colour is reduced to 15-bit with 4x4 ordered dither; fog by view depth.</li>
  * </ul>
  */
@@ -67,6 +70,7 @@ public final class SoftRenderer {
         W = w;
         H = h;
         fb = new int[w * h];
+        groundZ = new float[w * h];
         setFov(62f);
     }
 
@@ -201,6 +205,14 @@ public final class SoftRenderer {
 
     /** The painted ground map; null draws no ground (sky and polygons only). */
     public Ground.Source ground;
+    /**
+     * Per pixel, 1/depth of the ground drawn there (0 for sky), with 6% slack so things standing
+     * on the ground still show. Polygons and sprites behind a hill fail this test; they never write
+     * it (polygons are ordered among themselves by the ordering table).
+     */
+    private final float[] groundZ;
+    /** Small tolerance on the ground test (things touching the ground). */
+    private static final float GROUND_SLACK = 1.004f;
     private final float[] mipD = new float[Ground.MIPS];
     private Ground.Tile[] snap = new Ground.Tile[0];
     private int snapX, snapZ, snapN;
@@ -238,7 +250,7 @@ public final class SoftRenderer {
      * the flat parts, so the map looks like a proper Mode 7 plane, and hills rise and hide).
      */
     public void drawGround() {
-        if (ground == null) return;
+        if (ground == null) { Arrays.fill(groundZ, 0f); return; }
         for (int k = 0; k < Ground.MIPS; k++) mipD[k] = Ground.TEXEL * focal * (1 << k) * 1.4f;
         // snapshot of the tiles in view range: per-pixel lookups index an array, no shared map
         int reach = (int) Math.ceil(far / Ground.TILE) + 1;
@@ -252,7 +264,7 @@ public final class SoftRenderer {
         for (TileCache tc : tileCaches) { tc.cx = Integer.MIN_VALUE; tc.t = null; }
         soloCache.cx = Integer.MIN_VALUE;
         soloCache.t = null;
-        if (colFb.length != W * H) colFb = new int[W * H];
+        if (colFb.length != W * H) { colFb = new int[W * H]; colZ = new float[W * H]; }
         if (pool == null) { groundColumns(0, W, soloCache); transposeGround(0, H); }
         else {
             try {
@@ -401,6 +413,7 @@ public final class SoftRenderer {
 
     /** Column-major scratch (x * H + y): each column is written contiguously, then transposed. */
     private int[] colFb = new int[0];
+    private float[] colZ = new float[0];
 
     /** One screen column at a time, front to back over the height-mapped ground. */
     private void groundColumns(int colA, int colB, TileCache tc) {
@@ -427,11 +440,13 @@ public final class SoftRenderer {
             if (env == null) {
                 for (int y = 0; y < ybuf; y++) {
                     colFb[base + y] = sk[y * 4 + (x & 3)];
+                    colZ[base + y] = 0f;
                 }
             } else if (ybuf > 0) {
                 float hl2 = dx * dx + dz * dz, az = (float) Math.atan2(dx, dz);
                 for (int y = 0; y < ybuf; y++) {
                     colFb[base + y] = skyPixel(x, y, dx, dz, hl2, az);
+                    colZ[base + y] = 0f;
                 }
             }
         }
@@ -461,6 +476,7 @@ public final class SoftRenderer {
             float dr = 1f / izc;
             float px = ex + dx * dr, pz = ez + dz * dr;
             int k = base + y;
+            colZ[k] = izc * 0.94f;
             int c = groundLut[groundColor(tc, px, pz, mip)];
             if (dr <= fs) cf[k] = c;
             else {
@@ -637,6 +653,7 @@ public final class SoftRenderer {
     private void transposeGround(int y0, int y1) {
         int w = W, h = H;
         int[] cf = colFb, out = fb;
+        float[] cz = colZ, zb = groundZ;
         for (int by = y0; by < y1; by += 16) {
             int ey2 = Math.min(y1, by + 16);
             for (int bx = 0; bx < w; bx += 16) {
@@ -645,6 +662,7 @@ public final class SoftRenderer {
                     int row = y * w;
                     for (int x = bx; x < ex2; x++) {
                         out[row + x] = cf[x * h + y];
+                        zb[row + x] = cz[x * h + y];
                     }
                 }
             }
@@ -1022,6 +1040,7 @@ public final class SoftRenderer {
         int seal = mode == MODE_OPAQUE ? 1 : 0;
         int fr = fogR, fg = fogG, fbb = fogB;
         int[] out = fb;
+        float[] zb = groundZ;
         int width = W;
 
         for (int y = yStart; y < yEnd; y++) {
@@ -1053,6 +1072,7 @@ public final class SoftRenderer {
                 int dU = (int) ((uB - uA) / n * 65536f), dV = (int) ((vB - vA) / n * 65536f);
                 for (int e = x + n; x < e; x++, U += dU, V += dV, L += dL, F += dF, AL += dA, IZ += dzdx) {
                     int k = row + x;
+                    if (IZ * GROUND_SLACK < zb[k]) continue;          // behind the ground (a hill)
                     if (shadow) {
                         int ty = V >> 16;
                         ty = ty < 0 ? 0 : (ty > hmax ? hmax : ty);
@@ -1105,7 +1125,7 @@ public final class SoftRenderer {
                 int x = (int) bx;
                 for (int k = -1; k <= 1; k++) {
                     int xx = x + k;
-                    if (xx < 0 || xx >= W) continue;
+                    if (xx < 0 || xx >= W || groundZ[y * W + xx] != 0f) continue;
                     out[y * W + xx] = k == 0 ? 0xFFF4F6FF : 0xFFB0B8E0;
                 }
             }
@@ -1177,6 +1197,8 @@ public final class SoftRenderer {
         float sx0 = A[o], sy0 = A[o + 1], sx1 = A[o + 2], sy1 = A[o + 3];
         float u0 = A[o + 4], v0 = A[o + 5], u1 = A[o + 6], v1 = A[o + 7];
         int fv = (int) (A[o + 8] * 256f);
+        float test = A[o + 9] * GROUND_SLACK;            // 1/depth of the sprite
+        float[] zb = groundZ;
         int lv = (int) (A[o + 10] * 256f);
         int ya = Math.max(bandY0, (int) Math.ceil(sy0 - 0.5f)), yb = Math.min(bandY1, (int) Math.ceil(sy1 - 0.5f));
         int xa = Math.max(0, (int) Math.ceil(sx0 - 0.5f)), xb = Math.min(W, (int) Math.ceil(sx1 - 0.5f));
@@ -1195,6 +1217,7 @@ public final class SoftRenderer {
             int trow = ty << ws, row = y * W, db = (y & 3) << 2;
             int U = U0;
             for (int x = xa; x < xb; x++, U += dU) {
+                if (test < zb[row + x]) continue;             // behind a hill
                 int c = tp[trow | ((U >> 16) & wm)];
                 if ((c >>> 24) < 128) continue;
                 out[row + x] = shade(c, lv, fv, fr, fg, fbb, BAYER[db | (x & 3)] >> 1);

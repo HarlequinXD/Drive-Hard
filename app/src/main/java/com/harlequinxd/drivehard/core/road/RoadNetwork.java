@@ -95,7 +95,7 @@ public final class RoadNetwork {
         for (int i = 0; i <= c.nbx; i++)
             for (int j = 0; j < c.nbz; j++) {
                 RoadNode a = nodes.get(cityNode[i][j]), b = nodes.get(cityNode[i][j + 1]);
-                if (terrain.cityDistance((a.x + b.x) * 0.5f, (a.z + b.z) * 0.5f) > 0f) continue;
+                if (!c.nsStreet(i, j)) continue;
                 RoadEdge e = addEdge(c.avenueX[i] ? RoadClass.AVENUE : RoadClass.STREET, a.id, b.id,
                         new float[]{a.x, b.x}, new float[]{a.z, b.z});
                 e.ns = true;
@@ -105,7 +105,7 @@ public final class RoadNetwork {
         for (int j = 0; j <= c.nbz; j++)
             for (int i = 0; i < c.nbx; i++) {
                 RoadNode a = nodes.get(cityNode[i][j]), b = nodes.get(cityNode[i + 1][j]);
-                if (terrain.cityDistance((a.x + b.x) * 0.5f, (a.z + b.z) * 0.5f) > 0f) continue;
+                if (!c.ewStreet(i, j)) continue;
                 RoadEdge e = addEdge(c.avenueZ[j] ? RoadClass.AVENUE : RoadClass.STREET, a.id, b.id,
                         new float[]{a.x, b.x}, new float[]{a.z, b.z});
                 e.ns = false;
@@ -152,7 +152,7 @@ public final class RoadNetwork {
         for (int i = 0; i <= city.nbx; i++)
             for (int j = 0; j <= city.nbz; j++) {
                 RoadNode node = nodes.get(cityNode[i][j]);
-                if (node.edges.length == 0 || terrain.cityDistance(node.x, node.z) > 0f) continue;
+                if (node.edges.length == 0 || !city.urban(node.x, node.z)) continue;
                 float rx = node.x - cx, rz = node.z - cz;
                 float along = rx * dx + rz * dz;
                 float lateral = rx * lx + rz * lz;
@@ -169,6 +169,9 @@ public final class RoadNetwork {
     public final List<Town.Region> regions = new ArrayList<>();
     private final java.util.HashMap<Integer, Town> townByNode = new java.util.HashMap<>();
     private PlaceNames names;
+
+    /** A fresh unique place name (suburbs of the city). */
+    public String newPlaceName() { return names.town(); }
     /** Street spacing in towns (centre line to centre line). */
     public static final float TOWN_SX = 145f, TOWN_SZ = 145f;
     private static final int LARGE_TOWN_GRID = 49, TOWN_GRID = 15;
@@ -384,7 +387,7 @@ public final class RoadNetwork {
         wp.clear();
         wp.add(new float[]{a.x, a.z});
         wp.add(new float[]{b.x, b.z});
-        float[][] pl = spline(wp, RoadClass.TOWN.step);
+        float[][] pl = spline(wp, 8f); // straight grid streets: one piece per height-map sample
         addEdge(RoadClass.TOWN, a.id, b.id, pl[0], pl[1]);
     }
 
@@ -760,7 +763,10 @@ public final class RoadNetwork {
                         steep[j * n + i] = (float) Math.sqrt(gx * gx + gz * gz);
                     }
                 }
-            markArea(city.cityX0 - 20f, city.cityZ0 - 20f, city.cityX1 + 20f, city.cityZ1 + 20f, 100);
+            // the built-up city is off limits to rural roads (they join it at its edge)
+            for (int j = 0; j < n; j++)
+                for (int i = 0; i < n; i++)
+                    if (city.nearUrban(x(i), z(j), cell * 0.7f)) used[j * n + i] = 100;
         }
 
         float x(int i) { return terrain.islandX0 + (i + 0.5f) * cell; }
@@ -1637,14 +1643,14 @@ public final class RoadNetwork {
 
     /** How a terrain cell next to roads is drawn: 0 normally, 1 not at all (road verges cover it), 2 finely around the paving. */
     public int cellMode(float cx, float cz) {
-        int c = cellIndex(cx, cz);
+        int c = ruralIndex(cx, cz);
         int near = -1;
         boolean other = false, ramp = false;
         int[] reach = new int[8];
         int nr = 0;
         if (c >= 0) {
-            for (int k = cellStart[c]; k < cellStart[c + 1]; k++) {
-                int it = cellItems[k];
+            for (int k = ruralStart[c]; k < ruralStart[c + 1]; k++) {
+                int it = ruralItems[k];
                 RoadEdge e = edges.get(it >>> 16);
                 if (e.cls.city) continue;
                 int i = it & 0xFFFF;
@@ -1774,31 +1780,55 @@ public final class RoadNetwork {
         gz0 = terrain.islandZ0 - 8000f;
         gnx = (int) ((Terrain.ISLAND_SIZE + 16000f) / CELL) + 1;
         gnz = gnx;
-        int[] counts = new int[gnx * gnz + 1];
+        rnx = (int) ((Terrain.ISLAND_SIZE + 16000f) / RURAL_CELL) + 1;
+        int[][] all = index(false, CELL, gnx), rural = index(true, RURAL_CELL, rnx);
+        cellStart = all[0];
+        cellItems = all[1];
+        ruralStart = rural[0];
+        ruralItems = rural[1];
+    }
+
+    // rural pieces only: terrain shaping runs per height sample and never looks at city streets,
+    // and the 100x100 city grid would otherwise put hundreds of pieces in every downtown cell
+    private int[] ruralStart, ruralItems;
+    private int rnx;
+    private static final float RURAL_CELL = 128f;
+
+    private int ruralIndex(float x, float z) {
+        int cx = (int) Math.floor((x - gx0) / RURAL_CELL), cz = (int) Math.floor((z - gz0) / RURAL_CELL);
+        if (cx < 0 || cz < 0 || cx >= rnx || cz >= rnx) return -1;
+        return cz * rnx + cx;
+    }
+
+    private int[][] index(boolean ruralOnly, float size, int n) {
+        int[] counts = new int[n * n + 1];
+        int[] items = null;
         for (int pass = 0; pass < 2; pass++) {
-            int[] fill = pass == 1 ? new int[gnx * gnz] : null;
+            int[] fill = pass == 1 ? new int[n * n] : null;
             for (RoadEdge e : edges) {
+                if (ruralOnly && e.cls.city) continue;
                 float m = e.cls.halfWidth() + MARGIN;
                 for (int i = 0; i < e.count() - 1; i++) {
-                    int cx0 = cell(Math.min(e.x[i], e.x[i + 1]) - m, gx0), cx1 = cell(Math.max(e.x[i], e.x[i + 1]) + m, gx0);
-                    int cz0 = cell(Math.min(e.z[i], e.z[i + 1]) - m, gz0), cz1 = cell(Math.max(e.z[i], e.z[i + 1]) + m, gz0);
-                    for (int cz = Math.max(0, cz0); cz <= Math.min(gnz - 1, cz1); cz++)
-                        for (int cx = Math.max(0, cx0); cx <= Math.min(gnx - 1, cx1); cx++) {
-                            int c = cz * gnx + cx;
+                    int cx0 = cell(Math.min(e.x[i], e.x[i + 1]) - m, gx0, size), cx1 = cell(Math.max(e.x[i], e.x[i + 1]) + m, gx0, size);
+                    int cz0 = cell(Math.min(e.z[i], e.z[i + 1]) - m, gz0, size), cz1 = cell(Math.max(e.z[i], e.z[i + 1]) + m, gz0, size);
+                    for (int cz = Math.max(0, cz0); cz <= Math.min(n - 1, cz1); cz++)
+                        for (int cx = Math.max(0, cx0); cx <= Math.min(n - 1, cx1); cx++) {
+                            int c = cz * n + cx;
                             if (pass == 0) counts[c + 1]++;
-                            else cellItems[cellStart[c] + fill[c]++] = (e.id << 16) | i;
+                            else items[counts[c] + fill[c]++] = (e.id << 16) | i;
                         }
                 }
             }
             if (pass == 0) {
-                for (int c = 0; c < gnx * gnz; c++) counts[c + 1] += counts[c];
-                cellStart = counts;
-                cellItems = new int[counts[gnx * gnz]];
+                for (int c = 0; c < n * n; c++) counts[c + 1] += counts[c];
+                items = new int[counts[n * n]];
             }
         }
+        return new int[][]{counts, items};
     }
 
     private static int cell(float v, float o) { return (int) Math.floor((v - o) / CELL); }
+    private static int cell(float v, float o, float size) { return (int) Math.floor((v - o) / size); }
 
     /** Road pieces whose influence may reach cell containing (x,z): packed edge<<16|piece, or null. */
     private int cellIndex(float x, float z) {
@@ -1846,12 +1876,12 @@ public final class RoadNetwork {
 
     /** Pulls natural ground toward nearby rural roads (embankments and cuttings). */
     public float shapeTerrain(float x, float z, float nat) {
-        if (x > city.cityX0 && x < city.cityX1 && z > city.cityZ0 && z < city.cityZ1) return nat;
-        int c = cellIndex(x, z);
+        if (city.urban(x, z)) return nat;
+        int c = ruralIndex(x, z);
         if (c < 0) return nat;
         float bestW = 0f, bestY = nat, bestD = Float.MAX_VALUE;
-        for (int k = cellStart[c]; k < cellStart[c + 1]; k++) {
-            int it = cellItems[k];
+        for (int k = ruralStart[c]; k < ruralStart[c + 1]; k++) {
+            int it = ruralItems[k];
             RoadEdge e = edges.get(it >>> 16);
             if (e.cls.city) continue;
             int i = it & 0xFFFF;
@@ -1886,11 +1916,11 @@ public final class RoadNetwork {
 
     /** How much a road shapes the ground here (0 = untouched, 1 = road surface). */
     public float influence(float x, float z) {
-        int c = cellIndex(x, z);
+        int c = ruralIndex(x, z);
         if (c < 0) return 0f;
         float best = 0f;
-        for (int k = cellStart[c]; k < cellStart[c + 1]; k++) {
-            int it = cellItems[k];
+        for (int k = ruralStart[c]; k < ruralStart[c + 1]; k++) {
+            int it = ruralItems[k];
             RoadEdge e = edges.get(it >>> 16);
             if (e.cls.city) continue;
             int i = it & 0xFFFF;
@@ -1904,14 +1934,23 @@ public final class RoadNetwork {
 
     /** Distance from (x,z) to the nearest rural road edge (centreline minus half width), capped. */
     public float roadClearance(float x, float z, float cap) {
-        int c = cellIndex(x, z);
-        if (c < 0) return cap;
         float best = cap;
+        int c = ruralIndex(x, z);
+        if (c >= 0)
+            for (int k = ruralStart[c]; k < ruralStart[c + 1]; k++) {
+                int it = ruralItems[k];
+                RoadEdge e = edges.get(it >>> 16);
+                best = Math.min(best, pieceDist(e, it & 0xFFFF, x, z) - e.cls.halfWidth());
+            }
+        // city streets only matter on the urban fringe
+        if (!city.nearUrban(x, z, MARGIN)) return best;
+        c = cellIndex(x, z);
+        if (c < 0) return best;
         for (int k = cellStart[c]; k < cellStart[c + 1]; k++) {
             int it = cellItems[k];
             RoadEdge e = edges.get(it >>> 16);
-            float d = pieceDist(e, it & 0xFFFF, x, z) - e.cls.halfWidth();
-            best = Math.min(best, d);
+            if (!e.cls.city) continue;
+            best = Math.min(best, pieceDist(e, it & 0xFFFF, x, z) - e.cls.halfWidth());
         }
         return best;
     }
@@ -1921,10 +1960,10 @@ public final class RoadNetwork {
      * half width + 3 m), where the plain terrain grid is replaced by road-aligned verges.
      */
     public boolean corridorCovers(float x, float z) {
-        int c = cellIndex(x, z);
+        int c = ruralIndex(x, z);
         if (c < 0) return false;
-        for (int k = cellStart[c]; k < cellStart[c + 1]; k++) {
-            int it = cellItems[k];
+        for (int k = ruralStart[c]; k < ruralStart[c + 1]; k++) {
+            int it = ruralItems[k];
             RoadEdge e = edges.get(it >>> 16);
             if (e.cls.city || e.cls == RoadClass.RAMP) continue;
             int i = it & 0xFFFF;
@@ -2022,6 +2061,31 @@ public final class RoadNetwork {
             }
         }
         return found;
+    }
+
+    /**
+     * Nearest ordinary road piece within maxD (no motorways, farm lanes or bridges), searching every
+     * index cell the radius touches: out = {edge id, s, distance}; false if none.
+     */
+    public boolean nearestDrivable(float x, float z, float maxD, float[] out) {
+        float[] best = {maxD};
+        boolean[] found = {false};
+        forEachPiece(x - maxD, z - maxD, x + maxD, z + maxD, (e, i) -> {
+            if (e.cls.motorway() || e.cls == RoadClass.LANE || e.bridge[i] || e.len < 20f) return;
+            float vx = e.x[i + 1] - e.x[i], vz = e.z[i + 1] - e.z[i];
+            float l2 = vx * vx + vz * vz;
+            float t = l2 > 0f ? Math.max(0f, Math.min(1f, ((x - e.x[i]) * vx + (z - e.z[i]) * vz) / l2)) : 0f;
+            float qx = e.x[i] + vx * t - x, qz = e.z[i] + vz * t - z;
+            float d = (float) Math.sqrt(qx * qx + qz * qz);
+            if (d < best[0]) {
+                best[0] = d;
+                out[0] = e.id;
+                out[1] = e.s[i] + t * (e.s[i + 1] - e.s[i]);
+                out[2] = d;
+                found[0] = true;
+            }
+        });
+        return found[0];
     }
 
     /** Total length by class (km), for stats and tests. */

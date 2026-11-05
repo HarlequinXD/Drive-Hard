@@ -294,12 +294,12 @@ public final class Terrain {
     }
 
     // direct-mapped cache of height map samples: key and float bits packed in one long
-    private final long[] cache = new long[1 << 16];
+    private final long[] cache = new long[1 << 18];
 
     /** Height map sample (ix, iz) (cached). */
     public float grid(int ix, int iz) {
         int key = ((ix & 0x7FFF) << 15) | (iz & 0x7FFF);
-        int slot = (key * 0x9E3779B1) >>> 16;
+        int slot = (key * 0x9E3779B1) >>> 14;
         long v = cache[slot];
         if (v != 0L && (int) (v >>> 32) == key + 1) return Float.intBitsToFloat((int) v);
         float h = exact(ix * GRID, iz * GRID);

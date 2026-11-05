@@ -55,12 +55,12 @@ final class BuildingGen {
             case TOWER: tower(x0, z0, x1, z1, base, street, shops, shopSet); break;
             case DEPT_STORE: block(x0, z0, x1, z1, base, street, shops, shopSet, Kind.BLANK, Kind.BLANK, 6 + r.nextInt(4), 4.2f, true, 4); break;
             case ZAKKYO: block(x0, z0, x1, z1, base, street, shops, shopSet, Kind.ZAKKYO, Kind.BLANK, 4 + r.nextInt(5), 3.3f, false, 2); break;
-            case MANSION: block(x0, z0, x1, z1, base, street, shops, shopSet, Kind.MANSION, Kind.CORRIDOR, 5 + r.nextInt(8), 3.0f, false, 0); break;
+            case MANSION: balconies = true; block(x0, z0, x1, z1, base, street, shops, shopSet, Kind.MANSION, Kind.CORRIDOR, 5 + r.nextInt(8), 3.0f, false, 0); break;
             case SHOPHOUSE: block(x0, z0, x1, z1, base, street, shops, shopSet, Kind.SHOPHOUSE, Kind.BLANK, 2 + r.nextInt(3), 3.0f, false, r.nextInt(2)); break;
             case KONBINI: block(x0, z0, x1, z1, base, street, shops, shopSet, Kind.BLANK, Kind.BLANK, 1, 3.6f, false, 0); break;
             case PACHINKO: block(x0, z0, x1, z1, base, street, shops, shopSet, Kind.ZAKKYO, Kind.BLANK, 2, 4.0f, true, 3); break;
             case HOUSE: houseDesign(false, r.nextInt(HouseGen.SUBURB_DESIGNS), x0, z0, x1, z1, base, street, false); break;
-            case APAATO: block(x0, z0, x1, z1, base, street, new boolean[4], shopSet, Kind.CORRIDOR, Kind.HOUSE, 2, 2.9f, false, 0); break;
+            case APAATO: balconies = true; block(x0, z0, x1, z1, base, street, new boolean[4], shopSet, Kind.CORRIDOR, Kind.HOUSE, 2, 2.9f, false, 0); break;
             case FIRE_STATION: fireStation(x0, z0, x1, z1, base, street); break;
             case KOBAN: koban(x0, z0, x1, z1, base, street); break;
             case FARMHOUSE: houseDesign(true, r.nextInt(HouseGen.FARM_DESIGNS), x0, z0, x1, z1, base, street, false); break;
@@ -240,10 +240,35 @@ final class BuildingGen {
             t[s].glowFacade = k != Kind.BLANK && k != Kind.WAREHOUSE;     // only facades with windows light up
             if (street[s] && signs > 0 && floors > 1) verticalSigns(s, x0, z0, x1, z1, base + groundH + 0.6f, top, signs);
         }
+        if (balconies) apartmentBalconies(x0, z0, x1, z1, street, base + groundH, floors - 1, floorH);
         rooftop(x0, z0, x1, z1, top);
         flatRoof(x0, z0, x1, z1, base, top, parapet, r.nextBoolean() ? lib.roofMembrane : lib.concrete, faces(x0, z0, x1, z1, t));
         if (bigSign) rooftopSign(x0, z0, x1, z1, top + parapet, street);
         ch.boxes.add(new Box(x0, footMin, z0, x1, top + parapet, z1));
+    }
+
+    /** Apartment blocks get a balcony per flat on every upper floor of the street side. */
+    private boolean balconies;
+
+    private void apartmentBalconies(float x0, float z0, float x1, float z1, boolean[] street, float y1, int upper, float floorH) {
+        int side = -1;
+        for (int s = 0; s < 4; s++) if (street[s]) { side = s; break; }
+        if (side < 0 || upper <= 0) return;
+        float[] e = edge(side, x0, z0, x1, z1);
+        float nx = side == W ? -1f : (side == E ? 1f : 0f), nz = side == N ? -1f : (side == S ? 1f : 0f);
+        float len = (float) Math.hypot(e[2] - e[0], e[3] - e[1]);
+        int units = Math.max(1, (int) (len / 4.2f));
+        float uw = len / units, bw = Math.min(3.4f, uw - 0.6f);
+        if (bw < 1.5f) return;
+        for (int f = 0; f < upper; f++) {
+            float y = y1 + f * floorH;
+            for (int u = 0; u < units; u++) {
+                float c0 = (u + 0.5f) * uw - bw * 0.5f, c1 = c0 + bw;
+                float ax = e[0] + (e[2] - e[0]) * c0 / len, az = e[1] + (e[3] - e[1]) * c0 / len;
+                float bx = e[0] + (e[2] - e[0]) * c1 / len, bz = e[1] + (e[3] - e[1]) * c1 / len;
+                gb.balcony(ax, az, bx, bz, nx, nz, y, 1.1f, 1.1f, lib.balconyFront, lib.balconySlab);
+            }
+        }
     }
 
     private void tower(float x0, float z0, float x1, float z1, float base, boolean[] street, boolean[] shops, int[] shopSet) {

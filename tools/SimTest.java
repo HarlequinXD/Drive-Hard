@@ -164,14 +164,19 @@ public class SimTest {
             cityRoadX0 = Math.min(cityRoadX0, mx); cityRoadX1 = Math.max(cityRoadX1, mx);
             cityRoadZ0 = Math.min(cityRoadZ0, mz); cityRoadZ1 = Math.max(cityRoadZ1, mz);
         }
-        check("city roads follow the irregular 15 km footprint",
-                cityRoads > 10000 && cityRoads < 20200 && outsideCityRoads == 0
-                        && cityRoadX1 - cityRoadX0 > 11000f && cityRoadZ1 - cityRoadZ0 > 11000f);
+        System.out.printf("city: %d street segments, %d suburbs%n", cityRoads, c.suburbs.size());
+        check("the city is a compact core with suburbs spread over its 15 km footprint",
+                cityRoads > 1500 && c.suburbs.size() >= 10
+                        && cityRoadX1 - cityRoadX0 > 9000f && cityRoadZ1 - cityRoadZ0 > 9000f);
+        boolean named = true;
+        for (var sb : c.suburbs) named &= sb.name != null && !sb.name.isEmpty();
+        check("every suburb has a name", named);
         var cityMap = new com.harlequinxd.drivehard.core.map.MapData(c);
         int mapCentre = mapPixel(cityMap, (c.cityX0 + c.cityX1) * 0.5f, (c.cityZ0 + c.cityZ1) * 0.5f);
         int mapCorner = mapPixel(cityMap, c.cityX0 + 100f, c.cityZ0 + 100f);
-        check("island map shows the irregular city footprint",
-                cityMap.relief[mapCentre] == 0xFFB8B2A8 && cityMap.relief[mapCorner] != 0xFFB8B2A8);
+        check("island map shows the built-up city and not its empty corners",
+                cityMap.urbanAt(c.spawnX, c.spawnZ) == 1 && cityMap.urbanAt(c.cityX0 + 100f, c.cityZ0 + 100f) == 0
+                        && cityMap.relief[mapPixel(cityMap, c.spawnX, c.spawnZ)] != cityMap.relief[mapCorner]);
         check("countryside has villages and farms", net.villages.size() > 60 && c.countryside.farmCount > 800);
         {
             boolean[] reach = new boolean[net.nodes.size()];
@@ -302,12 +307,38 @@ public class SimTest {
         check("largest village spans about 3 km", largestVillage >= 2800f);
 
         vehicleTest();
+        fastTravelTest();
 
         System.out.println(fails == 0 ? "ALL OK" : fails + " FAILED");
         if (fails > 0) System.exit(1);
     }
 
     /** Get into a traffic car, drive it, get out, and take it again. */
+    /** Fast travel lands on a street at the destination, with the streets around it built. */
+    static void fastTravelTest() {
+        com.harlequinxd.drivehard.core.Game g = new com.harlequinxd.drivehard.core.Game(com.harlequinxd.drivehard.core.Game.DEFAULT_SEED, null);
+        int ok = 0, tried = 0;
+        float[] last = {0f};
+        for (var l : g.map.labels) {
+            if (l.rank > 2 || tried >= 6) continue;
+            tried++;
+            last[0] = 0f;
+            g.fastTravel(l, (what, done) -> last[0] = done);
+            float dx = g.player.x - l.x, dz = g.player.z - l.z;
+            float clearance = g.city.roads.roadClearance(g.player.x, g.player.z, 50f);
+            boolean nearRoad = clearance < 6f || g.city.urban(g.player.x, g.player.z);
+            boolean built = g.city.chunks.get(com.harlequinxd.drivehard.core.city.ChunkManager.chunkOf(g.player.x),
+                    com.harlequinxd.drivehard.core.city.ChunkManager.chunkOf(g.player.z)) != null;
+            float ground = g.city.surface(g.player.x, g.player.z);
+            if (Math.hypot(dx, dz) < 1000f && nearRoad && built && Math.abs(g.player.y - ground) < 1f && last[0] >= 1f) ok++;
+            else System.out.printf("  travel to %s: off by %.0f m, clearance %.1f, built %b, y %.1f vs %.1f, progress %.2f%n",
+                    l.name, Math.hypot(dx, dz), clearance, built, g.player.y, ground, last[0]);
+            for (int i = 0; i < 30; i++) g.update(1 / 30f, 0, 0, 0, 0, false);
+        }
+        check("fast travel lands on a built street at the destination (" + ok + "/" + tried + ")", ok == tried && tried > 0);
+        g.dispose();
+    }
+
     static void vehicleTest() {
         com.harlequinxd.drivehard.core.Game g = new com.harlequinxd.drivehard.core.Game(com.harlequinxd.drivehard.core.Game.DEFAULT_SEED, null);
         for (int i = 0; i < 8; i++) g.requestCar();
@@ -332,6 +363,7 @@ public class SimTest {
         for (int i = 0; i < 40; i++) g.update(dt, 0, 0, 0, 0, false, 0, 0, 0, false);
         check("player is driving", g.mode == com.harlequinxd.drivehard.core.Game.Mode.DRIVING && g.vehicle != null);
         check("stolen car left traffic", !g.traffic.cars.contains(car));
+        g.traffic.cars.clear();          // an open road ahead (downtown traffic queues at the lights)
         float sx = g.vehicle.x, sz = g.vehicle.z, maxSpeed = 0;
         for (int i = 0; i < 180; i++) { g.update(dt, 0, 0, 0, 0, false, 0, 1, 0, false); maxSpeed = Math.max(maxSpeed, g.vehicle.speed); }
         far = (float) Math.hypot(g.vehicle.x - sx, g.vehicle.z - sz);

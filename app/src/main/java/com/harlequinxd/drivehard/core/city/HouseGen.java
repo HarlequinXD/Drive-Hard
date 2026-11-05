@@ -48,7 +48,27 @@ final class HouseGen {
         int fence;               // 0 none, 1 block wall, 2 hedge
         float widthFrac, depthFrac, winW, winH, bay, wingFrac, offset;
         boolean wingLower, shedBack;
+        /** 1 to 7 bedrooms: sets the size of the house (and whether it has an upper floor). */
+        int bedrooms;
     }
+
+    /**
+     * Sizes a design to its bedroom count: a 1-bedroom cottage is a small single storey, a
+     * 7-bedroom family house a large two storeys; never longer than a real house.
+     */
+    private static void bedrooms(Design d, Random r, int min, int max) {
+        // most houses have 2 to 4 bedrooms
+        float q = r.nextFloat();
+        int b = q < 0.08f ? 1 : q < 0.30f ? 2 : q < 0.62f ? 3 : q < 0.82f ? 4 : q < 0.92f ? 5 : q < 0.97f ? 6 : 7;
+        d.bedrooms = Math.max(min, Math.min(max, b));
+        if (d.bedrooms <= 2 && d.roof != RoofType.FLAT) d.floors = 1;
+        else if (d.bedrooms >= 5) d.floors = Math.max(2, d.floors);
+        if (d.floors < 2) d.balcony = false;
+    }
+
+    /** Largest footprint (width along the street, depth) for a design's bedroom count. */
+    static float maxWidth(Design d) { return (d.floors >= 2 ? 6.5f : 7.5f) + d.bedrooms * (d.floors >= 2 ? 0.95f : 1.4f); }
+    static float maxDepth(Design d) { return (d.floors >= 2 ? 6.5f : 7f) + d.bedrooms * (d.floors >= 2 ? 0.75f : 1.0f); }
 
     private static Design[] suburb, farmDesigns;
     private static TextureLibrary designLib;
@@ -171,6 +191,7 @@ final class HouseGen {
         d.wingLower = r.nextFloat() < 0.6f;
         d.offset = 1.2f + r.nextFloat() * 1.6f;
         d.leftDoor = r.nextBoolean();
+        bedrooms(d, r, 1, 7);
         return d;
     }
 
@@ -218,6 +239,7 @@ final class HouseGen {
         d.wingLower = r.nextFloat() < 0.7f;
         d.offset = 1.5f;
         d.leftDoor = r.nextBoolean();
+        bedrooms(d, r, 2, 7);
         return d;
     }
 
@@ -275,9 +297,15 @@ final class HouseGen {
 
     /** Footprint of the house inside the lot (local u0, v0, u1, v1) and the carport's u range (or NaN). */
     static float[] layout(Design d, float W, float D, boolean lot) {
-        if (!lot) return new float[]{0f, 0f, W, D, Float.NaN, Float.NaN};
+        if (!lot) {
+            float w = Math.min(W, maxWidth(d)), dd = Math.min(D, maxDepth(d));
+            float u0 = (W - w) * 0.5f;
+            return new float[]{u0, 0f, u0 + w, dd, Float.NaN, Float.NaN};
+        }
         // never thinner than a real house: at least 7 m wide and deep where the lot allows
         float w = Math.min(W - 1.2f, Math.max(7f, W * d.widthFrac)), dd = Math.min(D - 3f, Math.max(7f, D * d.depthFrac));
+        w = Math.min(w, maxWidth(d));
+        dd = Math.min(dd, maxDepth(d));
         float carW = d.carport && W - w > 3.4f ? Math.min(3.2f, W - w - 0.6f) : 0f;
         float u0;
         if (carW > 0f) u0 = d.leftDoor ? W - w - 0.6f : 0.6f;
@@ -510,10 +538,22 @@ final class HouseGen {
     // ------------------------------------------------------------------ extras
 
     private void extras(Design d, Mass main, float base, boolean lot, float W, float D, float[] lay, boolean westNeighbor) {
-        // a/c outdoor unit beside the house
+        // a/c outdoor unit against the side wall (on a little stand), one more on the upper floor
         {
-            float u = main.u0 - 0.45f;
-            boxLocal(u - 0.3f, main.v0 + 1f, u + 0.05f, main.v0 + 1.8f, base, base + 0.6f, lib.metal, lib.metal);
+            float nx = wx(main.u0 - 1f, main.v0) - wx(main.u0, main.v0), nz = wz(main.u0 - 1f, main.v0) - wz(main.u0, main.v0);
+            float v = main.v0 + Math.min(1.6f, (main.v1 - main.v0) * 0.3f);
+            gb.wallUnit(wx(main.u0, v), wz(main.u0, v), nx, nz, 0.8f, base + 0.15f, 0.62f, 0.3f, lib.aircon, lib.airconSide);
+            if (main.floors >= 2 && (d.id & 1) == 0) {
+                float v2 = main.v0 + (main.v1 - main.v0) * 0.65f;
+                gb.wallUnit(wx(main.u0, v2), wz(main.u0, v2), nx, nz, 0.8f, base + d.floorH + 0.3f, 0.62f, 0.3f, lib.aircon, lib.airconSide);
+            }
+        }
+        // balcony on the upper floor of the front: slab, two sides and the front (none at the wall)
+        if (d.balcony && main.floors >= 2) {
+            float bw = Math.min(4.2f, (main.u1 - main.u0) * 0.55f), cu = (main.u0 + main.u1) * 0.5f;
+            float nx = wx(cu, main.v0 - 1f) - wx(cu, main.v0), nz = wz(cu, main.v0 - 1f) - wz(cu, main.v0);
+            gb.balcony(wx(cu - bw * 0.5f, main.v0), wz(cu - bw * 0.5f, main.v0), wx(cu + bw * 0.5f, main.v0), wz(cu + bw * 0.5f, main.v0),
+                    nx, nz, base + d.floorH, 1.0f, 1.05f, lib.balconyFront, lib.balconySlab);
         }
         if (!lot) return;
         // carport: four posts and a flat polycarbonate roof
@@ -556,17 +596,28 @@ final class HouseGen {
         }
     }
 
+    /**
+     * A property wall or hedge from local (u0,v0) to (u1,v1), {@code y1 - y0} high, in tiles of
+     * at most 2.5 m that follow the ground (never floating above a slope or buried in it).
+     */
     private void fencePlane(float u0, float v0, float u1, float v1, float y0, float y1, int tex, float scale) {
         float ax = wx(u0, v0), az = wz(u0, v0), bx = wx(u1, v1), bz = wz(u1, v1);
         float dx = bx - ax, dz = bz - az, len = (float) Math.hypot(dx, dz);
-        if (len < 0.05f || y1 - y0 < 0.05f) return;
+        float hgt = y1 - y0;
+        if (len < 0.05f || hgt < 0.05f) return;
         float nx = -dz / len, nz = dx / len;
         float light = GeoBuilder.sunLight(nx, 0f, nz);
-        float[] p = {ax, y0, az, bx, y0, bz, bx, y1, bz, ax, y1, az};
-        float[] uv = {0f, (y1 - y0) / scale, len / scale, (y1 - y0) / scale,
-                len / scale, 0f, 0f, 0f};
         float[] l = {light, light, light, light};
-        gb.quad(p, uv, l, tex, L_OBJECT, Geo.FLAG_NO_SUBDIV, 0f, true);
+        int n = Math.max(1, (int) Math.ceil(len / 2.5f));
+        for (int k = 0; k < n; k++) {
+            float t0 = k / (float) n, t1 = (k + 1) / (float) n;
+            float px = ax + dx * t0, pz = az + dz * t0, qx = ax + dx * t1, qz = az + dz * t1;
+            float g0 = gb.h(px, pz) - 0.15f, g1 = gb.h(qx, qz) - 0.15f;
+            float[] p = {px, g0, pz, qx, g1, qz, qx, g1 + hgt + 0.15f, qz, px, g0 + hgt + 0.15f, pz};
+            float s0 = len * t0 / scale, s1 = len * t1 / scale;
+            float[] uv = {s0, (hgt + 0.15f) / scale, s1, (hgt + 0.15f) / scale, s1, 0f, s0, 0f};
+            gb.quad(p, uv, l, tex, L_OBJECT, Geo.FLAG_NO_SUBDIV, 0f, true);
+        }
     }
 
     // ------------------------------------------------------------------ props (local to world)

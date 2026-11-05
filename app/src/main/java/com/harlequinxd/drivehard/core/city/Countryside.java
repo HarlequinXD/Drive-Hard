@@ -81,7 +81,10 @@ public final class Countryside {
     /** True where the land is farmed (lowland away from the city and the coast). */
     public boolean farmland(float x, float z, float h) {
         if (h > 95f || h < 2.6f) return false;
-        if (terrain.cityDistance(x, z) < 900f || terrain.coastOver(x, z) > -160f) return false;
+        if (terrain.coastOver(x, z) > -160f) return false;
+        // fields reach in between the suburbs, but not right up to the houses
+        float cd = terrain.cityDistance(x, z);
+        if (cd > 0f ? cd < 600f : city.nearUrban(x, z, 250f)) return false;
         return vn(x / 2600f, z / 2600f, seed + 950) > 0.33f;
     }
 
@@ -581,10 +584,13 @@ public final class Countryside {
     /** A lot is usable if no road crosses it and the ground is gentle. */
     private boolean lotClear(float x0, float z0, float x1, float z1) {
         float lo = Float.MAX_VALUE, hi = -Float.MAX_VALUE;
+        // one query at the centre clears the whole lot when the nearest road is beyond its corners
+        float half = (float) Math.hypot(x1 - x0, z1 - z0) * 0.5f;
+        boolean open = roads.roadClearance((x0 + x1) * 0.5f, (z0 + z1) * 0.5f, half + 1f) > half + 0.5f;
         for (int j = 0; j <= 2; j++)
             for (int i = 0; i <= 2; i++) {
                 float x = x0 + 1f + (x1 - x0 - 2f) * i / 2f, z = z0 + 1f + (z1 - z0 - 2f) * j / 2f;
-                if (roads.roadClearance(x, z, 20f) < 0.5f) return false;
+                if (!open && roads.roadClearance(x, z, 20f) < 0.5f) return false;
                 float h = terrain.height(x, z);
                 lo = Math.min(lo, h); hi = Math.max(hi, h);
             }
@@ -613,7 +619,7 @@ public final class Countryside {
                 float ax0 = s.x0, ax1 = s.x1, az0 = s.z0, az1 = s.z1;
                 if (s.ground != null) {      // on a town lot: set back behind a car park
                     ax0 += 1f; ax1 -= 1f;
-                    if (s.face == 0) { az0 += 6f; az1 -= 1f; } else { az0 += 1f; az1 -= 6f; }
+                    if (s.face == 0) { az0 += 6f; az1 = Math.min(az1 - 1f, az0 + 10f); } else { az1 -= 6f; az0 = Math.max(az0 + 1f, az1 - 10f); }
                 }
                 new BuildingGen(city, lib, gb, r, ch).build(BuildingGen.Type.APAATO, ax0, az0, ax1, az1, street, new boolean[4], city.shopsSuburb);
                 break;

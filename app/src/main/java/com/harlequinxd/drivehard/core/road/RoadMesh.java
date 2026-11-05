@@ -572,8 +572,7 @@ public final class RoadMesh {
             if (net.roadClearance(q[0], q[1], 4f) < 0.8f) continue;
             float qy = terrain.height(q[0], q[1]);
             float sx = tmp[4], sz = -tmp[3];
-            for (float w : new float[]{-0.6f, 0f, 0.6f})
-                wire(gb, q[0] + sx * w, qy + 10.02f, q[1] + sz * w, x + sx * w, y + 10.02f, z + sz * w);
+            gb.powerLine(q[0], qy + 10.02f, q[1], x, y + 10.02f, z, sx, sz, 0.6f, lib.powerLines);
         }
     }
 
@@ -584,20 +583,4 @@ public final class RoadMesh {
         out[1] += -tx * off;
     }
 
-    private void wire(GeoBuilder gb, float ax, float ay, float az, float bx, float by, float bz) {
-        float mx = (ax + bx) * 0.5f, my = (ay + by) * 0.5f - 0.6f, mz = (az + bz) * 0.5f;
-        wireRibbon(gb, ax, ay, az, mx, my, mz);
-        wireRibbon(gb, mx, my, mz, bx, by, bz);
-    }
-
-    private void wireRibbon(GeoBuilder gb, float ax, float ay, float az, float bx, float by, float bz) {
-        float dx = bx - ax, dz = bz - az, len = (float) Math.hypot(dx, dz);
-        if (len < 0.01f) return;
-        float halfWidth = 0.035f, px = dz * halfWidth / len, pz = -dx * halfWidth / len;
-        float[] lt = {0.5f, 0.5f, 0.5f, 0.5f};
-        float[] t = {0, 0, len / 8f, 0, len / 8f, 1, 0, 1};
-        gb.quad(new float[]{ax - px, ay, az - pz, bx - px, by, bz - pz,
-                        bx + px, by, bz + pz, ax + px, ay, az + pz},
-                t, lt, lib.pole, L_OBJECT, Geo.FLAG_DETAIL | Geo.FLAG_NO_SUBDIV, -0.2f, true);
-    }
 }

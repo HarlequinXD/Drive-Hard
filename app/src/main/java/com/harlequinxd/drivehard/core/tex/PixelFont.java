@@ -4,7 +4,7 @@ package com.harlequinxd.drivehard.core.tex;
 public final class PixelFont {
     private PixelFont() {}
 
-    private static final String CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789&-.' ";
+    private static final String CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789&-.'%/:,!?()+<> ";
     private static final String[] GLYPHS = {
             "01110100011000111111100011000110001", // A
             "11110100011000111110100011000111110", // B
@@ -46,11 +46,28 @@ public final class PixelFont {
             "00000000000000011111000000000000000", // -
             "00000000000000000000000000110001100", // .
             "00100001000100000000000000000000000", // '
+            "11001110100001000100010000101110011", // %
+            "00001000100001000100010000100010000", // /
+            "00000011000110000000011000110000000", // :
+            "00000000000000000000011000010001000", // ,
+            "00100001000010000100001000000000100", // !
+            "01110100010000100010001000000000100", // ?
+            "00010001000100001000010000010000010", // (
+            "01000001000001000010000100010001000", // )
+            "00000001000010011111001000010000000", // +
+            "00010001000100010000010000010000010", // <
+            "01000001000001000001000100010001000", // >
             "00000000000000000000000000000000000", // space
     };
 
     public static int width(String s, int scale) {
         return s.isEmpty() ? 0 : (s.length() * 6 - 1) * scale;
+    }
+
+    /** The 5x7 glyph of c as 35 '0'/'1' characters, row by row (unknown characters are blank). */
+    public static String bits(char c) {
+        int gi = CHARS.indexOf(Character.toUpperCase(c));
+        return GLYPHS[gi < 0 ? CHARS.length() - 1 : gi];
     }
 
     /** Draws text into an ARGB pixel array (clipped). */

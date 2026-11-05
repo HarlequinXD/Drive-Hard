@@ -130,7 +130,7 @@ public final class Traffic {
      * highways carry a steady trickle, country roads only the odd car.
      */
     private int density(float px, float pz) {
-        if (px > city.cityX0 - 100f && px < city.cityX1 + 100f && pz > city.cityZ0 - 100f && pz < city.cityZ1 + 100f) return 30;
+        if (city.nearUrban(px, pz, 100f)) return 30;
         for (com.harlequinxd.drivehard.core.road.Town t : net.towns) {
             if (px > t.x0 - 80f && px < t.x1 + 80f && pz > t.z0 - 80f && pz < t.z1 + 80f)
                 return t.size == com.harlequinxd.drivehard.core.road.Town.Size.TOWN ? 16 : (t.size == com.harlequinxd.drivehard.core.road.Town.Size.VILLAGE ? 10 : 6);
