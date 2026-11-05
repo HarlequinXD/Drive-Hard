@@ -563,17 +563,26 @@ public final class JpTextures {
 
     /** Kawara roof tiles (64x64). */
     public static Texture roofTiles(int color, int seed) {
+        // sangawara: rows of S-profile clay tiles; each row overlaps the one below it (v runs down
+        // the slope), each tile glints along its crest and is a shade different from its neighbours
         Img m = new Img(64, 64);
+        int c = 0xFF000000 | color;
         for (int y = 0; y < 64; y++) {
             int row = y / 8, ry = y % 8;
             for (int x = 0; x < 64; x++) {
-                int cx = (x + (row & 1) * 4) % 8;
-                float k = 0.78f + 0.3f * (float) Math.sin(cx / 8f * Math.PI) - ry * 0.025f;
-                if (ry == 7) k *= 0.6f;
-                k *= 0.95f + Noise.rnd(x / 8, row, seed) * 0.1f;
-                m.px[y * 64 + x] = mul(0xFF000000 | color, k);
+                int cx = (x + (row & 1) * 4) % 8, tile = (x + (row & 1) * 4) / 8;
+                float prof = (float) Math.sin(cx / 8f * Math.PI);            // the rounded crest
+                float k = 0.7f + 0.38f * prof * prof;
+                k += (ry < 2 ? 0.06f : 0f) - ry * 0.018f;                    // lit upper lip of each row
+                if (ry == 7) k *= 0.55f;                                      // the shadow line under the overlap
+                if (ry == 6) k *= 0.85f;
+                k *= 0.93f + Noise.rnd(tile, row, seed) * 0.14f;             // tile to tile variation
+                int px = mul(c, k);
+                if (prof > 0.9f && ry < 5) px = mix(px, 0xFFFFFFFF, 0.08f); // glaze glint on the crest
+                m.px[y * 64 + x] = px;
             }
         }
+        Photo.weather(m, 0.06f, seed);
         return m.texture();
     }
 

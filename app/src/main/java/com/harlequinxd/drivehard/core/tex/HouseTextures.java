@@ -15,7 +15,7 @@ import static com.harlequinxd.drivehard.core.tex.Img.mul;
 public final class HouseTextures {
     private HouseTextures() { }
 
-    public enum Material { SIDING, STUCCO, BOARDS, TILE, BRICK, PANEL, PLASTER, CHARRED, BARN }
+    public enum Material { SIDING, STUCCO, BOARDS, TILE, BRICK, PANEL, PLASTER, CHARRED, BARN, STONE }
 
     /** Wall material, 64x64, tiles every 2 m. */
     public static Texture material(Material k, int color, int seed) {
@@ -98,6 +98,30 @@ public final class HouseTextures {
                 m.grain(0, 0, 64, 64, 0.04f, 0.03f, seed);
                 Photo.weather(m, 0.07f, seed);
                 break;
+            case STONE: {         // stone-look ceramic siding: irregular cut stones, recessed joints, panel seams
+                int[] rowH = {7, 9, 6, 8, 10, 7, 9, 8};
+                int y = 0, row = 0;
+                while (y < 64) {
+                    int h = Math.min(rowH[row % rowH.length], 64 - y);
+                    int x = (row * 13) % 17 - 17;
+                    while (x < 64) {
+                        int w = 10 + (int) (Noise.rnd(x + 40, row, seed) * 14);
+                        float tone = 0.84f + Noise.rnd(x + 99, row, seed) * 0.3f;
+                        int x0 = Math.max(0, x), x1 = Math.min(64, x + w);
+                        m.shade(x0, y, x1, y + h, tone);
+                        m.shade(x0, y, x1, y + 1, 1.12f);                 // lit top edge of each stone
+                        m.shade(x0, y + h - 1, x1, y + h, 0.7f);           // shadowed joint below
+                        if (x >= 0 && x < 64) m.shade(x, y, x + 1, y + h, 0.7f);
+                        x += w;
+                    }
+                    y += h;
+                    row++;
+                }
+                m.grain(0, 0, 64, 64, 0.06f, 0.08f, seed);
+                m.shade(31, 0, 32, 64, 0.8f);                               // the siding board joint (455 mm)
+                Photo.weather(m, 0.06f, seed);
+                break;
+            }
             case BARN: {          // barn / shed planks: wide boards, dark gaps, knots, sun-greyed and stained
                 for (int x = 0; x < 64; x++) {
                     int board = x / 10;
@@ -264,22 +288,65 @@ public final class HouseTextures {
         int c = 0xFF000000 | color;
         m.fill(c);
         switch (k) {
-            case METAL:           // standing seams down the slope
+            case METAL:           // galvalume standing seams down the slope, with a soft sheen
                 m.grain(0, 0, 64, 64, 0.02f, 0.02f, seed);
-                for (int x = 0; x < 64; x += 8) { m.shade(x, 0, x + 1, 64, 1.25f); m.shade(x + 1, 0, x + 2, 64, 0.75f); }
-                break;
-            case SLATE:           // flat cement slates in staggered rows
-                m.grain(0, 0, 64, 64, 0.04f, 0.04f, seed);
-                for (int y = 0; y < 64; y += 6) {
-                    m.shade(0, y, 64, y + 1, 0.65f);
-                    for (int x = (y / 6 % 2) * 6; x < 64; x += 12) m.shade(x, y, x + 1, y + 6, 0.8f);
+                for (int x = 0; x < 64; x++) {
+                    float pan = (x % 16) / 16f;
+                    m.shade(x, 0, x + 1, 64, 0.92f + 0.12f * (float) Math.sin(pan * Math.PI));
                 }
+                for (int x = 0; x < 64; x += 16) { m.shade(x, 0, x + 1, 64, 1.3f); m.shade(x + 1, 0, x + 2, 64, 0.7f); }
+                for (int y = 0; y < 64; y++) m.shade(0, y, 64, y + 1, 1.04f - y * 0.0012f);
+                Photo.weather(m, 0.04f, seed);
+                break;
+            case SLATE:           // colorbest slates: thin cement slates, staggered, each its own shade
+                m.grain(0, 0, 64, 64, 0.04f, 0.05f, seed);
+                for (int y = 0; y < 64; y += 6) {
+                    for (int x = (y / 6 % 2) * 6 - 6; x < 64; x += 12)
+                        m.shade(Math.max(0, x), y, Math.min(64, x + 12), y + 6, 0.9f + Noise.rnd(x / 12 + 9, y / 6, seed) * 0.18f);
+                    m.shade(0, y, 64, y + 1, 0.55f);
+                    m.shade(0, y + 1, 64, y + 2, 1.1f);
+                    for (int x = (y / 6 % 2) * 6; x < 64; x += 12) m.shade(x, y, x + 1, y + 6, 0.75f);
+                }
+                Photo.weather(m, 0.07f, seed);
                 break;
             default:              // weathered copper
                 m.grain(0, 0, 64, 64, 0.08f, 0.06f, seed);
                 for (int x = 0; x < 64; x += 10) m.shade(x, 0, x + 1, 64, 0.8f);
+                Photo.weather(m, 0.12f, seed);
                 break;
         }
+        return m.texture();
+    }
+
+    // ------------------------------------------------------------------ house parts
+
+    /** Eave soffit (the underside of the overhang): painted fibre-cement boards with joints. */
+    public static Texture soffit(int seed) {
+        Img m = new Img(32, 32);
+        m.fill(Img.rgb(226, 222, 212));
+        m.grain(0, 0, 32, 32, 0.03f, 0.03f, seed);
+        for (int x = 0; x < 32; x += 16) { m.shade(x, 0, x + 1, 32, 0.75f); m.shade(x + 1, 0, x + 2, 32, 1.05f); }
+        for (int y = 4; y < 32; y += 16) for (int x = 3; x < 32; x += 8) m.set(x, y, mul(m.get(x, y), 0.7f));  // vent holes
+        return m.texture();
+    }
+
+    /** Exposed concrete foundation with form-tie dots and a darker, splashed lower edge. */
+    public static Texture foundation(int seed) {
+        Img m = new Img(32, 16);
+        m.fill(Img.rgb(168, 166, 160));
+        m.grain(0, 0, 32, 16, 0.08f, 0.06f, seed);
+        Photo.weather(m, 0.1f, seed);
+        for (int x = 4; x < 32; x += 12) m.set(x, 6, Img.rgb(110, 108, 104));
+        for (int y = 10; y < 16; y++) m.shade(0, y, 32, y + 1, 1f - (y - 10) * 0.04f);
+        return m.texture();
+    }
+
+    /** A plain painted / anodised strip (fascias, gutters, sills, canopies) with a faint sheen. */
+    public static Texture trim(int colour, int seed) {
+        Img m = new Img(16, 16);
+        m.fill(0xFF000000 | colour);
+        m.grain(0, 0, 16, 16, 0.02f, 0.03f, seed);
+        for (int y = 0; y < 16; y++) m.shade(0, y, 16, y + 1, 1.08f - y * 0.012f);
         return m.texture();
     }
 }

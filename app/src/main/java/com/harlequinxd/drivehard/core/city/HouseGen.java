@@ -139,12 +139,12 @@ final class HouseGen {
             case 1:
                 d.roof = RoofType.GABLE;
                 d.pitch = 0.42f + r.nextFloat() * 0.25f;
-                walls = new HouseTextures.Material[]{HouseTextures.Material.SIDING, HouseTextures.Material.STUCCO, HouseTextures.Material.BRICK, HouseTextures.Material.TILE};
+                walls = new HouseTextures.Material[]{HouseTextures.Material.SIDING, HouseTextures.Material.STUCCO, HouseTextures.Material.BRICK, HouseTextures.Material.TILE, HouseTextures.Material.STONE};
                 break;
             case 2:
                 d.roof = RoofType.HIP;
                 d.pitch = 0.38f + r.nextFloat() * 0.18f;
-                walls = new HouseTextures.Material[]{HouseTextures.Material.SIDING, HouseTextures.Material.STUCCO, HouseTextures.Material.TILE};
+                walls = new HouseTextures.Material[]{HouseTextures.Material.SIDING, HouseTextures.Material.STUCCO, HouseTextures.Material.TILE, HouseTextures.Material.STONE};
                 break;
             case 3:
                 d.roof = RoofType.SHED;
@@ -285,7 +285,10 @@ final class HouseGen {
         RoofType roof;
         boolean ridgeU;          // ridge runs along u (parallel to the frontage)
         int shedHigh;            // mono-pitch: high side 0=v0 1=v1 2=u0 3=u1
-        float top;
+        float top;               // wall top (eave line) height
+        float roofHigh;          // highest point of its roof where it meets another mass
+        /** Sides that abut another mass (0 front v0, 1 back v1, 2 left u0, 3 right u1): no eave there. */
+        final boolean[] abut = new boolean[4];
 
         Mass(float u0, float v0, float u1, float v1, int floors, RoofType roof, boolean ridgeU) {
             this.u0 = u0; this.v0 = v0; this.u1 = u1; this.v1 = v1;
@@ -294,6 +297,11 @@ final class HouseGen {
 
         boolean contains(float u, float v) { return u > u0 + 0.05f && u < u1 - 0.05f && v > v0 + 0.05f && v < v1 - 0.05f; }
     }
+
+    /** Height of the ground floor above the lot base (the visible concrete foundation). */
+    static final float PLINTH = 0.4f;
+    /** Japanese building module (one ken is two of these): openings are planned on this grid. */
+    static final float MODULE = 0.91f;
 
     /** Footprint of the house inside the lot (local u0, v0, u1, v1) and the carport's u range (or NaN). */
     static float[] layout(Design d, float W, float D, boolean lot) {
@@ -310,7 +318,7 @@ final class HouseGen {
         float u0;
         if (carW > 0f) u0 = d.leftDoor ? W - w - 0.6f : 0.6f;
         else u0 = (W - w) * 0.5f;
-        float v0 = Math.max(2.5f, (D - dd) * 0.4f);
+        float v0 = Math.min(5f, Math.max(2.5f, 2.5f + (D - dd) * 0.08f));   // near the street, garden behind
         float cu0 = Float.NaN, cu1 = Float.NaN;
         if (carW > 0f) { cu0 = d.leftDoor ? 0.3f : W - carW - 0.3f; cu1 = cu0 + carW; }
         return new float[]{u0, v0, u0 + w, Math.min(D - 1f, v0 + dd), cu0, cu1};
@@ -320,6 +328,15 @@ final class HouseGen {
      * Builds design {@code d} on a lot (world rectangle) whose front faces {@code face}
      * (0=N, 1=S, 2=W, 3=E). With {@code lot} the house sits inside the lot with a garden, carport
      * and fence; otherwise it fills the rectangle.
+     *
+     * <p>The house is assembled from modules the way Japanese houses are: a main two-storey (or
+     * single-storey) block on a visible concrete foundation, optionally with a one-storey
+     * lean-to (geya) wing against its front, back or side; walls laid out on the 910 mm module
+     * with real openings (windows, full-height garden windows, small frosted windows, the
+     * entrance door) and the wall built round them; a roof (gable, hip, irimoya, mono-pitch or
+     * flat with a parapet) with overhanging eaves, soffits, fascia boards, gutters and downpipes;
+     * an entrance canopy and step; small canopies over traditional windows; a floor band between
+     * storeys on two-tone houses; and a balcony built on the same bay as its door.</p>
      */
     void build(Design d, float x0, float z0, float x1, float z1, int face, float base, boolean lot, boolean westNeighbor) {
         lx0 = x0; lz0 = z0; lx1 = x1; lz1 = z1;
@@ -328,86 +345,69 @@ final class HouseGen {
         float[] lay = layout(d, W, D, lot);
         float u0 = lay[0], v0 = lay[1], u1 = lay[2], v1 = lay[3];
         float w = u1 - u0, dep = v1 - v0;
+        float floor0 = base + PLINTH;
+        boolean ridgeU = w >= dep * 0.85f;
         List<Mass> masses = new ArrayList<>();
-        boolean ridgeU = d.ridgeAlongFront ? w >= dep * 0.7f : w > dep * 1.4f;
-        int wingFloors = d.wingLower ? Math.max(1, d.floors - 1) : d.floors;
-        RoofType wingRoof = d.roof == RoofType.FLAT ? RoofType.FLAT : (d.roof == RoofType.SHED ? RoofType.SHED : (d.roof == RoofType.IRIMOYA ? RoofType.HIP : d.roof));
-        // plans that would cut the house into slivers on a small footprint fall back to a plain block
+        // the main block, then at most one lean-to wing that only touches it (never overlaps)
         Plan plan = d.plan;
-        if (plan == Plan.OFFSET && w < 12f) plan = Plan.RECT;
-        if ((plan == Plan.L_FRONT || plan == Plan.L_BACK) && (w * d.wingFrac < 4.5f || dep < 9f)) plan = Plan.RECT;
-        if (plan == Plan.UPPER_PART && w * 0.62f < 5.5f) plan = Plan.RECT;
-        if (plan == Plan.ANNEX && (Math.min(w * 0.3f, 3.6f) < 2.6f || w < 9.5f)) plan = Plan.RECT;
+        if ((plan == Plan.L_FRONT || plan == Plan.L_BACK) && (dep < 9f || w < 8f)) plan = Plan.RECT;
+        if ((plan == Plan.ANNEX || plan == Plan.UPPER_PART || plan == Plan.OFFSET) && w < 9.5f) plan = Plan.RECT;
+        Mass main;
+        Mass wing = null;
         switch (plan) {
             case L_FRONT: {
-                float fd = Math.min(dep * 0.35f, 4.5f), ww = w * d.wingFrac;
-                masses.add(new Mass(u0, v0 + fd, u1, v1, d.floors, d.roof, ridgeU));
-                Mass wing = d.leftDoor ? new Mass(u1 - ww, v0, u1, v0 + fd + 2f, wingFloors, wingRoof, false)
-                        : new Mass(u0, v0, u0 + ww, v0 + fd + 2f, wingFloors, wingRoof, false);
-                wing.shedHigh = 1;
-                masses.add(wing);
+                float fd = Math.min(dep * 0.32f, 3.6f), ww = Math.max(3.6f, w * d.wingFrac);
+                main = new Mass(u0, v0 + fd, u1, v1, d.floors, d.roof, ridgeU);
+                wing = d.leftDoor ? new Mass(u1 - ww, v0, u1, v0 + fd, 1, RoofType.SHED, true)
+                        : new Mass(u0, v0, u0 + ww, v0 + fd, 1, RoofType.SHED, true);
+                wing.shedHigh = 1; wing.abut[1] = true; main.abut[0] = false;
                 break;
             }
             case L_BACK: {
-                float bd = Math.min(dep * 0.4f, 5f), ww = w * d.wingFrac;
-                masses.add(new Mass(u0, v0, u1, v1 - bd, d.floors, d.roof, ridgeU));
-                Mass wing = d.leftDoor ? new Mass(u0, v1 - bd - 2f, u0 + ww, v1, wingFloors, wingRoof, false)
-                        : new Mass(u1 - ww, v1 - bd - 2f, u1, v1, wingFloors, wingRoof, false);
-                wing.shedHigh = 0;
-                masses.add(wing);
+                float bd = Math.min(dep * 0.35f, 4f), ww = Math.max(3.6f, w * d.wingFrac);
+                main = new Mass(u0, v0, u1, v1 - bd, d.floors, d.roof, ridgeU);
+                wing = d.leftDoor ? new Mass(u0, v1 - bd, u0 + ww, v1, 1, RoofType.SHED, true)
+                        : new Mass(u1 - ww, v1 - bd, u1, v1, 1, RoofType.SHED, true);
+                wing.shedHigh = 0; wing.abut[0] = true;
                 break;
             }
-            case OFFSET: {
-                float um = u0 + w * (0.45f + d.wingFrac * 0.3f), o = d.offset;
-                masses.add(new Mass(u0, v0, um, v1 - o, d.floors, d.roof, false));
-                Mass b = new Mass(um - 0.3f, v0 + o, u1, v1, wingFloors, d.roof, false);
-                masses.add(b);
-                break;
-            }
-            case ANNEX: {
-                float aw = Math.min(w * 0.3f, 3.6f);
+            case ANNEX: case UPPER_PART: case OFFSET: {
+                float aw = Math.min(w * 0.32f, 4.2f);
                 boolean left = !d.leftDoor;
-                masses.add(left ? new Mass(u0 + aw, v0, u1, v1, d.floors, d.roof, ridgeU) : new Mass(u0, v0, u1 - aw, v1, d.floors, d.roof, ridgeU));
-                Mass a = left ? new Mass(u0, v0 + 1.2f, u0 + aw + 0.3f, v1 - 0.8f, 1, d.roof == RoofType.FLAT ? RoofType.FLAT : RoofType.SHED, false)
-                        : new Mass(u1 - aw - 0.3f, v0 + 1.2f, u1, v1 - 0.8f, 1, d.roof == RoofType.FLAT ? RoofType.FLAT : RoofType.SHED, false);
-                a.shedHigh = left ? 3 : 2;
-                masses.add(a);
-                break;
-            }
-            case UPPER_PART: {
-                if (d.floors < 2) { masses.add(new Mass(u0, v0, u1, v1, d.floors, d.roof, ridgeU)); break; }
-                Mass low = new Mass(u0, v0, u1, v1, 1, d.roof == RoofType.FLAT ? RoofType.FLAT : RoofType.HIP, ridgeU);
-                masses.add(low);
-                float uw = w * 0.62f;
-                masses.add(d.leftDoor ? new Mass(u0, v0 + 0.8f, u0 + uw, v1 - 0.8f, d.floors, d.roof, uw >= dep * 0.7f)
-                        : new Mass(u1 - uw, v0 + 0.8f, u1, v1 - 0.8f, d.floors, d.roof, uw >= dep * 0.7f));
+                main = left ? new Mass(u0 + aw, v0, u1, v1, d.floors, d.roof, (w - aw) >= dep * 0.85f)
+                        : new Mass(u0, v0, u1 - aw, v1, d.floors, d.roof, (w - aw) >= dep * 0.85f);
+                float inset = plan == Plan.OFFSET ? 1.2f : 0f;
+                wing = left ? new Mass(u0, v0 + inset, u0 + aw, v1, 1, RoofType.SHED, false)
+                        : new Mass(u1 - aw, v0 + inset, u1, v1, 1, RoofType.SHED, false);
+                wing.shedHigh = left ? 3 : 2;
+                wing.abut[left ? 3 : 2] = true;
                 break;
             }
             default:
-                masses.add(new Mass(u0, v0, u1, v1, d.floors, d.roof, ridgeU));
+                main = new Mass(u0, v0, u1, v1, d.floors, d.roof, ridgeU);
                 break;
         }
-        if (d.roof == RoofType.SHED) for (Mass m : masses) if (m == masses.get(0)) m.shedHigh = d.shedBack ? 1 : 0;
-        Mass main = masses.get(0);
-        // no skinny towers: a block narrower than 4.5 m is a single storey, the house itself
-        // gets one storey per 3.5 m of its narrower side at most
-        for (Mass m : masses) {
-            float narrow = Math.min(m.u1 - m.u0, m.v1 - m.v0);
-            if (m != main && narrow < 4.5f) m.floors = 1;
-            m.floors = Math.max(1, Math.min(m.floors, (int) (narrow / 3.5f)));
+        if (d.roof == RoofType.SHED) main.shedHigh = d.shedBack ? 1 : 0;
+        // no skinny towers: one storey per 3.5 m of the narrower side at most
+        float narrow = Math.min(main.u1 - main.u0, main.v1 - main.v0);
+        main.floors = Math.max(1, Math.min(main.floors, (int) (narrow / 3.5f)));
+        main.top = floor0 + main.floors * d.floorH;
+        main.roofHigh = main.top + 4f;
+        masses.add(main);
+        if (wing != null) {
+            // the lean-to's high side tucks under the main block's eaves or its upper-floor windows
+            float high = main.floors >= 2 ? floor0 + d.floorH + 0.45f : main.top - 0.25f;
+            float run = wing.shedHigh < 2 ? wing.v1 - wing.v0 : wing.u1 - wing.u0;
+            float pitch = Math.min(d.pitch, 0.35f);
+            wing.top = Math.max(floor0 + 2.3f, high - pitch * run);   // wall top at the low side
+            wingPitch = Math.max(0.08f, (high - wing.top) / Math.max(1f, run));
+            wing.roofHigh = wing.top + wingPitch * run;
+            masses.add(wing);
         }
-        for (Mass m : masses) m.top = base + m.floors * d.floorH;
-        sb = new SectorBuilder(ch.sectors);
-        switch (face) {
-            case 0: sb.frame(lx0, lz0, 1f, 0f, 0f, 1f); break;
-            case 1: sb.frame(lx1, lz1, -1f, 0f, 0f, -1f); break;
-            case 2: sb.frame(lx0, lz1, 0f, -1f, 1f, 0f); break;
-            default: sb.frame(lx1, lz0, 0f, 1f, -1f, 0f); break;
-        }
-        // tallest masses first: lower ones are cut away where a taller one stands
-        List<Mass> order = new ArrayList<>(masses);
-        order.sort((p, q) -> q.floors - p.floors);
-        for (Mass m : order) mass(d, m, m == main, base);
+        // trims for this house
+        trimTex = lib.fascia[Math.floorMod(d.id * 7 + 3, lib.fascia.length)];
+        gutterTex = lib.gutter[Math.floorMod(d.id * 5 + 1, lib.gutter.length)];
+        for (Mass m : masses) massGeometry(d, m, m == main, masses, floor0, base);
         extras(d, main, base, lot, W, D, lay, westNeighbor);
         for (Mass m : masses) {
             float ax = Math.min(wx(m.u0, m.v0), wx(m.u1, m.v1)), bx = Math.max(wx(m.u0, m.v0), wx(m.u1, m.v1));
@@ -416,123 +416,554 @@ final class HouseGen {
         }
     }
 
-    private SectorBuilder sb;
+    private float wingPitch;
+    private int trimTex, gutterTex;
+    /** The front upper-floor opening the balcony is built on: u range, or NaN if none. */
+    private float balconyU0 = Float.NaN, balconyU1 = Float.NaN;
 
-    // ------------------------------------------------------------------ walls
+    // ------------------------------------------------------------------ geometry helpers
 
     /**
-     * Tiling of one wall face of a mass (role 0 front, 1 back, 2 side): each storey is split
-     * into bays, each bay a tile: plain wall, window, small window, garden window or the door.
-     * Above the top storey (gables, mono-pitch ends, parapets) the wall is plain material.
+     * A polygon of 3 or 4 points given in local (u, y, v); its winding is fixed so that it faces
+     * the local direction (nu, ny, nv), and it is lit from that normal.
      */
-    private Sectors.Tiles faceTiles(Design d, Mass m, boolean main, int role, float len) {
-        Sectors.Tiles t = new Sectors.Tiles(m.floors);
-        t.mat = lib.houseMat[d.mat1];
-        t.matUp = lib.houseMat[m.floors > 1 ? d.mat2 : d.mat1];
-        t.found = lib.concrete;
-        t.groundH = t.storeyH = d.floorH;
-        t.winW = d.winW;
-        t.winH = d.winH;
-        boolean wideDoor = lib.houseDoorKind[d.door] == HouseTextures.Door.SLIDING_LATTICE || lib.houseDoorKind[d.door] == HouseTextures.Door.SLIDING_GLASS;
-        t.doorW = wideDoor ? 1.7f : 0.95f;
-        int win = lib.houseWin[d.win], small = lib.houseWin[d.winSmall], garden = lib.houseWin[d.winGarden];
-        boolean front = role == 0, back = role == 1;
-        int bays = Math.max(1, (int) (len / d.bay));
-        float bw = len / bays;
-        for (int f = 0; f < m.floors; f++) {
-            t.storey(f, bays, Sectors.PLAIN, 0);
-            int doorBay = front && f == 0 && main ? (d.leftDoor ? bays - 1 : 0) : -1;   // faces run right to left seen from the street
-            for (int b = 0; b < bays; b++) {
-                byte k = Sectors.PLAIN;
-                int tex = 0;
-                int pattern = (d.id * 31 + b * 7 + f * 13 + role * 5) & 7;
-                if (b == doorBay) { k = Sectors.DOOR; tex = lib.houseDoor[d.door]; }
-                else if (role == 2) {
-                    if (pattern < 4 && bw > 1.4f) { k = Sectors.SMALL; tex = small; }
-                    else if (pattern == 4 && f > 0) { k = Sectors.WINDOW; tex = win; }
-                } else if (back && f == 0 && pattern < 5) {
-                    if (bw > 1.6f) { k = Sectors.GARDEN; tex = garden; }
-                } else if (front && f == 1 && d.balcony && b == bays / 2) {
-                    if (bw > 1.6f) { k = Sectors.GARDEN; tex = garden; }
-                } else if (!(pattern == 7 && !front) && bw > 1.3f) {
-                    if (pattern == 6 && f == 0 && front) { k = Sectors.SMALL; tex = small; }
-                    else { k = Sectors.WINDOW; tex = win; }
-                }
-                t.kind[f][b] = k;
-                t.tex[f][b] = tex;
-            }
+    private void poly(float[] q, float[] uv, int tex, float nu, float ny, float nv, float bias, int flags) {
+        int n = q.length / 3;
+        float[] p = new float[n * 3];
+        for (int i = 0; i < n; i++) {
+            p[i * 3] = wx(q[i * 3], q[i * 3 + 2]);
+            p[i * 3 + 1] = q[i * 3 + 1];
+            p[i * 3 + 2] = wz(q[i * 3], q[i * 3 + 2]);
         }
-        return t;
+        float wnx = wx(nu, nv) - wx(0f, 0f), wnz = wz(nu, nv) - wz(0f, 0f);
+        float ax = p[3] - p[0], ay = p[4] - p[1], az = p[5] - p[2];
+        float bx = p[6] - p[0], by = p[7] - p[1], bz = p[8] - p[2];
+        float cx = ay * bz - az * by, cy = az * bx - ax * bz, cz = ax * by - ay * bx;
+        if (cx * wnx + cy * ny + cz * wnz < 0f) {
+            // reverse the winding (and the uvs with it)
+            float[] rp = new float[p.length], ruv = new float[uv.length];
+            for (int i = 0; i < n; i++) {
+                int j = n - 1 - i;
+                rp[i * 3] = p[j * 3]; rp[i * 3 + 1] = p[j * 3 + 1]; rp[i * 3 + 2] = p[j * 3 + 2];
+                ruv[i * 2] = uv[j * 2]; ruv[i * 2 + 1] = uv[j * 2 + 1];
+            }
+            p = rp;
+            uv = ruv;
+        }
+        float nl = (float) Math.sqrt(wnx * wnx + ny * ny + wnz * wnz);
+        float lt = GeoBuilder.sunLight(wnx / nl, ny / nl, wnz / nl);
+        float[] l = new float[n];
+        java.util.Arrays.fill(l, lt);
+        gb.quad(p, uv, l, tex, L_OBJECT, flags, bias, false);
     }
 
-    /** One mass: its four tiled faces and its roof pieces. */
-    private void mass(Design d, Mass m, boolean main, float base) {
-        float w = m.u1 - m.u0, dep = m.v1 - m.v0;
-        SectorBuilder.Face[] faces = sb.rectFaces(m.u0, m.v0, m.u1, m.v1,
-                faceTiles(d, m, main, 0, w), faceTiles(d, m, main, 2, dep), faceTiles(d, m, main, 1, w), faceTiles(d, m, main, 2, dep));
-        Sectors.Tiles inner = SectorBuilder.plain(lib.houseMat[m.floors > 1 ? d.mat2 : d.mat1], lib.concrete);
+    /**
+     * A vertical wall rectangle on the local line from (ua, va) to (ub, vb), from y0 to y1, facing
+     * outward normal (nu, nv); u texture coordinate measured from {@code s0} metres along the face.
+     */
+    private void wallRect(float ua, float va, float ub, float vb, float y0, float y1, float nu, float nv,
+                          int tex, float s0, float bias, int flags) {
+        float len = (float) Math.hypot(ub - ua, vb - va);
+        if (len < 0.01f || y1 - y0 < 0.01f) return;
+        float sc = 0.5f;                       // wall materials tile every 2 m
+        poly(new float[]{ua, y0, va, ub, y0, vb, ub, y1, vb, ua, y1, va},
+                new float[]{s0 * sc, -y0 * sc, (s0 + len) * sc, -y0 * sc, (s0 + len) * sc, -y1 * sc, s0 * sc, -y1 * sc},
+                tex, nu, 0f, nv, bias, flags);
+    }
+
+    /** An axis-aligned (local) box from u0..u1, v0..v1, y0..y1: four sides and a top. */
+    private void localBox(float u0, float v0, float u1, float v1, float y0, float y1, int side, int top, float bias) {
+        wallRect(u0, v0, u1, v0, y0, y1, 0f, -1f, side, 0f, bias, Geo.FLAG_NO_SUBDIV);
+        wallRect(u1, v1, u0, v1, y0, y1, 0f, 1f, side, 0f, bias, Geo.FLAG_NO_SUBDIV);
+        wallRect(u0, v1, u0, v0, y0, y1, -1f, 0f, side, 0f, bias, Geo.FLAG_NO_SUBDIV);
+        wallRect(u1, v0, u1, v1, y0, y1, 1f, 0f, side, 0f, bias, Geo.FLAG_NO_SUBDIV);
+        if (top >= 0) poly(new float[]{u0, y1, v0, u1, y1, v0, u1, y1, v1, u0, y1, v1},
+                new float[]{0, 0, (u1 - u0) * 0.5f, 0, (u1 - u0) * 0.5f, (v1 - v0) * 0.5f, 0, (v1 - v0) * 0.5f},
+                top, 0f, 1f, 0f, bias, Geo.FLAG_NO_SUBDIV);
+    }
+
+    // ------------------------------------------------------------------ openings
+
+    /** An opening in a wall: kind (Sectors.WINDOW, SMALL, GARDEN, DOOR), along-face s0..s1, height y0..y1 above the floor. */
+    private static final class Opening {
+        byte kind;
+        float s0, s1, y0, y1;
+        int tex;
+        boolean canopy;
+    }
+
+    /**
+     * Plans the openings of one storey of one face on the 910 mm module: role 0 front, 1 back,
+     * 2 side; returns them in order along the face (s measured from the face's start corner).
+     */
+    private List<Opening> plan(Design d, boolean main, int role, int storey, float len, boolean doorHere, boolean balconyHere) {
+        List<Opening> out = new ArrayList<>();
+        int mods = (int) (len / MODULE);
+        if (mods < 2) return out;
+        float margin = (len - mods * MODULE) * 0.5f;
+        Random q = new Random(d.id * 131L + role * 17L + storey * 5L + mods);
+        int win = lib.houseWin[d.win], small = lib.houseWin[d.winSmall], garden = lib.houseWin[d.winGarden];
+        boolean[] used = new boolean[mods];
+        // the entrance: two modules at the door end of the front (one if the door is narrow)
+        if (doorHere) {
+            boolean wide = lib.houseDoorKind[d.door] == HouseTextures.Door.SLIDING_LATTICE || lib.houseDoorKind[d.door] == HouseTextures.Door.SLIDING_GLASS;
+            int dm = wide ? 2 : 1;
+            int at = d.leftDoor ? mods - 1 - dm : 1;
+            at = Math.max(0, Math.min(mods - dm, at));
+            Opening o = new Opening();
+            o.kind = Sectors.DOOR;
+            o.tex = lib.houseDoor[d.door];
+            o.s0 = margin + at * MODULE + (wide ? 0.12f : 0.0f);
+            o.s1 = margin + (at + dm) * MODULE - (wide ? 0.12f : 0.0f);
+            if (!wide) { float c = (o.s0 + o.s1) * 0.5f; o.s0 = c - 0.46f; o.s1 = c + 0.46f; }
+            o.y0 = 0f; o.y1 = 2.1f;
+            out.add(o);
+            for (int k = at; k < at + dm; k++) used[k] = true;
+            if (at > 0) used[at - 1] = true;
+            if (at + dm < mods) used[at + dm] = true;
+        }
+        // the balcony door: two modules in the middle of the front upper floor
+        if (balconyHere && mods >= 4) {
+            int at = mods / 2 - 1;
+            Opening o = new Opening();
+            o.kind = Sectors.GARDEN;
+            o.tex = garden;
+            o.s0 = margin + at * MODULE + 0.08f;
+            o.s1 = margin + (at + 2) * MODULE - 0.08f;
+            o.y0 = 0.05f; o.y1 = 2.0f;
+            out.add(o);
+            for (int k = Math.max(0, at - 1); k < Math.min(mods, at + 3); k++) used[k] = true;
+        }
+        // windows: two-module windows with at least one module of wall between them; sides get
+        // fewer, smaller ones; the back of the ground floor gets full-height garden windows
+        int k = 1;
+        while (k < mods - 1) {
+            if (used[k]) { k++; continue; }
+            float roll = q.nextFloat();
+            boolean two = k + 1 < mods - 1 && !used[k + 1] && (role != 2 || roll < 0.25f);
+            Opening o = new Opening();
+            if (role == 2) {
+                if (roll > 0.55f) { k += 1; continue; }
+                o.kind = roll < 0.3f ? Sectors.SMALL : Sectors.WINDOW;
+            } else if (role == 1 && storey == 0 && two && roll < 0.55f) {
+                o.kind = Sectors.GARDEN;
+            } else if (roll < 0.14f) {
+                o.kind = Sectors.SMALL;
+                two = false;
+            } else o.kind = Sectors.WINDOW;
+            int span = o.kind == Sectors.SMALL ? 1 : (two ? 2 : 1);
+            if (o.kind == Sectors.WINDOW && span == 1 && role != 2 && q.nextFloat() < 0.5f) { k++; continue; }
+            float inset = o.kind == Sectors.SMALL ? 0.2f : 0.1f;
+            o.s0 = margin + k * MODULE + inset;
+            o.s1 = margin + (k + span) * MODULE - inset;
+            switch (o.kind) {
+                case Sectors.SMALL: o.y0 = 1.2f; o.y1 = 1.8f; o.tex = small; break;
+                case Sectors.GARDEN: o.y0 = 0.05f; o.y1 = 2.0f; o.tex = garden; break;
+                default: o.y0 = 2.0f - d.winH; o.y1 = 2.0f; o.tex = win; break;
+            }
+            o.canopy = d.hisashi && o.kind != Sectors.SMALL;
+            out.add(o);
+            k += span + 1;
+        }
+        out.sort((a, b) -> Float.compare(a.s0, b.s0));
+        return out;
+    }
+
+    /**
+     * One storey band of a face: the wall laid round its openings (columns of wall between them,
+     * and the pieces above and below each), then the window / door panels set into them with a
+     * sill and, on traditional houses, a little canopy over the window.
+     */
+    private void storeyFace(Design d, float ua, float va, float ub, float vb, float nu, float nv, float y0, float y1,
+                            int mat, List<Opening> ops, float sOff, float clip0, float clip1) {
+        float len = (float) Math.hypot(ub - ua, vb - va);
+        float tu = (ub - ua) / len, tv = (vb - va) / len;
+        float s = clip0;
+        for (Opening o : ops) {
+            if (o.s0 < clip0 || o.s1 > clip1) continue;
+            // wall up to the opening, then under and over it
+            wallRect(ua + tu * s, va + tv * s, ua + tu * o.s0, va + tv * o.s0, y0, y1, nu, nv, mat, sOff + s, 0f, 0);
+            float oy0 = y0 + o.y0, oy1 = Math.min(y1, y0 + o.y1);
+            if (o.y0 > 0.01f) wallRect(ua + tu * o.s0, va + tv * o.s0, ua + tu * o.s1, va + tv * o.s1, y0, oy0, nu, nv, mat, sOff + o.s0, 0f, 0);
+            if (oy1 < y1 - 0.01f) wallRect(ua + tu * o.s0, va + tv * o.s0, ua + tu * o.s1, va + tv * o.s1, oy1, y1, nu, nv, mat, sOff + o.s0, 0f, 0);
+            // the panel, set 6 cm back into the opening, with reveals round it
+            float rv = 0.06f;
+            float pa = ua + tu * o.s0 - nu * rv, qa = va + tv * o.s0 - nv * rv;
+            float pb = ua + tu * o.s1 - nu * rv, qb = va + tv * o.s1 - nv * rv;
+            poly(new float[]{pa, oy0, qa, pb, oy0, qb, pb, oy1, qb, pa, oy1, qa}, new float[]{0, 1, 1, 1, 1, 0, 0, 0},
+                    o.tex, nu, 0f, nv, 0.02f, Geo.FLAG_NO_SUBDIV);
+            // reveals: the sides and head of the opening's depth
+            float ea = ua + tu * o.s0, fa = va + tv * o.s0, eb = ua + tu * o.s1, fb = va + tv * o.s1;
+            poly(new float[]{ea, oy0, fa, pa, oy0, qa, pa, oy1, qa, ea, oy1, fa}, new float[]{0, 1, 0.2f, 1, 0.2f, 0, 0, 0},
+                    lib.sill, tu, 0f, tv, 0f, Geo.FLAG_NO_SUBDIV);
+            poly(new float[]{pb, oy0, qb, eb, oy0, fb, eb, oy1, fb, pb, oy1, qb}, new float[]{0, 1, 0.2f, 1, 0.2f, 0, 0, 0},
+                    lib.sill, -tu, 0f, -tv, 0f, Geo.FLAG_NO_SUBDIV);
+            poly(new float[]{ea, oy1, fa, eb, oy1, fb, pb, oy1, qb, pa, oy1, qa}, new float[]{0, 0, 1, 0, 1, 0.2f, 0, 0.2f},
+                    lib.sill, 0f, -1f, 0f, 0f, Geo.FLAG_NO_SUBDIV);
+            if (o.kind == Sectors.WINDOW || o.kind == Sectors.SMALL) {
+                // aluminium sill sticking out under the window
+                float so = 0.07f, sh = 0.04f;
+                float a0 = o.s0 - 0.05f, a1 = o.s1 + 0.05f;
+                float sx0 = ua + tu * a0, sz0 = va + tv * a0, sx1 = ua + tu * a1, sz1 = va + tv * a1;
+                poly(new float[]{sx0, oy0, sz0, sx1, oy0, sz1, sx1 + nu * so, oy0, sz1 + nv * so, sx0 + nu * so, oy0, sz0 + nv * so},
+                        new float[]{0, 0, 1, 0, 1, 1, 0, 1}, lib.sill, 0f, 1f, 0f, -0.05f, Geo.FLAG_NO_SUBDIV);
+                poly(new float[]{sx0 + nu * so, oy0 - sh, sz0 + nv * so, sx1 + nu * so, oy0 - sh, sz1 + nv * so,
+                        sx1 + nu * so, oy0, sz1 + nv * so, sx0 + nu * so, oy0, sz0 + nv * so},
+                        new float[]{0, 1, 1, 1, 1, 0, 0, 0}, lib.sill, nu, 0f, nv, -0.05f, Geo.FLAG_NO_SUBDIV);
+            }
+            if (o.canopy && oy1 + 0.35f < y1 + 0.3f) {
+                // kirimoke-bisashi: a small sloping canopy over the window
+                float cy = oy1 + 0.22f, co = 0.45f, a0 = o.s0 - 0.2f, a1 = o.s1 + 0.2f;
+                float cx0 = ua + tu * a0, cz0 = va + tv * a0, cx1 = ua + tu * a1, cz1 = va + tv * a1;
+                poly(new float[]{cx0, cy + 0.12f, cz0, cx1, cy + 0.12f, cz1, cx1 + nu * co, cy, cz1 + nv * co, cx0 + nu * co, cy, cz0 + nv * co},
+                        new float[]{0, 0, (a1 - a0) * 0.5f, 0, (a1 - a0) * 0.5f, 0.3f, 0, 0.3f}, lib.houseRoof[d.roofTex], 0f, 1f, 0f, -0.08f, Geo.FLAG_NO_SUBDIV);
+                poly(new float[]{cx0 + nu * co, cy - 0.06f, cz0 + nv * co, cx1 + nu * co, cy - 0.06f, cz1 + nv * co,
+                        cx1 + nu * co, cy, cz1 + nv * co, cx0 + nu * co, cy, cz0 + nv * co},
+                        new float[]{0, 1, 1, 1, 1, 0, 0, 0}, trimTex, nu, 0f, nv, -0.08f, Geo.FLAG_NO_SUBDIV);
+                poly(new float[]{cx0, cy - 0.06f, cz0, cx1, cy - 0.06f, cz1, cx1 + nu * co, cy - 0.06f, cz1 + nv * co, cx0 + nu * co, cy - 0.06f, cz0 + nv * co},
+                        new float[]{0, 0, 1, 0, 1, 1, 0, 1}, lib.soffit, 0f, -1f, 0f, -0.08f, Geo.FLAG_NO_SUBDIV);
+            }
+            s = o.s1;
+        }
+        wallRect(ua + tu * s, va + tv * s, ua + tu * clip1, va + tv * clip1, y0, y1, nu, nv, mat, sOff + s, 0f, 0);
+    }
+
+    // ------------------------------------------------------------------ one mass
+
+    /**
+     * Foundation, walls (round their openings, only where no other mass stands against them),
+     * the floor band and the roof of one mass.
+     */
+    private void massGeometry(Design d, Mass m, boolean main, List<Mass> all, float floor0, float base) {
+        // the four faces in order, walked anticlockwise seen from above; each with its outward normal
+        float[][] faces = {
+                {m.u1, m.v0, m.u0, m.v0, 0f, -1f},    // front (v0), walked right to left as seen from the street
+                {m.u1, m.v1, m.u1, m.v0, 1f, 0f},     // right (u1)
+                {m.u0, m.v1, m.u1, m.v1, 0f, 1f},     // back (v1)
+                {m.u0, m.v0, m.u0, m.v1, -1f, 0f}};   // left (u0)
+        int[] roles = {0, 2, 1, 2};
+        int[] sideIdx = {0, 3, 1, 2};                 // index into Mass.abut
+        int mat1 = lib.houseMat[d.mat1], mat2 = lib.houseMat[m.floors > 1 ? d.mat2 : d.mat1];
+        for (int fi = 0; fi < 4; fi++) {
+            float[] f = faces[fi];
+            float ua = f[0], va = f[1], ub = f[2], vb = f[3], nu = f[4], nv = f[5];
+            float len = (float) Math.hypot(ub - ua, vb - va);
+            // the part of this face another mass stands against (hidden up to that mass's wall top)
+            float hid0 = Float.NaN, hid1 = Float.NaN, hidTop = 0f;
+            for (Mass o : all) {
+                if (o == m) continue;
+                float[] cov = coverage(m, fi, o);
+                if (cov != null) { hid0 = cov[0]; hid1 = cov[1]; hidTop = o.roofHigh; }
+            }
+            // foundation: from the ground up to the floor, following the slope
+            foundationWall(ua, va, ub, vb, nu, nv, floor0, hid0, hid1, len);
+            for (int st = 0; st < m.floors; st++) {
+                float y0 = floor0 + st * d.floorH, y1 = y0 + d.floorH;
+                boolean doorHere = main && fi == 0 && st == 0;
+                boolean balc = main && fi == 0 && st == 1 && d.balcony;
+                List<Opening> ops = plan(d, main, roles[fi], st, len, doorHere, balc);
+                if (balc) for (Opening o : ops) if (o.kind == Sectors.GARDEN) {
+                    // remember where the balcony door is: the balcony is built in front of it
+                    float a = Math.min(o.s0, o.s1), b = Math.max(o.s0, o.s1);
+                    balconyU0 = ua + (ub - ua) / len * b;
+                    balconyU1 = ua + (ub - ua) / len * a;
+                    if (balconyU0 > balconyU1) { float t = balconyU0; balconyU0 = balconyU1; balconyU1 = t; }
+                }
+                int mat = st == 0 ? mat1 : mat2;
+                if (!Float.isNaN(hid0) && y1 <= hidTop + 0.01f) {
+                    // part of the band is covered by the other mass: wall only either side of it
+                    List<Opening> keep = new ArrayList<>();
+                    for (Opening o : ops) if (o.s1 <= hid0 - 0.2f || o.s0 >= hid1 + 0.2f) keep.add(o);
+                    if (hid0 > 0.01f) storeyFace(d, ua, va, ub, vb, nu, nv, y0, y1, mat, keep, 0f, 0f, hid0);
+                    if (hid1 < len - 0.01f) storeyFace(d, ua, va, ub, vb, nu, nv, y0, y1, mat, keep, 0f, hid1, len);
+                } else storeyFace(d, ua, va, ub, vb, nu, nv, y0, y1, mat, ops, 0f, 0f, len);
+            }
+            // floor band between the storeys on two-tone houses
+            if (m.floors > 1 && d.mat1 != d.mat2 && Float.isNaN(hid0)) {
+                float y = floor0 + d.floorH;
+                float o = 0.035f;
+                wallRect(ua + nu * o, va + nv * o, ub + nu * o, vb + nv * o, y - 0.06f, y + 0.08f, nu, nv, trimTex, 0f, -0.04f, Geo.FLAG_NO_SUBDIV);
+                poly(new float[]{ua, y + 0.08f, va, ub, y + 0.08f, vb, ub + nu * o, y + 0.08f, vb + nv * o, ua + nu * o, y + 0.08f, va + nv * o},
+                        new float[]{0, 0, len * 0.5f, 0, len * 0.5f, 0.1f, 0, 0.1f}, trimTex, 0f, 1f, 0f, -0.04f, Geo.FLAG_NO_SUBDIV);
+            }
+        }
+        roof(d, m, main);
+        // the entrance: canopy over the door and a concrete step
+        if (main && d.porch) entrance(d, m, floor0);
+    }
+
+    /**
+     * Where mass {@code o} stands against face {@code fi} of mass {@code m}: the along-face s range
+     * {s0, s1} measured from the face's start corner, or null.
+     */
+    private static float[] coverage(Mass m, int fi, Mass o) {
+        float e = 0.02f;
+        float a0, a1, b0, b1;
+        switch (fi) {
+            case 0: if (Math.abs(o.v1 - m.v0) > e) return null; a0 = Math.max(m.u0, o.u0); a1 = Math.min(m.u1, o.u1); if (a1 - a0 < 0.1f) return null; return new float[]{m.u1 - a1, m.u1 - a0};
+            case 1: if (Math.abs(o.u0 - m.u1) > e) return null; b0 = Math.max(m.v0, o.v0); b1 = Math.min(m.v1, o.v1); if (b1 - b0 < 0.1f) return null; return new float[]{m.v1 - b1, m.v1 - b0};
+            case 2: if (Math.abs(o.v0 - m.v1) > e) return null; a0 = Math.max(m.u0, o.u0); a1 = Math.min(m.u1, o.u1); if (a1 - a0 < 0.1f) return null; return new float[]{a0 - m.u0, a1 - m.u0};
+            default: if (Math.abs(o.u1 - m.u0) > e) return null; b0 = Math.max(m.v0, o.v0); b1 = Math.min(m.v1, o.v1); if (b1 - b0 < 0.1f) return null; return new float[]{b0 - m.v0, b1 - m.v0};
+        }
+    }
+
+    /** Concrete foundation from the ground (each end follows the terrain) up to the floor. */
+    private void foundationWall(float ua, float va, float ub, float vb, float nu, float nv, float floor0, float hid0, float hid1, float len) {
+        float tu = (ub - ua) / len, tv = (vb - va) / len;
+        float[][] spans = Float.isNaN(hid0) ? new float[][]{{0f, len}} : new float[][]{{0f, hid0}, {hid1, len}};
+        for (float[] sp : spans) {
+            if (sp[1] - sp[0] < 0.02f) continue;
+            int n = Math.max(1, (int) Math.ceil((sp[1] - sp[0]) / 3f));
+            for (int k = 0; k < n; k++) {
+                float s0 = sp[0] + (sp[1] - sp[0]) * k / n, s1 = sp[0] + (sp[1] - sp[0]) * (k + 1) / n;
+                float pu = ua + tu * s0, pv = va + tv * s0, qu = ua + tu * s1, qv = va + tv * s1;
+                float g0 = gb.h(wx(pu, pv), wz(pu, pv)) - 0.25f, g1 = gb.h(wx(qu, qv), wz(qu, qv)) - 0.25f;
+                poly(new float[]{pu, g0, pv, qu, g1, qv, qu, floor0, qv, pu, floor0, pv},
+                        new float[]{s0 * 0.5f, 1f, s1 * 0.5f, 1f, s1 * 0.5f, 0f, s0 * 0.5f, 0f},
+                        lib.foundation, nu, 0f, nv, 0f, Geo.FLAG_NO_SUBDIV);
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ roofs
+
+    /** A roof plane point list in (a, b) roof coordinates to local (u, y, v) with y = A + Ba a + Bb b. */
+    private float[] roofPts(boolean ru, float[] ab, float A, float Ba, float Bb, float drop) {
+        int n = ab.length / 2;
+        float[] q = new float[n * 3];
+        for (int i = 0; i < n; i++) {
+            float a = ab[i * 2], b = ab[i * 2 + 1];
+            q[i * 3] = ru ? a : b;
+            q[i * 3 + 1] = A + Ba * a + Bb * b - drop;
+            q[i * 3 + 2] = ru ? b : a;
+        }
+        return q;
+    }
+
+    /** One sloping roof surface: covering on top, soffit boards underneath. */
+    private void roofFace(boolean ru, float[] ab, float A, float Ba, float Bb, int tex, boolean underside) {
+        float[] q = roofPts(ru, ab, A, Ba, Bb, 0f);
+        int n = ab.length / 2;
+        float[] uv = new float[n * 2];
+        // roofing runs down the slope: v along the fall line, u across it
+        float gl = (float) Math.hypot(Ba, Bb);
+        float fa = gl > 1e-4f ? Ba / gl : 0f, fb = gl > 1e-4f ? Bb / gl : 1f;
+        for (int i = 0; i < n; i++) {
+            float a = ab[i * 2], b = ab[i * 2 + 1];
+            float along = a * fb - b * fa, down = a * fa + b * fb;
+            uv[i * 2] = along * 0.5f;
+            uv[i * 2 + 1] = -down * 0.5f * (float) Math.sqrt(1f + gl * gl);
+        }
+        // the outward normal of the plane y = A + Ba a + Bb b is (-Ba, 1, -Bb) in (a, y, b)
+        float nu = ru ? -Ba : -Bb, nv = ru ? -Bb : -Ba;
+        poly(q, uv, tex, nu, 1f, nv, 0f, 0);
+        if (underside) {
+            float[] u2 = roofPts(ru, ab, A, Ba, Bb, 0.16f);
+            poly(u2, uv, lib.soffit, -nu, -1f, -nv, 0f, 0);
+        }
+    }
+
+    /** Fascia board along a roof edge from (a0,b0) to (a1,b1) in roof coordinates, facing out (oa, ob). */
+    private void fascia(boolean ru, float a0, float b0, float a1, float b1, float A, float Ba, float Bb, float oa, float ob, boolean gutter) {
+        float y0 = A + Ba * a0 + Bb * b0, y1 = A + Ba * a1 + Bb * b1;
+        float u0 = ru ? a0 : b0, v0 = ru ? b0 : a0, u1 = ru ? a1 : b1, v1 = ru ? b1 : a1;
+        float nu = ru ? oa : ob, nv = ru ? ob : oa;
+        float len = (float) Math.hypot(u1 - u0, v1 - v0);
+        poly(new float[]{u0, y0 - 0.2f, v0, u1, y1 - 0.2f, v1, u1, y1 + 0.03f, v1, u0, y0 + 0.03f, v0},
+                new float[]{0, 1, len * 0.5f, 1, len * 0.5f, 0, 0, 0}, trimTex, nu, 0f, nv, -0.03f, Geo.FLAG_NO_SUBDIV);
+        if (gutter) {
+            // half-round gutter hung under the eave: front and bottom
+            float g = 0.11f;
+            float gu0 = u0 + nu * g, gv0 = v0 + nv * g, gu1 = u1 + nu * g, gv1 = v1 + nv * g;
+            poly(new float[]{gu0, y0 - 0.2f, gv0, gu1, y1 - 0.2f, gv1, gu1, y1 - 0.06f, gv1, gu0, y0 - 0.06f, gv0},
+                    new float[]{0, 1, len, 1, len, 0, 0, 0}, gutterTex, nu, 0f, nv, -0.06f, Geo.FLAG_NO_SUBDIV);
+            poly(new float[]{u0, y0 - 0.2f, v0, u1, y1 - 0.2f, v1, gu1, y1 - 0.2f, gv1, gu0, y0 - 0.2f, gv0},
+                    new float[]{0, 0, len, 0, len, 1, 0, 1}, gutterTex, 0f, -1f, 0f, -0.06f, Geo.FLAG_NO_SUBDIV);
+        }
+    }
+
+    /** Downpipe from an eave corner (local u, v, just off the wall) down to the ground. */
+    private void downpipe(float u, float v, float top) {
+        float g = gb.h(wx(u, v), wz(u, v)) - 0.1f;
+        localBox(u - 0.04f, v - 0.04f, u + 0.04f, v + 0.04f, g, top, gutterTex, -1, -0.07f);
+    }
+
+    /** The roof of a mass with its eaves (overhang, soffit, fascia, gutters) and downpipes. */
+    private void roof(Design d, Mass m, boolean main) {
         int rt = lib.houseRoof[d.roofTex];
-        float top = m.top, p = d.pitch;
+        float top = m.top, o = m.roof == RoofType.FLAT ? 0f : d.overhang, og = Math.min(0.45f, d.overhang);
         switch (m.roof) {
             case FLAT: {
-                float t = 0.25f, h = top + 0.6f;
+                // parapet round a membrane roof
+                float t = 0.22f, h = top + 0.55f;
                 int trim = lib.houseMat[d.trim];
-                Sectors.Tiles cap = SectorBuilder.plain(trim, lib.concrete);
-                float u0 = m.u0, v0 = m.v0, u1 = m.u1, v1 = m.v1;
-                sb.piece(new float[]{u0 + t, v0 + t, u1 - t, v0 + t, u1 - t, v1 - t, u0 + t, v1 - t}, top + 0.05f, 0f, 0f, base, lib.roofMembrane, 2f, -1f, faces, cap);
-                sb.piece(new float[]{u0, v0, u1, v0, u1, v0 + t, u0, v0 + t}, h, 0f, 0f, base, trim, 2f, -1f, faces, cap);
-                sb.piece(new float[]{u0, v1 - t, u1, v1 - t, u1, v1, u0, v1}, h, 0f, 0f, base, trim, 2f, -1f, faces, cap);
-                sb.piece(new float[]{u0, v0 + t, u0 + t, v0 + t, u0 + t, v1 - t, u0, v1 - t}, h, 0f, 0f, base, trim, 2f, -1f, faces, cap);
-                sb.piece(new float[]{u1 - t, v0 + t, u1, v0 + t, u1, v1 - t, u1 - t, v1 - t}, h, 0f, 0f, base, trim, 2f, -1f, faces, cap);
+                poly(new float[]{m.u0, top + 0.05f, m.v0, m.u1, top + 0.05f, m.v0, m.u1, top + 0.05f, m.v1, m.u0, top + 0.05f, m.v1},
+                        new float[]{0, 0, (m.u1 - m.u0) * 0.5f, 0, (m.u1 - m.u0) * 0.5f, (m.v1 - m.v0) * 0.5f, 0, (m.v1 - m.v0) * 0.5f},
+                        lib.roofMembrane, 0f, 1f, 0f, 0f, 0);
+                localBox(m.u0, m.v0, m.u1, m.v0 + t, top, h, trim, trim, 0f);
+                localBox(m.u0, m.v1 - t, m.u1, m.v1, top, h, trim, trim, 0f);
+                localBox(m.u0, m.v0 + t, m.u0 + t, m.v1 - t, top, h, trim, trim, 0f);
+                localBox(m.u1 - t, m.v0 + t, m.u1, m.v1 - t, top, h, trim, trim, 0f);
+                downpipe(m.u0 - 0.06f, m.v1 + 0.06f, h - 0.1f);
                 break;
             }
             case SHED: {
-                float A, B = 0f, C = 0f;
-                switch (m.shedHigh) {
-                    case 0: A = top + p * m.v1; C = -p; break;
-                    case 1: A = top - p * m.v0; C = p; break;
-                    case 2: A = top + p * m.u1; B = -p; break;
-                    default: A = top - p * m.u0; B = p; break;
+                // mono-pitch: high on one side, the side walls rise to meet it
+                float p = m == null ? d.pitch : (main ? d.pitch * 0.7f : wingPitch);
+                boolean alongV = m.shedHigh < 2;              // the fall runs along v
+                float lo0 = alongV ? m.v0 : m.u0, lo1 = alongV ? m.v1 : m.u1;
+                float run = lo1 - lo0;
+                boolean highAtStart = m.shedHigh == 0 || m.shedHigh == 2;
+                // plane: y = top at the low wall, rising toward the high side
+                float slope = highAtStart ? -p : p;
+                float A = highAtStart ? top + p * lo1 : top - p * lo0;
+                // roof coordinates: a across the fall (u when alongV), b along the fall
+                boolean ru = alongV;
+                float a0 = alongV ? m.u0 : m.v0, a1 = alongV ? m.u1 : m.v1;
+                boolean abutHigh = highAtStart ? (alongV ? m.abut[0] : m.abut[2]) : (alongV ? m.abut[1] : m.abut[3]);
+                float oLow = o, oHigh = abutHigh ? 0f : o * 0.6f, oSide = og;
+                float b0 = lo0 - (highAtStart ? oHigh : oLow), b1 = lo1 + (highAtStart ? oLow : oHigh);
+                boolean sideAbut0 = alongV ? m.abut[2] : m.abut[0], sideAbut1 = alongV ? m.abut[3] : m.abut[1];
+                float ea0 = a0 - (sideAbut0 ? 0f : oSide), ea1 = a1 + (sideAbut1 ? 0f : oSide);
+                roofFace(ru, new float[]{ea0, b0, ea1, b0, ea1, b1, ea0, b1}, A, 0f, slope, rt, true);
+                // fascias: all free edges; gutter on the low edge
+                float bLow = highAtStart ? b1 : b0, bHigh = highAtStart ? b0 : b1;
+                float sLow = highAtStart ? 1f : -1f;
+                fascia(ru, ea0, bLow, ea1, bLow, A, 0f, slope, 0f, sLow, true);
+                if (!abutHigh) fascia(ru, ea1, bHigh, ea0, bHigh, A, 0f, slope, 0f, -sLow, false);
+                if (!sideAbut0) fascia(ru, ea0, b1, ea0, b0, A, 0f, slope, -1f, 0f, false);
+                if (!sideAbut1) fascia(ru, ea1, b0, ea1, b1, A, 0f, slope, 1f, 0f, false);
+                // side walls rise from the eave line up under the slope (trapezoids)
+                for (int e = 0; e < 2; e++) {
+                    if (e == 0 ? sideAbut0 : sideAbut1) continue;
+                    float a = e == 0 ? a0 : a1, s = e == 0 ? -1f : 1f;
+                    float yLo = A + slope * lo0, yHi = A + slope * lo1;
+                    float ua = ru ? a : lo0, va = ru ? lo0 : a, ub = ru ? a : lo1, vb = ru ? lo1 : a;
+                    float nu = ru ? s : 0f, nv = ru ? 0f : s;
+                    int mat = lib.houseMat[m.floors > 1 ? d.mat2 : d.mat1];
+                    poly(new float[]{ua, top, va, ub, top, vb, ub, yHi, vb, ua, yLo, va},
+                            new float[]{0, 0, run * 0.5f, 0, run * 0.5f, -(yHi - top) * 0.5f, 0, -(yLo - top) * 0.5f},
+                            mat, nu, 0f, nv, 0f, 0);
                 }
-                sb.piece(new float[]{m.u0, m.v0, m.u1, m.v0, m.u1, m.v1, m.u0, m.v1}, A, B, C, base, rt, 2f, -1f, faces, inner);
+                // the high wall rises to the slope too
+                if (!abutHigh) {
+                    float yH = A + slope * (highAtStart ? lo0 : lo1);
+                    float ua = ru ? a0 : (highAtStart ? lo0 : lo1), va = ru ? (highAtStart ? lo0 : lo1) : a0;
+                    float ub = ru ? a1 : ua, vb = ru ? va : a1;
+                    float nu = ru ? 0f : (highAtStart ? -1f : 1f), nv = ru ? (highAtStart ? -1f : 1f) : 0f;
+                    wallRect(ua, va, ub, vb, top, yH, nu, nv, lib.houseMat[m.floors > 1 ? d.mat2 : d.mat1], 0f, 0f, 0);
+                }
+                float pu = ru ? (highAtStart ? m.u0 : m.u1) : (highAtStart ? m.u1 : m.u0);
+                float pv = ru ? (highAtStart ? m.v1 : m.v0) : (highAtStart ? m.v0 : m.v1);
+                downpipe(pu + (pu == m.u0 ? -0.08f : 0.08f), pv + (pv == m.v0 ? -0.08f : 0.08f), top - 0.1f);
                 break;
             }
             default: {
-                // roof coordinates: a along the ridge, b across
                 boolean ru = m.ridgeU;
                 float a0 = ru ? m.u0 : m.v0, a1 = ru ? m.u1 : m.v1, b0 = ru ? m.v0 : m.u0, b1 = ru ? m.v1 : m.u1;
-                float half = (b1 - b0) * 0.5f, bm = (b0 + b1) * 0.5f;
-                float k = m.roof == RoofType.GABLE ? 0f : (m.roof == RoofType.IRIMOYA ? 0.5f : 1f);
-                float rk = Math.min(half, (a1 - a0) * 0.5f) * k;
-                float ma0 = a0 + rk, ma1 = a1 - rk;
-                // the gable middle: two slopes from the eaves up to the ridge
-                if (ma1 - ma0 > 0.01f) {
-                    roofPiece(ru, new float[]{ma0, b0, ma1, b0, ma1, bm, ma0, bm}, top - p * b0, 0f, p, base, rt, faces, inner);
-                    roofPiece(ru, new float[]{ma0, bm, ma1, bm, ma1, b1, ma0, b1}, top + p * b1, 0f, -p, base, rt, faces, inner);
-                }
-                if (rk > 0.01f) {
+                float p = d.pitch, half = (b1 - b0) * 0.5f, bm = (b0 + b1) * 0.5f;
+                float A0 = a0 - og, A1 = a1 + og, B0 = b0 - o, B1 = b1 + o;
+                float ridge = top + p * half;
+                // front slope plane: y = top - p (b - b0) ... rising toward bm: y = top + p (b - b0) for b < bm
+                float Af = top - p * b0, Ab = top + p * b1;      // planes y = Af + p b (front), y = Ab - p b (back)
+                if (m.roof == RoofType.GABLE || (A1 - A0) < (B1 - B0) * 0.6f) {
+                    roofFace(ru, new float[]{A0, B0, A1, B0, A1, bm, A0, bm}, Af, 0f, p, rt, true);
+                    roofFace(ru, new float[]{A0, bm, A1, bm, A1, B1, A0, B1}, Ab, 0f, -p, rt, true);
+                    // gable walls: triangles from the eave line up to the ridge
                     for (int e = 0; e < 2; e++) {
-                        float aE = e == 0 ? a0 : a1, s = e == 0 ? 1f : -1f, aK = aE + s * rk;
-                        // hipped end (for irimoya only its lower part: the gable wall stands above it)
-                        roofPiece(ru, new float[]{aE, b0, aE, b1, aK, b1 - rk, aK, b0 + rk}, top - p * s * aE, p * s, 0f, base, rt, faces, inner);
-                        roofPiece(ru, new float[]{aE, b0, aK, b0 + rk, aK, b0}, top - p * b0, 0f, p, base, rt, faces, inner);
-                        roofPiece(ru, new float[]{aE, b1, aK, b1, aK, b1 - rk}, top + p * b1, 0f, -p, base, rt, faces, inner);
+                        float a = e == 0 ? a0 : a1, s = e == 0 ? -1f : 1f;
+                        int mat = lib.houseMat[m.floors > 1 ? d.mat2 : d.mat1];
+                        float[] q = ru ? new float[]{a, top, b0, a, top, b1, a, ridge, bm} : new float[]{b0, top, a, b1, top, a, bm, ridge, a};
+                        poly(q, new float[]{0, -top * 0.5f, (b1 - b0) * 0.5f, -top * 0.5f, half * 0.5f, -ridge * 0.5f},
+                                mat, ru ? s : 0f, 0f, ru ? 0f : s, 0f, 0);
                     }
+                    // fascias: eaves with gutters, barge boards up the verges
+                    fascia(ru, A1, B0, A0, B0, Af, 0f, p, 0f, -1f, true);
+                    fascia(ru, A0, B1, A1, B1, Ab, 0f, -p, 0f, 1f, true);
+                    fascia(ru, A0, B0, A0, bm, Af, 0f, p, -1f, 0f, false);
+                    fascia(ru, A0, bm, A0, B1, Ab, 0f, -p, -1f, 0f, false);
+                    fascia(ru, A1, bm, A1, B0, Af, 0f, p, 1f, 0f, false);
+                    fascia(ru, A1, B1, A1, bm, Ab, 0f, -p, 1f, 0f, false);
+                    ridgeCap(ru, A0, A1, bm, ridge, rt);
+                } else {
+                    // hip / irimoya: eaves all round at the same height
+                    float e = top - p * o;
+                    float hb = (B1 - B0) * 0.5f;
+                    float rk = m.roof == RoofType.IRIMOYA ? hb * 0.55f : hb;   // how far the hip runs in
+                    float yk = e + p * rk;
+                    // end planes: y = Ae + p (a - A0) at the a0 end, rising inward
+                    float Ae0 = e - p * A0, Ae1 = e + p * A1;
+                    // front and back slopes (trapezoid up to the hip line, then the gable part to the ridge)
+                    roofFace(ru, new float[]{A0, B0, A1, B0, A1 - rk, B0 + rk, A0 + rk, B0 + rk}, Af, 0f, p, rt, true);
+                    roofFace(ru, new float[]{A1, B1, A0, B1, A0 + rk, B1 - rk, A1 - rk, B1 - rk}, Ab, 0f, -p, rt, true);
+                    if (bm - (B0 + rk) > 0.02f) {
+                        roofFace(ru, new float[]{A0 + rk, B0 + rk, A1 - rk, B0 + rk, A1 - rk, bm, A0 + rk, bm}, Af, 0f, p, rt, false);
+                        roofFace(ru, new float[]{A1 - rk, B1 - rk, A0 + rk, B1 - rk, A0 + rk, bm, A1 - rk, bm}, Ab, 0f, -p, rt, false);
+                    }
+                    // the ends: hipped slopes
+                    roofFace(ru, new float[]{A0, B1, A0, B0, A0 + rk, B0 + rk, A0 + rk, B1 - rk}, Ae0, p, 0f, rt, true);
+                    roofFace(ru, new float[]{A1, B0, A1, B1, A1 - rk, B1 - rk, A1 - rk, B0 + rk}, Ae1, -p, 0f, rt, true);
+                    if (m.roof == RoofType.IRIMOYA) {
+                        // the small gable (tsuma) standing on each hip
+                        float rTop = e + p * hb;
+                        int mat = lib.houseMat[d.trim];
+                        for (int k = 0; k < 2; k++) {
+                            float a = k == 0 ? A0 + rk : A1 - rk, s = k == 0 ? -1f : 1f;
+                            float[] q = ru ? new float[]{a, yk, B0 + rk, a, yk, B1 - rk, a, rTop, bm} : new float[]{B0 + rk, yk, a, B1 - rk, yk, a, bm, rTop, a};
+                            poly(q, new float[]{0, 1, 1, 1, 0.5f, 0}, mat, ru ? s : 0f, 0f, ru ? 0f : s, 0f, 0);
+                        }
+                    }
+                    // eave fascias with gutters on all four sides
+                    fascia(ru, A1, B0, A0, B0, Af, 0f, p, 0f, -1f, true);
+                    fascia(ru, A0, B1, A1, B1, Ab, 0f, -p, 0f, 1f, true);
+                    fascia(ru, A0, B0, A0, B1, Ae0, p, 0f, -1f, 0f, true);
+                    fascia(ru, A1, B1, A1, B0, Ae1, -p, 0f, 1f, 0f, true);
+                    ridgeCap(ru, A0 + rk, A1 - rk, bm, e + p * hb, rt);
+                    ridge = e + p * hb;
                 }
+                // downpipes at two eave corners
+                float du0 = m.u0 - 0.08f, du1 = m.u1 + 0.08f, dv = m.v1 + 0.08f, dv0 = m.v0 - 0.08f;
+                downpipe(du0, dv, top - 0.15f);
+                downpipe(du1, ru ? dv0 : dv, top - 0.15f);
                 break;
             }
         }
-        sb.taken(m.u0, m.v0, m.u1, m.v1);
     }
 
-    /** A roof piece given in roof coordinates (a, b) with plane y = A + Ba a + Bb b. */
-    private void roofPiece(boolean ru, float[] ab, float A, float Ba, float Bb, float base, int tex, SectorBuilder.Face[] faces, Sectors.Tiles inner) {
-        float[] uv = new float[ab.length];
-        for (int i = 0; i < ab.length; i += 2) {
-            uv[i] = ru ? ab[i] : ab[i + 1];
-            uv[i + 1] = ru ? ab[i + 1] : ab[i];
-        }
-        sb.piece(uv, A, ru ? Ba : Bb, ru ? Bb : Ba, base, tex, 2f, -1f, faces, inner);
+    /** A ridge cap: a narrow box along the ridge (roof coordinates a0..a1 at b = bm). */
+    private void ridgeCap(boolean ru, float a0, float a1, float bm, float y, int tex) {
+        if (a1 - a0 < 0.05f) return;
+        float w = 0.13f, h = 0.12f;
+        if (ru) localBox(a0, bm - w, a1, bm + w, y - 0.04f, y + h, tex, tex, -0.02f);
+        else localBox(bm - w, a0, bm + w, a1, y - 0.04f, y + h, tex, tex, -0.02f);
+    }
+
+    /** Entrance canopy over the front door and a concrete step in front of it. */
+    private void entrance(Design d, Mass m, float floor0) {
+        float doorU = d.leftDoor ? m.u0 + 1.4f : m.u1 - 1.4f;
+        // the door was planned on the module grid from the front face's start (u1, walking to u0)
+        float len = m.u1 - m.u0;
+        int mods = (int) (len / MODULE);
+        float margin = (len - mods * MODULE) * 0.5f;
+        boolean wide = lib.houseDoorKind[d.door] == HouseTextures.Door.SLIDING_LATTICE || lib.houseDoorKind[d.door] == HouseTextures.Door.SLIDING_GLASS;
+        int dm = wide ? 2 : 1;
+        int at = Math.max(0, Math.min(mods - dm, d.leftDoor ? mods - 1 - dm : 1));
+        float s0 = margin + at * MODULE, s1 = margin + (at + dm) * MODULE;
+        float c = m.u1 - (s0 + s1) * 0.5f;
+        doorU = c;
+        float hw = dm * MODULE * 0.5f + 0.35f, dep = 0.95f, y = floor0 + 2.45f;
+        float v = m.v0;
+        // canopy: a thin sloping slab with a fascia and soffit
+        poly(new float[]{doorU - hw, y + 0.1f, v, doorU + hw, y + 0.1f, v, doorU + hw, y, v - dep, doorU - hw, y, v - dep},
+                new float[]{0, 0, hw, 0, hw, 0.5f, 0, 0.5f}, lib.canopyMetal, 0f, 1f, 0f, -0.1f, Geo.FLAG_NO_SUBDIV);
+        poly(new float[]{doorU - hw, y - 0.08f, v, doorU + hw, y - 0.08f, v, doorU + hw, y - 0.08f, v - dep, doorU - hw, y - 0.08f, v - dep},
+                new float[]{0, 0, 1, 0, 1, 1, 0, 1}, lib.soffit, 0f, -1f, 0f, -0.1f, Geo.FLAG_NO_SUBDIV);
+        poly(new float[]{doorU - hw, y - 0.08f, v - dep, doorU + hw, y - 0.08f, v - dep, doorU + hw, y, v - dep, doorU - hw, y, v - dep},
+                new float[]{0, 1, 1, 1, 1, 0, 0, 0}, trimTex, 0f, 0f, -1f, -0.1f, Geo.FLAG_NO_SUBDIV);
+        // two steps up to the door (the floor is above the foundation)
+        float g = gb.h(wx(doorU, v - 0.6f), wz(doorU, v - 0.6f));
+        localBox(doorU - hw + 0.2f, v - 1.1f, doorU + hw - 0.2f, v, g - 0.2f, floor0 - 0.2f, lib.concrete, lib.concrete, -0.05f);
+        localBox(doorU - hw + 0.2f, v - 0.55f, doorU + hw - 0.2f, v, g - 0.2f, floor0, lib.concrete, lib.concrete, -0.06f);
     }
 
     // ------------------------------------------------------------------ extras
@@ -545,15 +976,15 @@ final class HouseGen {
             gb.wallUnit(wx(main.u0, v), wz(main.u0, v), nx, nz, 0.8f, base + 0.15f, 0.62f, 0.3f, lib.aircon, lib.airconSide);
             if (main.floors >= 2 && (d.id & 1) == 0) {
                 float v2 = main.v0 + (main.v1 - main.v0) * 0.65f;
-                gb.wallUnit(wx(main.u0, v2), wz(main.u0, v2), nx, nz, 0.8f, base + d.floorH + 0.3f, 0.62f, 0.3f, lib.aircon, lib.airconSide);
+                gb.wallUnit(wx(main.u0, v2), wz(main.u0, v2), nx, nz, 0.8f, base + PLINTH + d.floorH + 0.3f, 0.62f, 0.3f, lib.aircon, lib.airconSide);
             }
         }
-        // balcony on the upper floor of the front: slab, two sides and the front (none at the wall)
-        if (d.balcony && main.floors >= 2) {
-            float bw = Math.min(4.2f, (main.u1 - main.u0) * 0.55f), cu = (main.u0 + main.u1) * 0.5f;
-            float nx = wx(cu, main.v0 - 1f) - wx(cu, main.v0), nz = wz(cu, main.v0 - 1f) - wz(cu, main.v0);
-            gb.balcony(wx(cu - bw * 0.5f, main.v0), wz(cu - bw * 0.5f, main.v0), wx(cu + bw * 0.5f, main.v0), wz(cu + bw * 0.5f, main.v0),
-                    nx, nz, base + d.floorH, 1.0f, 1.05f, lib.balconyFront, lib.balconySlab);
+        // balcony on the upper floor of the front, built in front of the balcony door it serves
+        if (d.balcony && main.floors >= 2 && !Float.isNaN(balconyU0)) {
+            float bu0 = Math.max(main.u0 + 0.2f, balconyU0 - 0.55f), bu1 = Math.min(main.u1 - 0.2f, balconyU1 + 0.55f);
+            float nx = wx(bu0, main.v0 - 1f) - wx(bu0, main.v0), nz = wz(bu0, main.v0 - 1f) - wz(bu0, main.v0);
+            gb.balcony(wx(bu0, main.v0), wz(bu0, main.v0), wx(bu1, main.v0), wz(bu1, main.v0),
+                    nx, nz, base + PLINTH + d.floorH, 1.0f, 1.05f, lib.balconyFront, lib.balconySlab);
         }
         if (!lot) return;
         // carport: four posts and a flat polycarbonate roof

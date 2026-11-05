@@ -133,6 +133,9 @@ public final class TextureLibrary {
     public int[] houseMat, houseWin, houseDoor, houseRoof;
     /** Plank walls and plank doors for barns, sheds and the shrine hall (no windows painted on). */
     public int[] barnWall, barnDoor;
+    /** House parts: eave soffit boards, fascia / gutter colours, foundation, window sills, canopies. */
+    public int soffit, foundation, sill, canopyMetal;
+    public int[] fascia, gutter;
     public HouseTextures.Material[] houseMatKind;
     public HouseTextures.Window[] houseWinKind;
     public HouseTextures.Door[] houseDoorKind;
@@ -156,13 +159,24 @@ public final class TextureLibrary {
                 {K, 0xA06048}, {K, 0x8A5A44}, {K, 0xC09078},
                 {P, 0xDADAD4}, {P, 0x9AA0A4}, {P, 0x6A6E72}, {P, 0xE6E0D2},
                 {L, 0xF2F0E8}, {L, 0xE8E2D2},
-                {C, 0x2A2420}};
+                {C, 0x2A2420},
+                {HouseTextures.Material.STONE, 0xD8D0C2}, {HouseTextures.Material.STONE, 0xB8B0A4}, {HouseTextures.Material.STONE, 0xC8B8A0}};
         houseMat = new int[mats.length];
         houseMatKind = new HouseTextures.Material[mats.length];
         for (int i = 0; i < mats.length; i++) {
             houseMatKind[i] = (HouseTextures.Material) mats[i][0];
             houseMat[i] = add(HouseTextures.material(houseMatKind[i], (Integer) mats[i][1], seed + 3000 + i));
         }
+        soffit = add(HouseTextures.soffit(seed + 3070));
+        foundation = add(HouseTextures.foundation(seed + 3071));
+        sill = add(HouseTextures.trim(0xB4B8BC, seed + 3072));
+        canopyMetal = add(HouseTextures.trim(0x4A4E52, seed + 3073));
+        int[] fasciaColours = {0xEEEEEA, 0x3A3A3C, 0x6A5444, 0x8A8E92, 0x2E3A4A};
+        fascia = new int[fasciaColours.length];
+        for (int i = 0; i < fasciaColours.length; i++) fascia[i] = add(HouseTextures.trim(fasciaColours[i], seed + 3074 + i));
+        int[] gutterColours = {0xE8E6E0, 0x5A4A3E, 0x8A8E92, 0x2E2E30};
+        gutter = new int[gutterColours.length];
+        for (int i = 0; i < gutterColours.length; i++) gutter[i] = add(HouseTextures.trim(gutterColours[i], seed + 3080 + i));
         int[] barnColours = {0x5A4434, 0x7A7068, 0x3A2C24, 0x6A3A2C, 0x8A7A62};
         barnWall = new int[barnColours.length];
         for (int i = 0; i < barnColours.length; i++)

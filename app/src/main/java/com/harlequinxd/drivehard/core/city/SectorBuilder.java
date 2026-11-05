@@ -44,25 +44,51 @@ final class SectorBuilder {
     static void toMeshes(Sectors source, GeoBuilder gb) {
         for (Sectors.Sector sector : source.sectors) roof(gb, sector);
         for (Sectors.Wall wall : source.walls) {
-            // what is outside this wall: another roof (draw only the step above it) or open ground
-            float mx = (wall.x0 + wall.x1) * 0.5f + wall.nx * 0.05f, mz = (wall.z0 + wall.z1) * 0.5f + wall.nz * 0.05f;
-            Sectors.Sector out = null;
-            for (Sectors.Sector o : source.sectors) {
-                if (o == wall.front || !o.contains(mx, mz)) continue;
-                if (out == null || o.y(mx, mz) > out.y(mx, mz)) out = o;
-            }
-            float top0 = wall.front.y(wall.x0, wall.z0), top1 = wall.front.y(wall.x1, wall.z1);
-            if (out != null) {
-                float b0 = out.y(wall.x0, wall.z0), b1 = out.y(wall.x1, wall.z1);
-                if (Math.max(top0 - b0, top1 - b1) > 0.02f) wall(gb, wall, b0, b1, top0, top1, false);
-            } else {
-                wall(gb, wall, 0f, 0f, top0, top1, true);
+            // what is outside this wall, checked along its whole length (a neighbour may cover only
+            // part of it): another roof there leaves only the step above it, open ground the full wall
+            int n = Math.max(1, (int) Math.ceil(wall.len / 0.5f));
+            Sectors.Sector runOut = null;
+            int runStart = 0;
+            for (int k = 0; k <= n; k++) {
+                Sectors.Sector out = null;
+                if (k < n) {
+                    float t = (k + 0.5f) / n;
+                    float mx = wall.x0 + (wall.x1 - wall.x0) * t + wall.nx * 0.05f, mz = wall.z0 + (wall.z1 - wall.z0) * t + wall.nz * 0.05f;
+                    for (Sectors.Sector o : source.sectors) {
+                        if (o == wall.front || !o.contains(mx, mz)) continue;
+                        if (out == null || o.y(mx, mz) > out.y(mx, mz)) out = o;
+                    }
+                }
+                if (k > 0 && (k == n || out != runOut)) {
+                    wallRun(gb, wall, runStart / (float) n, k / (float) n, runOut);
+                    runStart = k;
+                }
+                runOut = out;
             }
         }
         slabs(gb, source.slabs);
         source.sectors.clear();
         source.walls.clear();
         source.slabs.clear();
+    }
+
+    /** Part t0..t1 of a wall with {@code out} (or open ground) beyond it. */
+    private static void wallRun(GeoBuilder gb, Sectors.Wall wall, float t0, float t1, Sectors.Sector out) {
+        Sectors.Wall w = wall;
+        if (t0 > 1e-4f || t1 < 1f - 1e-4f) {
+            w = new Sectors.Wall(wall.x0 + (wall.x1 - wall.x0) * t0, wall.z0 + (wall.z1 - wall.z0) * t0,
+                    wall.x0 + (wall.x1 - wall.x0) * t1, wall.z0 + (wall.z1 - wall.z0) * t1, wall.nx, wall.nz, wall.front, wall.back, wall.tiles);
+            w.faceLen = wall.faceLen;
+            w.uOff = wall.uOff + wall.len * t0;
+            w.light = wall.light;
+        }
+        float top0 = w.front.y(w.x0, w.z0), top1 = w.front.y(w.x1, w.z1);
+        if (out != null) {
+            float b0 = out.y(w.x0, w.z0), b1 = out.y(w.x1, w.z1);
+            if (Math.max(top0 - b0, top1 - b1) > 0.02f) wall(gb, w, b0, b1, top0, top1, false);
+        } else {
+            wall(gb, w, 0f, 0f, top0, top1, true);
+        }
     }
 
     /** Roof tiles: tile size along the roof axes, so the ordering table sorts small pieces. */
