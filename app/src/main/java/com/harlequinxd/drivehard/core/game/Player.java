@@ -17,6 +17,8 @@ public final class Player {
     public static final float SWIM_DEPTH = 1.25f, STAND_DEPTH = 1.05f;
     /** Breaststroke (walk), front crawl (run). */
     public static final float BREAST_SPEED = 1.05f, CRAWL_SPEED = 2.1f;
+    /** Top speed pushing through waist-deep water; deeper than WADE_DEPTH she uses the wading walk. */
+    public static final float WADE_SPEED = 1.05f, WADE_DEPTH = 0.55f;
 
     public float x, y, z, vx, vy, vz;
     /** Swimming in deep water (y is then the water surface). */
@@ -51,8 +53,12 @@ public final class Player {
         // --- horizontal velocity
         float target = 0f;
         if (mag > 0.08f) target = mag >= RUN_THRESHOLD ? RUN_SPEED : WALK_SPEED * Math.max(0.6f, mag / RUN_THRESHOLD);
-        // wading: the deeper the water, the harder to push through it
-        if (waterDepth > 0.05f && onGround) target *= 1f - Math.min(0.6f, waterDepth * 0.55f);
+        // wading: no running once the water is past the knees; waist deep it is a slow push
+        if (waterDepth > 0.25f && onGround && target > 0f) {
+            float k = Math.min(1f, (waterDepth - 0.25f) / 0.5f);
+            float cap = WALK_SPEED + (WADE_SPEED - WALK_SPEED) * k;
+            target = Math.min(target, cap * Math.max(0.6f, Math.min(1f, mag / RUN_THRESHOLD)));
+        } else if (waterDepth > 0.05f && onGround) target *= 1f - waterDepth * 0.8f;
         float dx = mag > 1e-4f ? mx / mag : 0f, dz = mag > 1e-4f ? mz / mag : 0f;
         float accel = onGround ? 22f : 7f;
         float tvx = dx * target, tvz = dz * target;
@@ -71,7 +77,7 @@ public final class Player {
         coyote = onGround ? 0.1f : coyote - dt;
         jumpBuffer = jump ? 0.12f : jumpBuffer - dt;
         if (jumpBuffer > 0f && coyote > 0f) {
-            vy = JUMP_VELOCITY;
+            vy = JUMP_VELOCITY * (1f - Math.min(0.5f, waterDepth * 0.5f));
             onGround = false;
             coyote = 0f;
             jumpBuffer = 0f;
@@ -237,7 +243,15 @@ public final class Player {
             animFrame = (int) (idleTime * 1.6f) % Anim.IDLE.frames;
             return;
         }
-        boolean run = speed > (WALK_SPEED + RUN_SPEED) * 0.5f;
+        if (waterDepth > WADE_DEPTH) {
+            // short, heavy strides through the water
+            phase += speed * dt / 1.05f;
+            phase -= (float) Math.floor(phase);
+            anim = Anim.WADE;
+            animFrame = (int) (phase * anim.frames) % anim.frames;
+            return;
+        }
+        boolean run = speed > (WALK_SPEED + RUN_SPEED) * 0.5f && waterDepth < 0.25f;
         // one cycle = two strides
         float cycleLen = run ? 2.75f : 1.4f;   // matched to the baked stride length
         phase += speed * dt / cycleLen;

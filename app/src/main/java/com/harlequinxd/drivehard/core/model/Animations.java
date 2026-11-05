@@ -12,6 +12,8 @@ import static com.harlequinxd.drivehard.core.model.CharacterModel.*;
 public final class Animations {
     public enum Anim {
         IDLE(4, true), WALK(8, true), RUN(8, true), JUMP(4, false),
+        /** Pushing through waist-deep water: short heavy strides, leaning in, arms up over the water. */
+        WADE(8, true),
         /** In deep water (baked into their own wider sheet, anchored at the waterline). */
         SWIM_TREAD(8, true), SWIM_BREAST(8, true), SWIM_FREE(8, true);
         public final int frames;
@@ -23,7 +25,7 @@ public final class Animations {
     public static final int JUMP_RISE = 0, JUMP_APEX = 1, JUMP_FALL = 2, JUMP_LAND = 3;
 
     /** The on-land animations (the main character sheet) and the swimming ones (the swim sheet). */
-    public static final Anim[] LAND = {Anim.IDLE, Anim.WALK, Anim.RUN, Anim.JUMP};
+    public static final Anim[] LAND = {Anim.IDLE, Anim.WALK, Anim.RUN, Anim.JUMP, Anim.WADE};
     public static final Anim[] SWIM = {Anim.SWIM_TREAD, Anim.SWIM_BREAST, Anim.SWIM_FREE};
 
     /** First frame of an animation within the given sheet's animation list. */
@@ -57,6 +59,7 @@ public final class Animations {
             case IDLE: return idle(p);
             case WALK: return walk(p);
             case RUN: return run(p);
+            case WADE: return wade(p);
             case SWIM_TREAD: return tread(p);
             case SWIM_BREAST: return breaststroke(p);
             case SWIM_FREE: return freestyle(p);
@@ -162,6 +165,33 @@ public final class Animations {
                 o.rx[PONY] = 0.3f;
                 break;
         }
+        return o;
+    }
+
+    /**
+     * Wading waist deep: the water resists every step, so strides are short and the knees lift
+     * high, the body leans into the water and twists with each step, and the arms are held up
+     * and out over the surface for balance, pushing forward alternately.
+     */
+    static Pose wade(float p) {
+        Pose o = new Pose();
+        float w = (float) (Math.PI * 2 * p), s = (float) Math.sin(w), c = (float) Math.cos(w);
+        float thL = -0.3f - 0.32f * s, thR = -0.3f + 0.32f * s;
+        float knL = 0.25f + 0.75f * (float) Math.pow(pos(c), 1.1);
+        float knR = 0.25f + 0.75f * (float) Math.pow(pos(-c), 1.1);
+        legs(o, thL, knL, thR, knR, 0.7f);
+        o.rx[CHEST] = 0.22f;                               // leaning into the water
+        o.rx[PELVIS] = 0.05f;
+        o.ry[PELVIS] = -0.2f * s;                          // the hips drive each step
+        o.ry[CHEST] = 0.3f * s;
+        o.rz[PELVIS] = 0.04f * c;
+        o.rx[HEAD] = -0.22f;
+        // arms raised out over the water, elbows bent, pushing forward in turn
+        o.rx[UARM_L] = -0.55f + 0.3f * s; o.rx[UARM_R] = -0.55f - 0.3f * s;
+        o.rz[UARM_L] = 0.75f; o.rz[UARM_R] = -0.75f;
+        o.rx[FARM_L] = -0.9f - 0.2f * pos(-s); o.rx[FARM_R] = -0.9f - 0.2f * pos(s);
+        o.rx[PONY] = 0.2f;
+        o.rz[PONY] = 0.08f * s;
         return o;
     }
 
