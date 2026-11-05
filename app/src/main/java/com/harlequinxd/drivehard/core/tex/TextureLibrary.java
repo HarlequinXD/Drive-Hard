@@ -14,7 +14,7 @@ import static com.harlequinxd.drivehard.core.tex.Img.rgb;
  * All world textures, generated at startup. Base materials are 64x64 (= 2 x 2 m), facades
  * 64x128 (one bay x one storey), shopfronts 128x128.
  */
-public final class TextureLibrary {
+public final class TextureLibrary implements java.io.Serializable {
     public final List<Texture> list = new ArrayList<>();
 
     public final int asphalt, asphaltPatched, sidewalk, pavers, concrete, curb, grass, sand, water, roofGravel,

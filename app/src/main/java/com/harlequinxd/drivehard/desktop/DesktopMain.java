@@ -44,6 +44,8 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
     private volatile String error = "";
     private volatile Game game;
     private volatile boolean running = true, travelling, imageReady;
+    /** The player asked for a fresh island: the current game ends and a new seed is generated. */
+    private volatile boolean newIsland;
     private volatile Screen screen = Screen.GAME;
     private int menuIndex;
     private boolean fullscreen;
@@ -60,7 +62,7 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
     private final Cursor blankCursor = Toolkit.getDefaultToolkit().createCustomCursor(
             new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB), new Point(0, 0), "none");
 
-    private static final String[] MENU = {"RESUME", "MAP", "FULLSCREEN", "QUIT TO DESKTOP"};
+    private static final String[] MENU = {"RESUME", "MAP", "FULLSCREEN", "NEW ISLAND", "QUIT TO DESKTOP"};
 
     private DesktopMain() {
         setBackground(Color.BLACK);
@@ -127,6 +129,10 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
     }
 
     public static void main(String[] args) {
+        // the game data folder beside the game: the island and the chunks already visited
+        com.harlequinxd.drivehard.core.data.WorldCache.root = com.harlequinxd.drivehard.core.data.WorldCache.desktopRoot();
+        com.harlequinxd.drivehard.core.data.WorldCache.build = com.harlequinxd.drivehard.core.data.WorldCache.desktopBuild();
+        for (String a : args) if (a.equals("--new-island")) saveSeed(Game.randomSeed());
         SwingUtilities.invokeLater(() -> {
             DesktopMain view = new DesktopMain();
             JFrame frame = new JFrame("Drive Hard");
@@ -145,6 +151,31 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
         });
     }
 
+    /** The island played last time (kept in the game data folder), or a new one on the first run. */
+    private static long savedSeed() {
+        java.io.File root = com.harlequinxd.drivehard.core.data.WorldCache.root;
+        java.io.File f = root == null ? null : new java.io.File(root, "island-seed.txt");
+        if (f != null && f.isFile()) {
+            try {
+                return Long.parseLong(new String(java.nio.file.Files.readAllBytes(f.toPath()), "UTF-8").trim());
+            } catch (Exception ignored) {
+            }
+        }
+        long seed = Game.randomSeed();
+        saveSeed(seed);
+        return seed;
+    }
+
+    private static void saveSeed(long seed) {
+        java.io.File root = com.harlequinxd.drivehard.core.data.WorldCache.root;
+        if (root == null) return;
+        try {
+            root.mkdirs();
+            java.nio.file.Files.write(new java.io.File(root, "island-seed.txt").toPath(), Long.toString(seed).getBytes("UTF-8"));
+        } catch (Exception ignored) {
+        }
+    }
+
     private void focusLost() {
         keys.clear();
         capture(false);
@@ -155,34 +186,21 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
 
     @Override public void run() {
         try {
-            loadScreen.reset("Starting up");
-            Game g = new Game(Game.randomSeed(), loadScreen::set);
-            g.setResolution(W, H);
-            game = g;
-            long previous = System.nanoTime(), stat = previous;
-            int frames = 0;
+            long seed = savedSeed();
             while (running) {
-                long start = System.nanoTime();
-                float dt = Math.min(.05f, (start - previous) / 1_000_000_000f);
-                previous = start;
-                frameTaps.clear();
-                Integer t;
-                while ((t = taps.poll()) != null) frameTaps.add(t);
-                boolean connected = pad.poll();
-                int buttons = connected ? pad.buttons() : 0;
-                int pressed = buttons & ~padPrev;
-                padPrev = buttons;
-                if (tapped(KeyEvent.VK_F11)) SwingUtilities.invokeLater(this::toggleFullscreen);
-                switch (screen) {
-                    case MAP: mapFrame(g, dt, connected, pressed); break;
-                    case PAUSE: pauseFrame(g, connected, pressed); break;
-                    default: gameFrame(g, dt, connected, pressed); break;
+                loadScreen.reset("Starting up");
+                newIsland = false;
+                Game g = new Game(seed, loadScreen::set);
+                g.setResolution(W, H);
+                game = g;
+                screen = Screen.GAME;
+                play(g);
+                if (newIsland) {
+                    game = null;
+                    g.dispose();
+                    seed = Game.randomSeed();
+                    saveSeed(seed);
                 }
-                repaint();
-                frames++;
-                if (start - stat > 1_000_000_000L) { fps = frames * 1_000_000_000f / (start - stat); frames = 0; stat = start; }
-                long wait = 16_666_667L - (System.nanoTime() - start);
-                if (wait > 0) java.util.concurrent.locks.LockSupport.parkNanos(wait);
             }
         } catch (Throwable e) {
             e.printStackTrace();
@@ -191,6 +209,36 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
             repaint();
         } finally {
             if (game != null) game.dispose();
+        }
+    }
+
+    /** Runs one island until the game is closed or a new island is asked for. */
+    private void play(Game g) {
+        long previous = System.nanoTime(), stat = previous;
+        int frames = 0;
+        while (running) {
+            long start = System.nanoTime();
+            float dt = Math.min(.05f, (start - previous) / 1_000_000_000f);
+            previous = start;
+            frameTaps.clear();
+            Integer t;
+            while ((t = taps.poll()) != null) frameTaps.add(t);
+            boolean connected = pad.poll();
+            int buttons = connected ? pad.buttons() : 0;
+            int pressed = buttons & ~padPrev;
+            padPrev = buttons;
+            if (tapped(KeyEvent.VK_F11)) SwingUtilities.invokeLater(this::toggleFullscreen);
+            switch (screen) {
+                case MAP: mapFrame(g, dt, connected, pressed); break;
+                case PAUSE: pauseFrame(g, connected, pressed); break;
+                default: gameFrame(g, dt, connected, pressed); break;
+            }
+            repaint();
+            frames++;
+            if (start - stat > 1_000_000_000L) { fps = frames * 1_000_000_000f / (start - stat); frames = 0; stat = start; }
+            long wait = 16_666_667L - (System.nanoTime() - start);
+            if (wait > 0) java.util.concurrent.locks.LockSupport.parkNanos(wait);
+            if (newIsland) break;
         }
     }
 
@@ -303,7 +351,8 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
         if (choose == 0) { screen = Screen.GAME; return; }
         if (choose == 1) { openMap(g); return; }
         if (choose == 2) SwingUtilities.invokeLater(this::toggleFullscreen);
-        if (choose == 3) { running = false; SwingUtilities.invokeLater(() -> window.dispose()); System.exit(0); }
+        if (choose == 3) { newIsland = true; return; }
+        if (choose == 4) { running = false; SwingUtilities.invokeLater(() -> window.dispose()); System.exit(0); }
         g.render();
         synchronized (image) {
             System.arraycopy(g.renderer.fb, 0, pixels, 0, pixels.length);

@@ -56,6 +56,15 @@ public final class Ground {
             return 1 + Math.min(254, Math.round((0.6f - h) * 20f));
         }
 
+        /** A tile read back from the game data cache. */
+        public Tile(int cx, int cz, short[][] mips, float[] h, byte[] water) {
+            this.cx = cx;
+            this.cz = cz;
+            System.arraycopy(mips, 0, this.mips, 0, Math.min(mips.length, this.mips.length));
+            System.arraycopy(h, 0, this.h, 0, Math.min(h.length, this.h.length));
+            this.water = water;
+        }
+
         public Tile(int cx, int cz, int[] base) {
             this.cx = cx;
             this.cz = cz;

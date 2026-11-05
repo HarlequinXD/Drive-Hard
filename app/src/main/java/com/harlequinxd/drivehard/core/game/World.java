@@ -5,7 +5,7 @@ import java.util.List;
 /**
  * Collision world: a walkable surface height function plus solid boxes near any point.
  */
-public abstract class World {
+public abstract class World implements java.io.Serializable {
     public float minX = -32, minZ = -32, maxX = 32, maxZ = 32;
 
     /** Solid boxes that may touch the point (within ~1.5 m). */

@@ -5,7 +5,7 @@ package com.harlequinxd.drivehard.core.road;
  * {@code s} run from node {@code a} (0) to node {@code b} ({@link #len}). Travel direction +1 goes
  * a→b, -1 goes b→a; lanes sit to the left of travel (traffic keeps left). Lane 0 is the kerb lane.
  */
-public final class RoadEdge {
+public final class RoadEdge implements java.io.Serializable {
     public final int id;
     public final RoadClass cls;
     public int a, b;

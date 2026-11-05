@@ -29,7 +29,7 @@ import static com.harlequinxd.drivehard.core.render.SoftRenderer.L_OBJECT;
  * has a cluster of houses, small apartments and a convenience store. Sites are placed once
  * (deterministically) and built chunk by chunk.
  */
-public final class Countryside {
+public final class Countryside implements java.io.Serializable {
     /** Field parcel size (metres), multiples of the 8 m terrain cell. */
     public static final int PARCEL_W = 40, PARCEL_D = 24;
 
@@ -45,7 +45,7 @@ public final class Countryside {
             SUPERMARKET = 9, SCHOOL = 10, SHRINE = 11, GAS = 12, TOWN_KONBINI = 13, HARBOUR = 14;
 
     /** A building site: footprint, kind, the side facing the road (0=N,1=S,2=W,3=E), driveway end. */
-    static final class Site {
+    static final class Site implements java.io.Serializable {
         float x0, z0, x1, z1;
         int kind, face, seed, design;
         boolean westNeighbor;
@@ -326,7 +326,7 @@ public final class Countryside {
 
     // ------------------------------------------------------------------ site placement
 
-    private HashSet<Long> taken = new HashSet<>();
+    private transient HashSet<Long> taken = new HashSet<>();
 
     private static long cellKey(int x, int z) { return ((long) x << 32) ^ (z & 0xFFFFFFFFL); }
 

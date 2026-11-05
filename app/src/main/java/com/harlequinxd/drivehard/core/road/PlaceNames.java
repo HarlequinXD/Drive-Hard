@@ -6,7 +6,7 @@ import java.util.Random;
 import java.util.Set;
 
 /** Japanese-style place names built from common name parts (Takahara, Shimo-Matsuzaki, ...). */
-public final class PlaceNames {
+public final class PlaceNames implements java.io.Serializable {
     private static final String[] ROOTS = {
             "Taka", "Kawa", "Yama", "Ishi", "Matsu", "Sakura", "Fuji", "Mori", "Hayashi", "Sawa", "Kuro", "Shira",
             "Ao", "Aka", "Hiro", "Naga", "Tsuru", "Kame", "Ume", "Kiri", "Asa", "Yoshi", "Toyo", "Mizu", "Iwa",

@@ -7,7 +7,7 @@ import com.harlequinxd.drivehard.core.tex.Noise;
  * N-S green, N-S yellow, all red, E-W green, E-W yellow, all red. Intersections are offset along
  * the avenues so traffic gets a loose "green wave". Cars and pedestrians query {@link #state}.
  */
-public final class TrafficLights {
+public final class TrafficLights implements java.io.Serializable {
     public static final int GREEN = 0, YELLOW = 1, RED = 2;
     public static final float GREEN_T = 14f, YELLOW_T = 3.5f, ALL_RED_T = 1.5f;
     public static final float CYCLE = 2f * (GREEN_T + YELLOW_T + ALL_RED_T);

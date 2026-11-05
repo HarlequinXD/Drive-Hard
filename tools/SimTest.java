@@ -339,11 +339,67 @@ public class SimTest {
         check("largest town spans about 7 km", largestTown >= 6800f);
         check("largest village spans about 3 km", largestVillage >= 2800f);
 
+        worldCacheTest();
+        // the rest runs on the island read back from the game data folder
         vehicleTest();
         fastTravelTest();
 
         System.out.println(fails == 0 ? "ALL OK" : fails + " FAILED");
         if (fails > 0) System.exit(1);
+    }
+
+    /** The game data folder: a second launch reads the island and chunks back, identical to generating them. */
+    static void worldCacheTest() {
+        java.io.File dir;
+        try { dir = java.nio.file.Files.createTempDirectory("drivehard-gamedata").toFile(); }
+        catch (java.io.IOException e) { check("temp game data folder", false); return; }
+        dir.deleteOnExit();
+        com.harlequinxd.drivehard.core.data.WorldCache.root = dir;
+        com.harlequinxd.drivehard.core.data.WorldCache.build = "simtest";
+        long t0 = System.nanoTime();
+        com.harlequinxd.drivehard.core.Game g1 = new com.harlequinxd.drivehard.core.Game(com.harlequinxd.drivehard.core.Game.DEFAULT_SEED, null);
+        long t1 = System.nanoTime();
+        check("first launch generates the island", !g1.loadedFromDisk && g1.worldCache != null);
+        g1.worldCache.flush();
+        int written = g1.worldCache.chunkWrites;
+        g1.dispose();
+        long t2 = System.nanoTime();
+        com.harlequinxd.drivehard.core.Game g2 = new com.harlequinxd.drivehard.core.Game(com.harlequinxd.drivehard.core.Game.DEFAULT_SEED, null);
+        long t3 = System.nanoTime();
+        System.out.printf("first launch %.1f s, second launch %.1f s (%d chunks saved, %d read back)%n",
+                (t1 - t0) / 1e9, (t3 - t2) / 1e9, written, g2.worldCache.chunkReads);
+        check("second launch reads the island from game data", g2.loadedFromDisk);
+        check("second launch reads the chunks from game data", g2.worldCache.chunkReads > 0 && g2.worldCache.chunkReads >= written / 2);
+        int cx = com.harlequinxd.drivehard.core.city.ChunkManager.chunkOf(g2.player.x);
+        int cz = com.harlequinxd.drivehard.core.city.ChunkManager.chunkOf(g2.player.z);
+        int same = 0, total = 0;
+        for (int dz = -1; dz <= 1; dz++)
+            for (int dx = -1; dx <= 1; dx++) {
+                com.harlequinxd.drivehard.core.city.Chunk d = g2.worldCache.readChunk(cx + dx, cz + dz);
+                if (d == null) continue;
+                total++;
+                if (chunkHash(d) == chunkHash(g2.city.generate(cx + dx, cz + dz))) same++;
+            }
+        check("saved chunks match freshly generated ones (" + same + "/" + total + ")", total > 0 && same == total);
+        g2.dispose();
+    }
+
+    static long chunkHash(com.harlequinxd.drivehard.core.city.Chunk c) {
+        long h = 17;
+        for (com.harlequinxd.drivehard.core.render.Geo g : c.batches) {
+            h = h * 31 + g.count;
+            for (int i = 0; i < g.count * 12; i++) h = h * 31 + Float.floatToIntBits(g.pos[i]);
+            for (int i = 0; i < g.count * 8; i++) h = h * 31 + Float.floatToIntBits(g.uv[i]);
+            for (int i = 0; i < g.count; i++) h = h * 31 + g.tex[i] * 7 + g.meta[i];
+        }
+        h = h * 31 + c.boxes.size() * 7 + c.spriteCount;
+        for (int i = 0; i < c.spriteCount * com.harlequinxd.drivehard.core.city.Chunk.SPRITE_STRIDE; i++) h = h * 31 + Float.floatToIntBits(c.sprites[i]);
+        if (c.ground != null) {
+            for (short[] m : c.ground.mips) for (short v : m) h = h * 31 + v;
+            for (float v : c.ground.h) h = h * 31 + Float.floatToIntBits(v);
+            if (c.ground.water != null) for (byte v : c.ground.water) h = h * 31 + v;
+        }
+        return h;
     }
 
     /** Get into a traffic car, drive it, get out, and take it again. */

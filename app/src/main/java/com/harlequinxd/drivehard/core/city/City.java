@@ -31,7 +31,7 @@ import static com.harlequinxd.drivehard.core.render.SoftRenderer.L_WATER;
  *
  * +X is east (toward the beach), +Z is south; vehicles keep left.
  */
-public final class City extends World {
+public final class City extends World implements java.io.Serializable {
     /** Everything on the ground is painted flat: no kerbs. */
     public static final float CURB = 0f, SIDEWALK = 4f;
     public static final float FLOOR_H = 3.4f, SHOP_H = 4.6f;
@@ -42,7 +42,7 @@ public final class City extends World {
     private final long seed;
     public final Terrain terrain;
     public final TrafficLights traffic;
-    public final ChunkManager chunks;
+    public transient ChunkManager chunks;
 
     public final int nbx = 100, nbz = 100;
     public final float[] rx0 = new float[nbx + 1], rx1 = new float[nbx + 1];
@@ -105,6 +105,12 @@ public final class City extends World {
         spawnZ = (rz1[bj] + rz0[bj + 1]) * 0.5f;
     }
 
+    /** Island read back from the game data cache: the chunk streamer starts empty. */
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+        in.defaultReadObject();
+        chunks = new ChunkManager(this);
+    }
+
     private int[] shopSet(String... labels) {
         List<Integer> out = new ArrayList<>();
         for (int k = 0; k < lib.shops.length; k++) {
@@ -143,7 +149,7 @@ public final class City extends World {
 
     /** Moving colliders (cars) supplied by the simulation. */
     public interface Dynamic { void boxesNear(float x, float z, List<Box> out); }
-    public Dynamic dynamic;
+    public transient Dynamic dynamic;
 
     // ------------------------------------------------------------------ the urban footprint
 
@@ -153,7 +159,7 @@ public final class City extends World {
     private boolean[] inside;
 
     /** A named suburb: a cluster of residential blocks on the outskirts, with green land around it. */
-    public static final class Suburb {
+    public static final class Suburb implements java.io.Serializable {
         public String name = "";
         public final float x, z, r;
         /** A street corner near its middle (fast travel, map label). */

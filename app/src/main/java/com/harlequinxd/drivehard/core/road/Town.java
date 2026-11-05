@@ -6,7 +6,7 @@ package com.harlequinxd.drivehard.core.road;
  * street and, in towns, a centre with the town office, post office, shops, supermarket, school,
  * shrine, clinic and a petrol station. Roads from elsewhere arrive at the edge of the grid.
  */
-public final class Town {
+public final class Town implements java.io.Serializable {
     public enum Size { HAMLET, VILLAGE, TOWN }
 
     public final int id;
@@ -43,7 +43,7 @@ public final class Town {
     }
 
     /** A named district of the island; towns belong to the nearest region centre. */
-    public static final class Region {
+    public static final class Region implements java.io.Serializable {
         public final String name;
         public final float x, z;
 

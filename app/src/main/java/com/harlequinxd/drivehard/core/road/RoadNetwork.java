@@ -20,7 +20,7 @@ import java.util.Random;
  * Roads outside the city are cut into the terrain: {@link #shapeTerrain} pulls the ground toward
  * each road's profile (embankments and cuttings).
  */
-public final class RoadNetwork {
+public final class RoadNetwork implements java.io.Serializable {
     public final List<RoadNode> nodes = new ArrayList<>();
     public final List<RoadEdge> edges = new ArrayList<>();
     /** Village centre nodes (for farms and houses). */
@@ -1051,7 +1051,7 @@ public final class RoadNetwork {
     // ------------------------------------------------------------------ crossings
 
     /** Pending bridge: a road passing over a motorway near (x,z). */
-    private static final class BridgeMark {
+    private static final class BridgeMark implements java.io.Serializable {
         final float x, z, overY;
         final RoadEdge under;
         final float underS;
@@ -1239,7 +1239,7 @@ public final class RoadNetwork {
 
     /** Farmsteads: {x0, z0, x1, z1, face (0=N,1=S,2=W,3=E: side toward the lane), seed}. */
     public final List<float[]> farms = new ArrayList<>();
-    private java.util.HashSet<Long> farmCells = new java.util.HashSet<>();
+    private transient java.util.HashSet<Long> farmCells = new java.util.HashSet<>();
 
     /**
      * Places farmsteads beside country roads and highways. Each gets its own access lane that

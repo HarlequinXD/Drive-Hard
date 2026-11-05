@@ -1,7 +1,7 @@
 package com.harlequinxd.drivehard.core.render;
 
 /** Power-of-two ARGB texture. Texel lookups wrap, so UVs can repeat freely. */
-public final class Texture {
+public final class Texture implements java.io.Serializable {
     public final int w, h, wShift, wMask, hMask, hMax;
     public final int[] px;
     /** Horizontal scroll speed in texture widths per second (water etc.). */

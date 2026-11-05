@@ -23,7 +23,7 @@ import java.util.Random;
  * sits on a straight stretch of the east coast on a gently rolling plateau. Roads are cut into
  * the terrain: {@link #height} follows each road's smoothed profile.</p>
  */
-public final class Terrain {
+public final class Terrain implements java.io.Serializable {
     public static final float SAND_LEVEL = 2.2f;
     /** Side of the square the island is generated in (metres). */
     public static final float ISLAND_SIZE = 128000f;

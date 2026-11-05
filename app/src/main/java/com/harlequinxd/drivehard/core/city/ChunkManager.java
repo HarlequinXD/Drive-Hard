@@ -20,6 +20,8 @@ public final class ChunkManager {
     private volatile boolean running;
     public float loadRadius = 200f, unloadRadius = 280f;
     public volatile int generatedTotal, unloadedTotal;
+    /** Saved chunks on disk (null: generate every time). */
+    public volatile com.harlequinxd.drivehard.core.data.WorldCache cache;
 
     public ChunkManager(City city) { this.city = city; }
 
@@ -58,8 +60,13 @@ public final class ChunkManager {
         long k = key(cx, cz);
         Chunk c = loaded.get(k);
         if (c != null) return c;
-        c = city.generate(cx, cz);
-        for (com.harlequinxd.drivehard.core.render.Geo g : c.batches) g.trim();
+        com.harlequinxd.drivehard.core.data.WorldCache wc = cache;
+        c = wc == null ? null : wc.readChunk(cx, cz);
+        if (c == null) {
+            c = city.generate(cx, cz);
+            for (com.harlequinxd.drivehard.core.render.Geo g : c.batches) g.trim();
+            if (wc != null) wc.writeChunk(c);
+        }
         Chunk prev = loaded.putIfAbsent(k, c);
         if (prev == null) generatedTotal++;
         return prev != null ? prev : c;

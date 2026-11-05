@@ -64,6 +64,11 @@ public final class Game {
     private final int[] rippleTex = new int[com.harlequinxd.drivehard.core.tex.PropTextures.RIPPLE_FRAMES];
     private final int playerTex, lampTex, signalTex, umbrellaTex, poleTex;
     public final Texture[] textures = new Texture[4096];
+    private int nextTex;
+    /** The game data folder for this island (null when there is none). */
+    public final com.harlequinxd.drivehard.core.data.WorldCache worldCache;
+    /** The island was read from the game data folder instead of generated. */
+    public final boolean loadedFromDisk;
     public final SpriteCache cache;
     public final Traffic traffic;
     public final Pedestrians pedestrians;
@@ -105,9 +110,6 @@ public final class Game {
         this.lowMemory = lowMemory;
         com.harlequinxd.drivehard.core.render.Ground.lowMemory(lowMemory);
         env = new Environment(seed);
-        if (progress != null) progress.step("Painting building textures", 0.00f);
-        lib = new TextureLibrary(seed, lowMemory);
-        if (progress != null) progress.step("Baking characters and props", 0.10f);
         // the character and prop sprites bake on another core while the island is generated
         final SpriteSheet[] baked = new SpriteSheet[5];
         Thread baker = new Thread(() -> {
@@ -118,9 +120,34 @@ public final class Game {
             baked[4] = PropSprites.utilityPole();
         }, "sprite-baker");
         baker.start();
-        if (progress != null) progress.step("Raising the island", 0.14f);
-        city = new City(lib, seed, progress == null ? null : (what, done) -> progress.step(what, 0.14f + done * 0.66f));
+        // the game data folder: the island and the chunks already visited are read from disk
+        worldCache = com.harlequinxd.drivehard.core.data.WorldCache.open(seed, lowMemory);
+        com.harlequinxd.drivehard.core.data.WorldCache.Island saved = null;
+        if (worldCache != null && worldCache.hasIsland()) {
+            if (progress != null) progress.step("Loading the island from game data", 0.00f);
+            saved = worldCache.loadIsland(progress == null ? null
+                    : f -> progress.step("Loading the island from game data", f * 0.75f));
+        }
+        loadedFromDisk = saved != null;
+        if (saved == null) {
+            if (progress != null) progress.step("Painting building textures", 0.00f);
+            lib = new TextureLibrary(seed, lowMemory);
+        } else {
+            lib = saved.lib;
+        }
+        if (progress != null) progress.step("Baking characters and props", saved != null ? 0.76f : 0.10f);
+        if (saved != null) {
+            city = saved.city;
+        } else {
+            if (progress != null) progress.step("Raising the island", 0.14f);
+            city = new City(lib, seed, progress == null ? null : (what, done) -> progress.step(what, 0.14f + done * 0.66f));
+            // saved in the background for next time (the library and island do not change from here on)
+            if (worldCache != null) worldCache.saveIsland(lib, city);
+        }
+        city.chunks.cache = worldCache;
         try { baker.join(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        for (int i = 0; i < lib.list.size(); i++) textures[i] = lib.list.get(i);
+        nextTex = lib.list.size();
         sheet = baked[0];
         lamps = baked[1];
         signals = baked[2];
@@ -133,16 +160,15 @@ public final class Game {
             for (int f = 0; f < sf; f++)
                 for (int y = 0; y < sh; y++) System.arraycopy(frames, f * sw * sh + y * sw, atlas, y * 512 + f * sw, sw);
             splashSheet = new SpriteSheet(atlas, 512, sh, sw, sh, sf, 1, perRow, sw / 2, sh - 4, 32f);
-            splashTex = lib.add(new Texture(512, sh, atlas));
+            splashTex = addTexture(new Texture(512, sh, atlas));
         }
-        for (int i = 0; i < rippleTex.length; i++) rippleTex[i] = lib.add(com.harlequinxd.drivehard.core.tex.PropTextures.ripple(i));
-        playerTex = lib.add(Texture.padded(sheet.pixels, sheet.width, sheet.height));
-        lampTex = lib.add(Texture.padded(lamps.pixels, lamps.width, lamps.height));
-        signalTex = lib.add(Texture.padded(signals.pixels, signals.width, signals.height));
-        umbrellaTex = lib.add(Texture.padded(umbrellas.pixels, umbrellas.width, umbrellas.height));
-        poleTex = lib.add(Texture.padded(poles.pixels, poles.width, poles.height));
-        for (int i = 0; i < lib.list.size(); i++) textures[i] = lib.list.get(i);
-        cache = new SpriteCache(textures, lib.list.size(), new int[]{0, lowMemory ? 10 : CAR_CACHE, lowMemory ? 10 : PED_CACHE, 1});
+        for (int i = 0; i < rippleTex.length; i++) rippleTex[i] = addTexture(com.harlequinxd.drivehard.core.tex.PropTextures.ripple(i));
+        playerTex = addTexture(Texture.padded(sheet.pixels, sheet.width, sheet.height));
+        lampTex = addTexture(Texture.padded(lamps.pixels, lamps.width, lamps.height));
+        signalTex = addTexture(Texture.padded(signals.pixels, signals.width, signals.height));
+        umbrellaTex = addTexture(Texture.padded(umbrellas.pixels, umbrellas.width, umbrellas.height));
+        poleTex = addTexture(Texture.padded(poles.pixels, poles.width, poles.height));
+        cache = new SpriteCache(textures, nextTex, new int[]{0, lowMemory ? 10 : CAR_CACHE, lowMemory ? 10 : PED_CACHE, 1});
         // plants bake in the background, most common species first
         Flora[] order = {Flora.GINKGO, Flora.ZELKOVA, Flora.SAKURA, Flora.BLACK_PINE, Flora.MAPLE, Flora.CEDAR,
                 Flora.CAMPHOR, Flora.BAMBOO, Flora.AZALEA, Flora.BOXWOOD, Flora.CAMELLIA, Flora.HYDRANGEA};
@@ -181,6 +207,12 @@ public final class Game {
         for (int i = 0; i < 6; i++) { requestCar(); requestPed(); }
         cache.start();
         if (progress != null) progress.step("Ready", 1f);
+    }
+
+    /** Adds a texture of the game's own (sprites, effects) after the island's textures. */
+    private int addTexture(Texture t) {
+        textures[nextTex] = t;
+        return nextTex++;
     }
 
     public void dispose() {

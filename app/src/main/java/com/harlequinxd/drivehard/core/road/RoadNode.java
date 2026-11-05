@@ -3,7 +3,7 @@ package com.harlequinxd.drivehard.core.road;
 import java.util.Arrays;
 
 /** Where roads meet: a city intersection, a rural junction, a freeway split/merge, or a dead end. */
-public final class RoadNode {
+public final class RoadNode implements java.io.Serializable {
     public enum Kind {
         /** Signalised city intersection. */
         CITY,

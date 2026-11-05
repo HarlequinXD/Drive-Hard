@@ -34,6 +34,15 @@ public final class DriveHardActivity extends Activity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        // the game data folder (the island and the chunks already visited); a new install or
+        // update of the app starts a fresh one
+        com.harlequinxd.drivehard.core.data.WorldCache.root = new java.io.File(getFilesDir(), "GameData");
+        try {
+            android.content.pm.PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
+            com.harlequinxd.drivehard.core.data.WorldCache.build = info.lastUpdateTime + "-" + info.versionName;
+        } catch (Exception e) {
+            com.harlequinxd.drivehard.core.data.WorldCache.build = "android";
+        }
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
