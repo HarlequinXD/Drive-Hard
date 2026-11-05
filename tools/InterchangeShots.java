@@ -43,17 +43,22 @@ public final class InterchangeShots {
             g.player.y = g.city.surface(x, z);
             // stand on the crossroad bridge (the road node nearest the centre) and look about
             RoadNode best = null;
-            for (RoadNode nd : g.city.roads.nodes) if (best == null || Math.hypot(nd.x - x, nd.z - z) < Math.hypot(best.x - x, best.z - z)) best = nd;
+            for (RoadNode nd : g.city.roads.nodes)
+                if (nd.kind == RoadNode.Kind.JUNCTION && nd.edges.length >= 3 && (best == null || Math.hypot(nd.x - x, nd.z - z) < Math.hypot(best.x - x, best.z - z))) best = nd;
+            // stand back from the junction, out on the verge between the slip roads
+            float ax = best.x - x, az = best.z - z, al = (float) Math.hypot(ax, az);
+            float vx = best.x + ax / al * 25f, vz = best.z + az / al * 25f;
             for (int v = 0; v < 4; v++) {
-                float px = v < 2 ? x : best.x, pz = v < 2 ? z : best.z;
+                float px = v == 0 ? x : v == 1 ? best.x : vx, pz = v == 0 ? z : v == 1 ? best.z : vz;
                 g.player.x = px; g.player.z = pz;
                 g.city.chunks.loadAllNow(px, pz);
                 g.player.y = g.city.surface(px, pz, 200f);
                 for (int i = 0; i < 4; i++) g.update(1 / 30f, 0, 0, 0, 0, false);
                 g.player.x = px; g.player.z = pz;
-                g.cam.yaw = (float) (v * Math.PI / 2 + 0.4);
-                g.cam.pitch = (float) Math.toRadians(30);
-                g.cam.distance = 14f;
+                // look back toward the bridge from the far views
+                g.cam.yaw = v < 2 ? (float) (v * Math.PI / 2 + 0.4) : (float) Math.atan2(ax, az) + (v == 2 ? 0.35f : -0.35f);
+                g.cam.pitch = (float) Math.toRadians(v < 2 ? 30 : 12);
+                g.cam.distance = v < 2 ? 14f : 9f;
                 g.cam.update(px, g.player.y, pz, 1f);
                 g.render();
                 out.setRGB((v % 2) * 432, (p * 2 + v / 2) * 240, 432, 240, g.renderer.fb, 0, 432);

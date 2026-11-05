@@ -37,7 +37,9 @@ public final class RoadNetwork implements java.io.Serializable {
     private float gx0, gz0;
     private int gnx, gnz;
     private int[] cellStart, cellItems;
-    private static final float MARGIN = 56f;
+    private static final float MARGIN = 84f;
+    /** How far from a road's edge its embankments and cuttings may reach. */
+    private static final float BANK_REACH = 80f;
 
     public RoadNetwork(City city, Terrain terrain, long seed) {
         this.city = city;
@@ -1530,15 +1532,56 @@ public final class RoadNetwork implements java.io.Serializable {
             }
             if (over == null) continue;
             float sc = project(over, m.x, m.z);
-            float flat = m.under.cls.halfWidth() + 14f, ramp = 150f;
-            for (int i = 0; i < over.count(); i++) {
-                float d = Math.abs(over.s[i] - sc);
-                float w = d < flat ? 1f : 1f - smooth01((d - flat) / ramp);
-                if (w > 0f) over.y[i] = Math.max(over.y[i], over.y[i] + (clearY - over.y[i]) * w);
-            }
+            float flat = m.under.cls.halfWidth() + 14f;
+            liftAround(over, sc, clearY, flat);
             for (int i = 0; i < over.count() - 1; i++) {
                 float d = Math.abs((over.s[i] + over.s[i + 1]) * 0.5f - sc);
                 if (d < flat) over.bridge[i] = true;
+            }
+        }
+    }
+
+    /** Steepest grade of a bridge approach (and of slip roads climbing to a raised crossroad). */
+    private static final float APPROACH_GRADE = 0.055f;
+
+    /**
+     * Height a bridge approach needs {@code d} metres from the middle of a deck at {@code top}
+     * (level for {@code flat} metres): a rounded crest, then a steady {@link #APPROACH_GRADE} down.
+     */
+    private static float approach(float d, float top, float flat) {
+        float u = d - flat, crest = 40f;
+        if (u <= 0f) return top;
+        if (u < crest) return top - APPROACH_GRADE * u * u / (2f * crest);
+        return top - APPROACH_GRADE * (u - crest * 0.5f);
+    }
+
+    /**
+     * Raises a road to clear a motorway at distance sc along {@code over}, and carries the climb on
+     * through the junctions at its ends into every road that meets them (slip roads included), so
+     * that nothing joins a raised road at a step: the approaches come down at a steady grade until
+     * they meet each road's own profile.
+     */
+    private void liftAround(RoadEdge over, float sc, float top, float flat) {
+        for (int i = 0; i < over.count(); i++) over.y[i] = Math.max(over.y[i], approach(Math.abs(over.s[i] - sc), top, flat));
+        java.util.ArrayDeque<float[]> queue = new java.util.ArrayDeque<>();     // node, distance from the deck
+        queue.add(new float[]{over.a, sc});
+        queue.add(new float[]{over.b, over.len - sc});
+        while (!queue.isEmpty()) {
+            float[] q = queue.poll();
+            RoadNode nd = nodes.get((int) q[0]);
+            float h = approach(q[1], top, flat);
+            if (h <= nd.y + 0.01f) continue;
+            nd.y = h;
+            // every road at this junction climbs to it (a node only rises, so this ends)
+            for (int eid : nd.edges) {
+                RoadEdge e = edges.get(eid);
+                if (e.cls == RoadClass.FREEWAY || e.cls.city) continue;
+                boolean fromA = e.a == nd.id;
+                for (int i = 0; i < e.count(); i++) {
+                    float d = q[1] + (fromA ? e.s[i] : e.len - e.s[i]);
+                    e.y[i] = Math.max(e.y[i], approach(d, top, flat));
+                }
+                queue.add(new float[]{fromA ? e.b : e.a, q[1] + e.len});
             }
         }
     }
@@ -2376,7 +2419,10 @@ public final class RoadNetwork implements java.io.Serializable {
         if (city.urban(x, z)) return nat;
         int c = ruralIndex(x, z);
         if (c < 0) return nat;
-        float bestW = 0f, bestY = nat, bestD = Float.MAX_VALUE;
+        // on a road's own surface and shoulder that road decides the height exactly; elsewhere the
+        // banks of nearby roads blend (weighted toward the stronger), so two roads at different
+        // heights side by side meet in one smooth slope rather than a step
+        float onW = 0f, onY = nat, onD = Float.MAX_VALUE, sumW = 0f, sumH = 0f;
         for (int k = ruralStart[c]; k < ruralStart[c + 1]; k++) {
             int it = ruralItems[k];
             RoadEdge e = edges.get(it >>> 16);
@@ -2395,20 +2441,29 @@ public final class RoadNetwork implements java.io.Serializable {
             float qx = e.x[i] + vx * t - x, qz = e.z[i] + vz * t - z;
             float d = (float) Math.sqrt(qx * qx + qz * qz);
             float hw = e.cls.halfWidth() + 0.6f;
-            if (d > hw + 50f) continue;
+            if (d > hw + BANK_REACH) continue;
             float yr = e.y[i] + (e.y[i + 1] - e.y[i]) * t;
-            // cuttings and embankments have steep sides (rock cuts, built-up fills), not gentle hills:
-            // a 1.5 m shoulder, then about 60 degrees down to (or up from) the natural ground
+            // cuttings and embankments are graded banks about 1 in 2 (grassed, like real road
+            // earthworks), easing into the natural ground rather than meeting it at an edge
             float dh = Math.abs(nat - yr);
             // the verge is wide enough that the 8 m height map keeps the whole road surface flat
-            float shoulder = 6f, bank = Math.max(3f, Math.min(30f, dh * 0.8f));
+            // (the bank's eased profile is steepest mid-way, 1.5x its average: 3x the height keeps
+            // that under 1 in 2)
+            float shoulder = 6f, bank = Math.max(4f, Math.min(BANK_REACH - shoulder - 1f, dh * 3f));
             if (d > hw + shoulder + bank + 0.5f) continue;
             float u = (d - hw - shoulder) / bank;
             float w = u <= 0f ? 1f : 1f - smooth01(Math.min(1f, u));
-            // strongest influence wins; on the road itself the nearest piece decides the height
-            if (w > bestW + 1e-4f || (w >= bestW - 1e-4f && d < bestD)) { bestW = w; bestY = yr - 0.03f; bestD = d; }
+            if (w >= 0.999f) {
+                if (d < onD) { onD = d; onY = yr - 0.03f; onW = 1f; }
+                continue;
+            }
+            if (w <= 0f) continue;
+            float kw = w * w / (1.02f - w);
+            sumW += kw;
+            sumH += kw * (nat + (yr - 0.03f - nat) * w);
         }
-        return nat + (bestY - nat) * bestW;
+        if (onW > 0f) return onY;
+        return sumW > 0f ? sumH / sumW : nat;
     }
 
     /** How much a road shapes the ground here (0 = untouched, 1 = road surface). */
