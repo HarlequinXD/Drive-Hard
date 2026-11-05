@@ -503,18 +503,30 @@ public final class RoadNetwork implements java.io.Serializable {
     }
 
     /** Catmull-Rom through the waypoints, sampled roughly every {@code step} metres. */
+    /**
+     * A smooth curve through the waypoints, sampled every {@code step} metres. Each waypoint's
+     * tangent is scaled to the legs either side of it (a non-uniform Catmull-Rom), so a short
+     * leg next to a long straight bends gently instead of overshooting into a loop.
+     */
     static float[][] spline(List<float[]> wp, float step) {
         int m = wp.size();
         float[] xs = new float[64], zs = new float[64];
         int cnt = 0;
         for (int i = 0; i < m - 1; i++) {
             float[] p0 = wp.get(Math.max(0, i - 1)), p1 = wp.get(i), p2 = wp.get(i + 1), p3 = wp.get(Math.min(m - 1, i + 2));
-            float segLen = (float) Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
-            int n = Math.max(1, (int) Math.ceil(segLen / step));
+            float l01 = (float) Math.hypot(p1[0] - p0[0], p1[1] - p0[1]);
+            float l12 = (float) Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
+            float l23 = (float) Math.hypot(p3[0] - p2[0], p3[1] - p2[1]);
+            // tangents in units of this leg: (p2 - p0) shared out by leg length
+            float k1 = l12 / Math.max(1e-3f, l01 + l12), k2 = l12 / Math.max(1e-3f, l12 + l23);
+            float m1x = (p2[0] - p0[0]) * k1, m1z = (p2[1] - p0[1]) * k1;
+            float m2x = (p3[0] - p1[0]) * k2, m2z = (p3[1] - p1[1]) * k2;
+            int n = Math.max(1, (int) Math.ceil(l12 / step));
             for (int k = 0; k < n; k++) {
                 float t = k / (float) n, t2 = t * t, t3 = t2 * t;
-                float x = 0.5f * ((2 * p1[0]) + (-p0[0] + p2[0]) * t + (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2 + (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3);
-                float z = 0.5f * ((2 * p1[1]) + (-p0[1] + p2[1]) * t + (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2 + (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3);
+                float h00 = 2 * t3 - 3 * t2 + 1, h10 = t3 - 2 * t2 + t, h01 = -2 * t3 + 3 * t2, h11 = t3 - t2;
+                float x = h00 * p1[0] + h10 * m1x + h01 * p2[0] + h11 * m2x;
+                float z = h00 * p1[1] + h10 * m1z + h01 * p2[1] + h11 * m2z;
                 if (cnt == xs.length) { xs = Arrays.copyOf(xs, cnt * 2); zs = Arrays.copyOf(zs, cnt * 2); }
                 xs[cnt] = x; zs[cnt] = z; cnt++;
             }
@@ -721,6 +733,16 @@ public final class RoadNetwork implements java.io.Serializable {
         wp.add(new float[]{lx, lz});
         List<float[]> simple = simplify(path.subList(0, cut + 1), 90f);
         for (int i = 1; i < simple.size(); i++) wp.add(simple.get(i));
+        straighten(wp, 1, 1400f);
+        // a freeway doesn't end in a hook: stop it before a last sharp turn (the highway on to the town takes over)
+        while (wp.size() > 4) {
+            int i = wp.size() - 2;
+            float[] p = wp.get(i - 1), q = wp.get(i), r = wp.get(i + 1);
+            float ax = q[0] - p[0], az = q[1] - p[1], bx = r[0] - q[0], bz = r[1] - q[1];
+            float cos = (ax * bx + az * bz) / (float) (Math.hypot(ax, az) * Math.hypot(bx, bz) + 1e-3);
+            if (cos > 0.35f && radiusAt(wp, i) > 500f) break;
+            wp.remove(wp.size() - 1);
+        }
         float[] last = wp.get(wp.size() - 1);
         RoadNode end = addNode(last[0], last[1], RoadNode.Kind.END);
         float[][] pl = spline(wp, RoadClass.FREEWAY.step);
@@ -728,6 +750,36 @@ public final class RoadNetwork implements java.io.Serializable {
         router.mark(pl[0], pl[1], 3);
         out.add(e);
         route(RoadClass.HIGHWAY, end, gate(best.centre, end.x, end.z), 0f, 0f, 0f, 0f);
+    }
+
+    /**
+     * Drops waypoints that make curves tighter than {@code minRadius} (tightest first), as long
+     * as the straighter line stays on land, out of the city and close enough to the ground that
+     * cuttings and embankments can carry it. Waypoints before {@code keep} stay.
+     */
+    private void straighten(List<float[]> wp, int keep, float minRadius) {
+        while (wp.size() > keep + 2) {
+            int worst = -1;
+            float worstR = minRadius;
+            for (int i = Math.max(1, keep); i < wp.size() - 1; i++) {
+                float r = radiusAt(wp, i);
+                if (r < worstR && router.clearLine(wp.get(i - 1), wp.get(i + 1), wp.get(0))) { worstR = r; worst = i; }
+            }
+            if (worst < 0) break;
+            wp.remove(worst);
+        }
+    }
+
+    /** Rough radius a spline through waypoint i will have: the shorter neighbouring leg over the turn angle. */
+    private static float radiusAt(List<float[]> wp, int i) {
+        float[] p = wp.get(i - 1), q = wp.get(i), r = wp.get(i + 1);
+        float ax = q[0] - p[0], az = q[1] - p[1], bx = r[0] - q[0], bz = r[1] - q[1];
+        float la = (float) Math.hypot(ax, az), lb = (float) Math.hypot(bx, bz);
+        if (la < 1f || lb < 1f) return 0f;
+        float cos = Math.max(-1f, Math.min(1f, (ax * bx + az * bz) / (la * lb)));
+        float th = (float) Math.acos(cos);
+        if (th < 1e-3f) return Float.MAX_VALUE;
+        return Math.min(la, lb) * 0.5f / (float) Math.tan(th * 0.5f) ;
     }
 
     // ------------------------------------------------------------------ terrain routing
@@ -802,19 +854,40 @@ public final class RoadNetwork implements java.io.Serializable {
             if (d < 120f && !end) return Float.POSITIVE_INFINITY;               // sea, beach and cliff edge
             if (used[b] >= 100 && !end) return Float.POSITIVE_INFINITY;          // the city
             float grade = Math.abs(h[b] - h[a]) / len;
-            float gmax = cls == RoadClass.FREEWAY ? 0.035f : (cls == RoadClass.HIGHWAY ? 0.06f : 0.09f);
+            float gmax = cls == RoadClass.FREEWAY ? 0.06f : (cls == RoadClass.HIGHWAY ? 0.06f : 0.09f);
             float q = grade / gmax;
             float c = 1f + q * q * 2.5f + (q > 2f ? (q - 2f) * 30f : 0f);
             // steep ground: a road there would be a shelf cut into a cliff; cliffs are impassable
             float st = steep[b];
             if (st > 0.55f && !end) return Float.POSITIVE_INFINITY;
-            if (st > 0.15f) c += (st - 0.15f) * (cls == RoadClass.FREEWAY ? 60f : 35f);
+            if (st > 0.15f) c += (st - 0.15f) * (cls == RoadClass.FREEWAY ? 25f : 35f);
             if (d < 350f) c += 1.5f;                                      // keep off the shore
             if (ringRouting && d > 2500f) c += (d - 2500f) / 1200f;      // the coastal road stays coastal
             if (cls == RoadClass.FREEWAY) c += Math.max(0f, h[b] - 60f) / 120f;
             int u = used[b];
             if (u > 0 && !end) c += u * 0.6f;
             return len * c;
+        }
+
+        /**
+         * True if a straight freeway from p to q stays on land, out of the city and other
+         * roads' way, and never more than ~40 m from the ground (or the grade allows it).
+         */
+        boolean clearLine(float[] p, float[] q, float[] start) {
+            float len = (float) Math.hypot(q[0] - p[0], q[1] - p[1]);
+            int steps = Math.max(2, (int) (len / (cell * 0.5f)));
+            float h0 = h[cj(p[1]) * n + ci(p[0])], h1 = h[cj(q[1]) * n + ci(q[0])];
+            for (int k = 1; k < steps; k++) {
+                float t = k / (float) steps;
+                int c = cj(p[1] + (q[1] - p[1]) * t) * n + ci(p[0] + (q[0] - p[0]) * t);
+                float sx = p[0] + (q[0] - p[0]) * t, sz = p[1] + (q[1] - p[1]) * t;
+                // leaving the city the freeway may cross its fringe (it starts at the city's edge)
+                boolean fringe = Math.hypot(sx - start[0], sz - start[1]) < 1500f;
+                if (inland[c] < 150f || (used[c] >= 100 && !fringe)) return false;
+                if (steep[c] > 0.5f) return false;
+                if (Math.abs(h[c] - (h0 + (h1 - h0) * t)) > 40f) return false;
+            }
+            return true;
         }
 
         boolean near(int a, int b) { return Math.abs(a % n - b % n) <= 2 && Math.abs(a / n - b / n) <= 2; }
@@ -845,6 +918,18 @@ public final class RoadNetwork implements java.io.Serializable {
                     float len = t < 4 ? cell : cell * 1.4142f;
                     float c = stepCost(k, nb, len, cls, sa, sb);
                     if (c == Float.POSITIVE_INFINITY) continue;
+                    // fast roads don't switch back: turning costs, sharply more for tighter turns
+                    if (cls == RoadClass.FREEWAY || cls == RoadClass.HIGHWAY) {
+                        int p = from[k];
+                        if (p >= 0) {
+                            int pi = k % n - p % n, pj = k / n - p / n;
+                            float dot = (pi * di[t] + pj * dj[t]) / (float) (Math.sqrt(pi * pi + pj * pj) * Math.sqrt(di[t] * di[t] + dj[t] * dj[t]));
+                            if (dot < 0.99f) {
+                                float turn = cls == RoadClass.FREEWAY ? 1f : 0.4f;
+                                c += len * turn * (dot > 0.6f ? 0.35f : dot > -0.1f ? 4f : 40f);
+                            }
+                        }
+                    }
                     float ng = g[k] + c;
                     if (stamp[nb] != cur || ng < g[nb] - 1e-3f) {
                         stamp[nb] = cur;
