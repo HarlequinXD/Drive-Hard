@@ -189,8 +189,19 @@ final class SectorBuilder {
             float rowTop = row < 0 ? base : (row == 0 ? base + groundH : base + groundH + row * storeyH);
             if (row == maxFloors) rowTop = maxTop;
             if (row >= 0 && rowBottom >= maxTop) break;
+            if (tiles.body >= 0 && row == tiles.bodyFrom && row < maxFloors) {
+                // the body: every storey from here up is one polygon; its texture (two bays by two
+                // storeys) repeats across the wall and up it, aligned to the storeys
+                float bodyBottom = rowBottom, bodyTop = base + groundH + (maxFloors - 1) * storeyH;
+                bodyPatch(gb, wall, tiles, minPos, maxPos, pos0, bodyBottom, bodyTop, storeyH, top0, top1);
+                rowBottom = bodyTop;
+                row = maxFloors - 1;
+                continue;
+            }
             boolean storey = row >= 0 && row < maxFloors;
-            int cols = storey && row < tiles.cols.length && tiles.cols[row] > 0 ? tiles.cols[row] : Math.max(1, (int) Math.ceil(faceLen / (row < 0 ? 4f : WALL_TILE)));
+            // the foundation follows the ground in 8 m pieces; gables and parapets are one piece
+            int cols = storey && row < tiles.cols.length && tiles.cols[row] > 0 ? tiles.cols[row]
+                    : row < 0 ? Math.max(1, (int) Math.ceil(faceLen / 8f)) : 1;
             float tileW = faceLen / cols;
             int firstCol = Math.max(0, (int) Math.floor(minPos / tileW));
             int lastCol = Math.min(cols - 1, (int) Math.floor(Math.max(minPos, maxPos - 1e-4f) / tileW));
@@ -257,6 +268,23 @@ final class SectorBuilder {
             }
             rowBottom = rowTop;
         }
+    }
+
+    /** The body of a wall: one polygon from {@code bottom} to {@code top}, clipped to the wall's own top. */
+    private static void bodyPatch(GeoBuilder gb, Sectors.Wall wall, Sectors.Tiles tiles, float a, float b, float pos0,
+                                  float bottom, float top, float storeyH, float top0, float top1) {
+        float s0 = (a - pos0) / wall.len, s1 = (b - pos0) / wall.len;
+        float ax = wall.x0 + (wall.x1 - wall.x0) * s0, az = wall.z0 + (wall.z1 - wall.z0) * s0;
+        float bx = wall.x0 + (wall.x1 - wall.x0) * s1, bz = wall.z0 + (wall.z1 - wall.z0) * s1;
+        float wt0 = top0 + (top1 - top0) * s0, wt1 = top0 + (top1 - top0) * s1;
+        float hi0 = Math.min(wt0, top), hi1 = Math.min(wt1, top);
+        if (Math.max(hi0 - bottom, hi1 - bottom) < 0.01f) return;
+        hi0 = Math.max(hi0, bottom);
+        hi1 = Math.max(hi1, bottom);
+        float span = 2f * storeyH;
+        patch(gb, wall, ax, az, bx, bz, bottom, bottom, hi0, hi1, tiles.body,
+                a / tiles.bodyU, b / tiles.bodyU,
+                1f - (hi0 - bottom) / span, 1f - (hi1 - bottom) / span, 1f, 1f);
     }
 
     private static void slabs(GeoBuilder gb, List<Sectors.Slab> slabs) {

@@ -75,7 +75,8 @@ public final class TextureLibrary implements java.io.Serializable {
         hillGrass = add(hillGrass(seed));
 
         Random r = new Random(seed);
-        int[] counts = {24, 10, 30, 20, 14, 16, 20, 8, 3, 8, 16};
+        // the old one-picture facades: only a few still used directly (fire station, plain walls)
+        int[] counts = {1, 1, 1, 1, 1, 2, 1, 1, 3, 1, 6};
         if (lowMemory) for (int k = 0; k < counts.length; k++) counts[k] = Math.max(2, counts[k] / 2);
         JpTextures.Kind[] kinds = JpTextures.Kind.values();
         int s = 1000;
@@ -83,6 +84,7 @@ public final class TextureLibrary implements java.io.Serializable {
             jp[k] = new int[counts[k]];
             for (int i = 0; i < counts[k]; i++) jp[k][i] = add(JpTextures.facade(r, kinds[k], s++));
         }
+        buildingStyles(seed, lowMemory);
         String[] name = new String[1];
         for (int i = 0; i < shops.length; i++) {
             int cat = i % JpTextures.CATEGORIES.length;
@@ -198,7 +200,7 @@ public final class TextureLibrary implements java.io.Serializable {
         for (HouseTextures.Window w : HouseTextures.Window.values())
             for (int f = 0; f < frames.length; f++) {
                 if ((w == HouseTextures.Window.LATTICE || w == HouseTextures.Window.SHOJI) && f != 1 && f != 3) continue;
-                wins.add(add(HouseTextures.window(w, w == HouseTextures.Window.LATTICE ? 0x6A4A2E : frames[f], seed + 3100 + wins.size())));
+                wins.add(add(recessed(HouseTextures.window(w, w == HouseTextures.Window.LATTICE ? 0x6A4A2E : frames[f], seed + 3100 + wins.size()), true)));
                 winKinds.add(w);
             }
         houseWin = new int[wins.size()];
@@ -215,7 +217,7 @@ public final class TextureLibrary implements java.io.Serializable {
         houseDoorKind = new HouseTextures.Door[doors.length];
         for (int i = 0; i < doors.length; i++) {
             houseDoorKind[i] = (HouseTextures.Door) doors[i][0];
-            houseDoor[i] = add(HouseTextures.door(houseDoorKind[i], (Integer) doors[i][1], seed + 3200 + i));
+            houseDoor[i] = add(recessed(HouseTextures.door(houseDoorKind[i], (Integer) doors[i][1], seed + 3200 + i), false));
         }
         Object[][] roofsAll = {
                 {HouseTextures.Roof.KAWARA, 0x6A6E72}, {HouseTextures.Roof.KAWARA, 0x2E3034}, {HouseTextures.Roof.KAWARA, 0x3A4A6A},
@@ -256,6 +258,25 @@ public final class TextureLibrary implements java.io.Serializable {
         dirtTrack = add(PropTextures.track(true, seed + 3420));
     }
 
+    /**
+     * Windows and doors are laid on the wall as flat decals: paint the depth they no longer have
+     * into them — the head's shadow along the top, the left jamb's down the side (sun from the
+     * upper left), a lit sill along the bottom of windows.
+     */
+    private static Texture recessed(Texture t, boolean sill) {
+        int w = t.w, h = t.h;
+        int band = Math.max(2, h / 16), side = Math.max(1, w / 24);
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                float k = 1f;
+                if (y < band) k *= 0.55f + 0.45f * y / band;
+                if (x < side) k *= 0.72f + 0.28f * x / side;
+                if (sill && y >= h - Math.max(2, h / 24)) k *= 1.25f;
+                if (k != 1f) t.px[y * w + x] = Img.mul(t.px[y * w + x], k);
+            }
+        return t;
+    }
+
     public int add(Texture t) {
         list.add(t);
         return list.size() - 1;
@@ -264,6 +285,45 @@ public final class TextureLibrary implements java.io.Serializable {
     public Texture[] array() { return list.toArray(new Texture[0]); }
 
     public int[] facades(JpTextures.Kind k) { return jp[k.ordinal()]; }
+
+    /** One building look from {@link FacadeLayers}: texture ids of its parts. */
+    public static final class BuildingStyle implements java.io.Serializable {
+        public int bay, side, ground, entrance, plain;
+        public FacadeRecipes.Type type;
+        public boolean balconies, glass;
+    }
+
+    /** Building looks by {@link FacadeRecipes.Type} (ordinal). */
+    public BuildingStyle[][] buildingStyles;
+
+    public BuildingStyle[] styles(FacadeRecipes.Type t) { return buildingStyles[t.ordinal()]; }
+
+    /** Paints every building look's textures (in parallel: the layer stack takes ~20 ms a look). */
+    private void buildingStyles(long seed, boolean lowMemory) {
+        FacadeRecipes.Type[] types = FacadeRecipes.Type.values();
+        //                    OFFICE CURTAIN MANSION CORRIDOR ZAKKYO SHOPHOUSE DEPT WAREHOUSE CIVIC
+        int[] counts = lowMemory ? new int[]{3, 2, 4, 2, 4, 4, 2, 2, 2} : new int[]{6, 4, 7, 4, 7, 7, 3, 3, 4};
+        buildingStyles = new BuildingStyle[types.length][];
+        java.util.List<int[]> jobs = new java.util.ArrayList<>();
+        for (int t = 0; t < types.length; t++) for (int i = 0; i < counts[t]; i++) jobs.add(new int[]{t, i});
+        FacadeLayers.Style[] made = new FacadeLayers.Style[jobs.size()];
+        java.util.stream.IntStream.range(0, jobs.size()).parallel().forEach(j ->
+                made[j] = FacadeLayers.style(FacadeRecipes.make(types[jobs.get(j)[0]], seed * 1000 + jobs.get(j)[1] * 17 + jobs.get(j)[0])));
+        for (int t = 0; t < types.length; t++) buildingStyles[t] = new BuildingStyle[counts[t]];
+        for (int j = 0; j < jobs.size(); j++) {
+            FacadeLayers.Style st = made[j];
+            BuildingStyle b = new BuildingStyle();
+            b.type = types[jobs.get(j)[0]];
+            b.bay = add(st.bay);
+            b.side = add(st.side);
+            b.ground = add(st.ground);
+            b.entrance = add(st.entrance);
+            b.plain = add(st.plain);
+            b.balconies = st.recipe.balcony;
+            b.glass = st.recipe.win == FacadeLayers.Window.CURTAIN_WALL;
+            buildingStyles[jobs.get(j)[0]][jobs.get(j)[1]] = b;
+        }
+    }
 
     // ------------------------------------------------------------------ base materials
 

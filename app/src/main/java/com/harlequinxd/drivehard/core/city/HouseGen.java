@@ -570,62 +570,25 @@ final class HouseGen {
     }
 
     /**
-     * One storey band of a face: the wall laid round its openings (columns of wall between them,
-     * and the pieces above and below each), then the window / door panels set into them with a
-     * sill and, on traditional houses, a little canopy over the window.
+     * One storey band of a face, in two layers: the wall as one polygon across the whole band,
+     * then each window and door laid over it as one polygon a centimetre proud of the wall
+     * (painted with its frame, glass and the shadow of its reveal) — instead of building the wall
+     * round every opening out of small pieces.
      */
     private void storeyFace(Design d, float ua, float va, float ub, float vb, float nu, float nv, float y0, float y1,
                             int mat, List<Opening> ops, float sOff, float clip0, float clip1) {
         float len = (float) Math.hypot(ub - ua, vb - va);
         float tu = (ub - ua) / len, tv = (vb - va) / len;
-        float s = clip0;
+        wallRect(ua + tu * clip0, va + tv * clip0, ua + tu * clip1, va + tv * clip1, y0, y1, nu, nv, mat, sOff + clip0, 0f, 0);
+        float off = 0.012f;
         for (Opening o : ops) {
             if (o.s0 < clip0 || o.s1 > clip1) continue;
-            // wall up to the opening, then under and over it
-            wallRect(ua + tu * s, va + tv * s, ua + tu * o.s0, va + tv * o.s0, y0, y1, nu, nv, mat, sOff + s, 0f, 0);
             float oy0 = y0 + o.y0, oy1 = Math.min(y1, y0 + o.y1);
-            if (o.y0 > 0.01f) wallRect(ua + tu * o.s0, va + tv * o.s0, ua + tu * o.s1, va + tv * o.s1, y0, oy0, nu, nv, mat, sOff + o.s0, 0f, 0);
-            if (oy1 < y1 - 0.01f) wallRect(ua + tu * o.s0, va + tv * o.s0, ua + tu * o.s1, va + tv * o.s1, oy1, y1, nu, nv, mat, sOff + o.s0, 0f, 0);
-            // the panel, set 6 cm back into the opening, with reveals round it
-            float rv = 0.06f;
-            float pa = ua + tu * o.s0 - nu * rv, qa = va + tv * o.s0 - nv * rv;
-            float pb = ua + tu * o.s1 - nu * rv, qb = va + tv * o.s1 - nv * rv;
+            float pa = ua + tu * o.s0 + nu * off, qa = va + tv * o.s0 + nv * off;
+            float pb = ua + tu * o.s1 + nu * off, qb = va + tv * o.s1 + nv * off;
             poly(new float[]{pa, oy0, qa, pb, oy0, qb, pb, oy1, qb, pa, oy1, qa}, new float[]{0, 1, 1, 1, 1, 0, 0, 0},
-                    o.tex, nu, 0f, nv, 0.02f, Geo.FLAG_NO_SUBDIV);
-            // reveals: the sides and head of the opening's depth
-            float ea = ua + tu * o.s0, fa = va + tv * o.s0, eb = ua + tu * o.s1, fb = va + tv * o.s1;
-            poly(new float[]{ea, oy0, fa, pa, oy0, qa, pa, oy1, qa, ea, oy1, fa}, new float[]{0, 1, 0.2f, 1, 0.2f, 0, 0, 0},
-                    lib.sill, tu, 0f, tv, 0f, Geo.FLAG_NO_SUBDIV);
-            poly(new float[]{pb, oy0, qb, eb, oy0, fb, eb, oy1, fb, pb, oy1, qb}, new float[]{0, 1, 0.2f, 1, 0.2f, 0, 0, 0},
-                    lib.sill, -tu, 0f, -tv, 0f, Geo.FLAG_NO_SUBDIV);
-            poly(new float[]{ea, oy1, fa, eb, oy1, fb, pb, oy1, qb, pa, oy1, qa}, new float[]{0, 0, 1, 0, 1, 0.2f, 0, 0.2f},
-                    lib.sill, 0f, -1f, 0f, 0f, Geo.FLAG_NO_SUBDIV);
-            if (o.kind == Sectors.WINDOW || o.kind == Sectors.SMALL) {
-                // aluminium sill sticking out under the window
-                float so = 0.07f, sh = 0.04f;
-                float a0 = o.s0 - 0.05f, a1 = o.s1 + 0.05f;
-                float sx0 = ua + tu * a0, sz0 = va + tv * a0, sx1 = ua + tu * a1, sz1 = va + tv * a1;
-                poly(new float[]{sx0, oy0, sz0, sx1, oy0, sz1, sx1 + nu * so, oy0, sz1 + nv * so, sx0 + nu * so, oy0, sz0 + nv * so},
-                        new float[]{0, 0, 1, 0, 1, 1, 0, 1}, lib.sill, 0f, 1f, 0f, -0.05f, Geo.FLAG_NO_SUBDIV);
-                poly(new float[]{sx0 + nu * so, oy0 - sh, sz0 + nv * so, sx1 + nu * so, oy0 - sh, sz1 + nv * so,
-                        sx1 + nu * so, oy0, sz1 + nv * so, sx0 + nu * so, oy0, sz0 + nv * so},
-                        new float[]{0, 1, 1, 1, 1, 0, 0, 0}, lib.sill, nu, 0f, nv, -0.05f, Geo.FLAG_NO_SUBDIV);
-            }
-            if (o.canopy && oy1 + 0.35f < y1 + 0.3f) {
-                // kirimoke-bisashi: a small sloping canopy over the window
-                float cy = oy1 + 0.22f, co = 0.45f, a0 = o.s0 - 0.2f, a1 = o.s1 + 0.2f;
-                float cx0 = ua + tu * a0, cz0 = va + tv * a0, cx1 = ua + tu * a1, cz1 = va + tv * a1;
-                poly(new float[]{cx0, cy + 0.12f, cz0, cx1, cy + 0.12f, cz1, cx1 + nu * co, cy, cz1 + nv * co, cx0 + nu * co, cy, cz0 + nv * co},
-                        new float[]{0, 0, (a1 - a0) * 0.5f, 0, (a1 - a0) * 0.5f, 0.3f, 0, 0.3f}, lib.houseRoof[d.roofTex], 0f, 1f, 0f, -0.08f, Geo.FLAG_NO_SUBDIV);
-                poly(new float[]{cx0 + nu * co, cy - 0.06f, cz0 + nv * co, cx1 + nu * co, cy - 0.06f, cz1 + nv * co,
-                        cx1 + nu * co, cy, cz1 + nv * co, cx0 + nu * co, cy, cz0 + nv * co},
-                        new float[]{0, 1, 1, 1, 1, 0, 0, 0}, trimTex, nu, 0f, nv, -0.08f, Geo.FLAG_NO_SUBDIV);
-                poly(new float[]{cx0, cy - 0.06f, cz0, cx1, cy - 0.06f, cz1, cx1 + nu * co, cy - 0.06f, cz1 + nv * co, cx0 + nu * co, cy - 0.06f, cz0 + nv * co},
-                        new float[]{0, 0, 1, 0, 1, 1, 0, 1}, lib.soffit, 0f, -1f, 0f, -0.08f, Geo.FLAG_NO_SUBDIV);
-            }
-            s = o.s1;
+                    o.tex, nu, 0f, nv, -0.03f, Geo.FLAG_NO_SUBDIV);
         }
-        wallRect(ua + tu * s, va + tv * s, ua + tu * clip1, va + tv * clip1, y0, y1, nu, nv, mat, sOff + s, 0f, 0);
     }
 
     // ------------------------------------------------------------------ one mass
@@ -771,7 +734,7 @@ final class HouseGen {
         float len = (float) Math.hypot(u1 - u0, v1 - v0);
         poly(new float[]{u0, y0 - 0.2f, v0, u1, y1 - 0.2f, v1, u1, y1 + 0.03f, v1, u0, y0 + 0.03f, v0},
                 new float[]{0, 1, len * 0.5f, 1, len * 0.5f, 0, 0, 0}, trimTex, nu, 0f, nv, -0.03f, Geo.FLAG_NO_SUBDIV);
-        if (gutter) {
+        if (gutter && DETAILED_EAVES) {
             // half-round gutter hung under the eave: front and bottom
             float g = 0.11f;
             float gu0 = u0 + nu * g, gv0 = v0 + nv * g, gu1 = u1 + nu * g, gv1 = v1 + nv * g;
@@ -783,6 +746,9 @@ final class HouseGen {
     }
 
     /** Downpipe from an eave corner (local u, v, just off the wall) down to the ground. */
+    /** Gutters hung under the eaves (2 polygons an edge): off, the fascia board alone reads as the edge. */
+    private static final boolean DETAILED_EAVES = false;
+
     private void downpipe(float u, float v, float top) {
         float g = gb.h(wx(u, v), wz(u, v)) - 0.1f;
         localBox(u - 0.04f, v - 0.04f, u + 0.04f, v + 0.04f, g, top, gutterTex, -1, -0.07f);
@@ -800,11 +766,15 @@ final class HouseGen {
                 poly(new float[]{m.u0, top + 0.05f, m.v0, m.u1, top + 0.05f, m.v0, m.u1, top + 0.05f, m.v1, m.u0, top + 0.05f, m.v1},
                         new float[]{0, 0, (m.u1 - m.u0) * 0.5f, 0, (m.u1 - m.u0) * 0.5f, (m.v1 - m.v0) * 0.5f, 0, (m.v1 - m.v0) * 0.5f},
                         lib.roofMembrane, 0f, 1f, 0f, 0f, 0);
-                localBox(m.u0, m.v0, m.u1, m.v0 + t, top, h, trim, trim, 0f);
-                localBox(m.u0, m.v1 - t, m.u1, m.v1, top, h, trim, trim, 0f);
-                localBox(m.u0, m.v0 + t, m.u0 + t, m.v1 - t, top, h, trim, trim, 0f);
-                localBox(m.u1 - t, m.v0 + t, m.u1, m.v1 - t, top, h, trim, trim, 0f);
-                downpipe(m.u0 - 0.06f, m.v1 + 0.06f, h - 0.1f);
+                // the parapet: the walls carried on up (outside), and their inner faces
+                wallRect(m.u1, m.v0, m.u0, m.v0, top, h, 0f, -1f, trim, 0f, 0f, 0);
+                wallRect(m.u0, m.v1, m.u1, m.v1, top, h, 0f, 1f, trim, 0f, 0f, 0);
+                wallRect(m.u0, m.v0, m.u0, m.v1, top, h, -1f, 0f, trim, 0f, 0f, 0);
+                wallRect(m.u1, m.v1, m.u1, m.v0, top, h, 1f, 0f, trim, 0f, 0f, 0);
+                wallRect(m.u0, m.v0 + t, m.u1, m.v0 + t, top, h, 0f, 1f, trim, 0f, 0f, 0);
+                wallRect(m.u1, m.v1 - t, m.u0, m.v1 - t, top, h, 0f, -1f, trim, 0f, 0f, 0);
+                wallRect(m.u0 + t, m.v1, m.u0 + t, m.v0, top, h, 1f, 0f, trim, 0f, 0f, 0);
+                wallRect(m.u1 - t, m.v0, m.u1 - t, m.v1, top, h, -1f, 0f, trim, 0f, 0f, 0);
                 break;
             }
             case SHED: {
@@ -853,9 +823,6 @@ final class HouseGen {
                     float nu = ru ? 0f : (highAtStart ? -1f : 1f), nv = ru ? (highAtStart ? -1f : 1f) : 0f;
                     wallRect(ua, va, ub, vb, top, yH, nu, nv, lib.houseMat[m.floors > 1 ? d.mat2 : d.mat1], 0f, 0f, 0);
                 }
-                float pu = ru ? (highAtStart ? m.u0 : m.u1) : (highAtStart ? m.u1 : m.u0);
-                float pv = ru ? (highAtStart ? m.v1 : m.v0) : (highAtStart ? m.v0 : m.v1);
-                downpipe(pu + (pu == m.u0 ? -0.08f : 0.08f), pv + (pv == m.v0 ? -0.08f : 0.08f), top - 0.1f);
                 break;
             }
             default: {
@@ -884,7 +851,6 @@ final class HouseGen {
                     fascia(ru, A0, bm, A0, B1, Ab, 0f, -p, -1f, 0f, false);
                     fascia(ru, A1, bm, A1, B0, Af, 0f, p, 1f, 0f, false);
                     fascia(ru, A1, B1, A1, bm, Ab, 0f, -p, 1f, 0f, false);
-                    ridgeCap(ru, A0, A1, bm, ridge, rt);
                 } else {
                     // hip / irimoya: eaves all round at the same height
                     float e = top - p * o;
@@ -918,13 +884,8 @@ final class HouseGen {
                     fascia(ru, A0, B1, A1, B1, Ab, 0f, -p, 0f, 1f, true);
                     fascia(ru, A0, B0, A0, B1, Ae0, p, 0f, -1f, 0f, true);
                     fascia(ru, A1, B1, A1, B0, Ae1, -p, 0f, 1f, 0f, true);
-                    ridgeCap(ru, A0 + rk, A1 - rk, bm, e + p * hb, rt);
                     ridge = e + p * hb;
                 }
-                // downpipes at two eave corners
-                float du0 = m.u0 - 0.08f, du1 = m.u1 + 0.08f, dv = m.v1 + 0.08f, dv0 = m.v0 - 0.08f;
-                downpipe(du0, dv, top - 0.15f);
-                downpipe(du1, ru ? dv0 : dv, top - 0.15f);
                 break;
             }
         }

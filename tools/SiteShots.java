@@ -21,7 +21,7 @@ public final class SiteShots {
             for (int v = 0; v < 4; v++) {
                 // stand 60 m out from the site, looking back at it
                 float ang = (float) (v * Math.PI / 2 + 0.6);
-                float px = cx + (float) Math.sin(ang) * 60f, pz = cz + (float) Math.cos(ang) * 60f;
+                float back = Float.parseFloat(System.getProperty("back", "60")); float px = cx + (float) Math.sin(ang) * back, pz = cz + (float) Math.cos(ang) * back;
                 g.player.x = px; g.player.z = pz;
                 g.player.y = g.city.surface(px, pz, 200f);
                 for (int i = 0; i < 3; i++) g.update(1 / 30f, 0, 0, 0, 0, false);

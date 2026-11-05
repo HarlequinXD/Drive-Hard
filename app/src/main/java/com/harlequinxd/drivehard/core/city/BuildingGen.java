@@ -3,6 +3,7 @@ package com.harlequinxd.drivehard.core.city;
 import com.harlequinxd.drivehard.core.game.Box;
 import com.harlequinxd.drivehard.core.render.Geo;
 import com.harlequinxd.drivehard.core.render.Sectors;
+import com.harlequinxd.drivehard.core.tex.FacadeRecipes;
 import com.harlequinxd.drivehard.core.tex.JpTextures.Kind;
 import com.harlequinxd.drivehard.core.tex.TextureLibrary;
 
@@ -62,7 +63,11 @@ final class BuildingGen {
      * @param shops   which sides get ground-floor shops
      * @param shopSet shop texture ids to choose from (by district)
      */
+    /** What is being built (block() styles civic buildings differently from offices). */
+    private Type current;
+
     void build(Type type, float x0, float z0, float x1, float z1, boolean[] street, boolean[] shops, int[] shopSet) {
+        current = type;
         gb.begin(true);
         float base = foundation(x0, z0, x1, z1);
         switch (type) {
@@ -122,6 +127,74 @@ final class BuildingGen {
      * {@code ground}: a texture, -1 shops, -2 lobby. Shop and lobby textures already include their
      * glazing and doors; other street fronts get a real doorway cut into the wall.
      */
+    // ------------------------------------------------------------------ styled facades
+
+    private TextureLibrary.BuildingStyle style(FacadeRecipes.Type t) {
+        TextureLibrary.BuildingStyle[] a = lib.styles(t);
+        return a[r.nextInt(a.length)];
+    }
+
+    private static FacadeRecipes.Type typeOf(Kind k) {
+        switch (k) {
+            case MANSION: return FacadeRecipes.Type.MANSION;
+            case CORRIDOR: return FacadeRecipes.Type.APARTMENT_CORRIDOR;
+            case ZAKKYO: return FacadeRecipes.Type.ZAKKYO;
+            case OFFICE_GRID: return FacadeRecipes.Type.OFFICE;
+            case GLASS: return FacadeRecipes.Type.CURTAIN;
+            case WAREHOUSE: return FacadeRecipes.Type.WAREHOUSE;
+            case BLANK: return FacadeRecipes.Type.DEPT_STORE;
+            default: return FacadeRecipes.Type.SHOPHOUSE;
+        }
+    }
+
+    /** How wide one bay of a style is (metres): the window spacing real buildings of the kind use. */
+    private static float bayWidth(TextureLibrary.BuildingStyle st) {
+        switch (st.type) {
+            case CURTAIN: return 3.2f;
+            case OFFICE: case CIVIC: return 3.4f;
+            case MANSION: return 3.6f;
+            case APARTMENT_CORRIDOR: return 3.0f;
+            case DEPT_STORE: case WAREHOUSE: return 4f;
+            default: return 2.6f;
+        }
+    }
+
+    /**
+     * A wall from a building style: the ground storey (shops {@code -1}, a lobby {@code -2}, or
+     * the style's ground bays with its entrance in the middle on a street front), then every
+     * storey above as one polygon of {@code body} (bays sized to fit the wall exactly), the
+     * parapet in the style's plain material.
+     */
+    private Sectors.Tiles styled(float len, float groundH, int upper, float floorH, int body, int groundTex, int ground,
+                                 TextureLibrary.BuildingStyle st, int[] shopSet, boolean streetSide) {
+        boolean hasGround = groundH > 0f;
+        int floors = Math.max(0, upper) + (hasGround ? 1 : 0);
+        Sectors.Tiles t = new Sectors.Tiles(floors);
+        t.mat = t.matUp = st.plain;
+        t.found = lib.concrete;
+        t.groundH = hasGround ? groundH : floorH;
+        t.storeyH = floorH;
+        int bays = Math.max(1, Math.round(len / bayWidth(st)));
+        t.body = body;
+        t.bodyFrom = hasGround ? 1 : 0;
+        t.bodyU = 2f * len / bays;
+        for (int f = t.bodyFrom; f < floors; f++) t.storey(f, 1, Sectors.FULL, body);
+        if (hasGround) {
+            if (ground == -1 || ground == -2) {
+                int units = Math.max(1, Math.round(len / 5.5f));
+                t.storey(0, units, Sectors.FULL, 0);
+                t.litGround = true;
+                for (int u = 0; u < units; u++)
+                    t.tex[0][u] = ground == -2 ? (u == units / 2 ? lib.lobbies[r.nextInt(lib.lobbies.length)] : st.ground)
+                            : shopSet[r.nextInt(shopSet.length)];
+            } else {
+                t.storey(0, bays, Sectors.FULL, groundTex);
+                if (streetSide) t.tex[0][bays / 2] = st.entrance;
+            }
+        }
+        return t;
+    }
+
     private Sectors.Tiles facade(float len, float groundH, int storeys, float floorH, int tex, int ground,
                                  int[] shopSet, boolean streetSide) {
         boolean hasGround = groundH > 0f;
@@ -275,12 +348,15 @@ final class BuildingGen {
      */
     private void block(float x0, float z0, float x1, float z1, float base, boolean[] street, boolean[] shops, int[] shopSet,
                        Kind front, Kind back, int floors, float floorH, boolean bigSign, int signs) {
+        // one look for the whole building: the street front its main bays, the back its own bays
+        // (an apartment block's open corridors) or the same as the front, the sides plain
+        boolean civic = current == Type.TOWN_HALL || current == Type.POST_OFFICE || current == Type.CLINIC;
+        TextureLibrary.BuildingStyle fs = style(civic ? FacadeRecipes.Type.CIVIC : typeOf(front));
+        TextureLibrary.BuildingStyle bs = back == Kind.CORRIDOR || back == Kind.MANSION ? style(typeOf(back)) : fs;
         // rear walls of shops and offices still have windows (stairs, back rooms, toilets)
-        if (back == Kind.BLANK && front != Kind.BLANK && floors > 1) back = Kind.SHOPHOUSE;
-        int fTex = pick(front), bTex = pick(back);
-        // exposed side walls mostly carry the back facade's windows; some are blank
-        Kind sideKind = back == Kind.BLANK || r.nextFloat() < 0.3f ? Kind.BLANK : back;
-        int side = pick(sideKind);
+        int backBody = back == Kind.BLANK && (front == Kind.BLANK || floors <= 1) ? fs.side : bs.bay;
+        // exposed side walls are mostly plain; some carry the back's windows
+        int sideBody = r.nextFloat() < 0.6f ? fs.side : backBody;
         // no pencil towers: at most 2.5 times as tall as the building is wide
         float narrow = Math.min(x1 - x0, z1 - z0);
         floors = Math.max(1, Math.min(floors, (int) (narrow * 2.5f / floorH)));
@@ -290,14 +366,14 @@ final class BuildingGen {
         float parapet = 0.8f;
         Sectors.Tiles[] t = new Sectors.Tiles[4];
         for (int s = 0; s < 4; s++) {
-            int tex = street[s] ? fTex : (s == N || s == S ? bTex : side);
-            t[s] = facade(len(s, x0, z0, x1, z1), groundH, floors - 1, floorH, tex,
-                    shops[s] ? -1 : tex, shopSet, street[s]);
-            Kind k = street[s] ? front : (s == N || s == S ? back : sideKind);
-            t[s].glowFacade = k != Kind.BLANK && k != Kind.WAREHOUSE;     // only facades with windows light up
+            int body = street[s] ? fs.bay : (s == N || s == S ? backBody : sideBody);
+            int groundTex = street[s] ? fs.ground : fs.side;
+            TextureLibrary.BuildingStyle ws = !street[s] && body == bs.bay ? bs : fs;     // whose bays this wall has
+            t[s] = styled(len(s, x0, z0, x1, z1), groundH, floors - 1, floorH, body, groundTex,
+                    shops[s] ? -1 : 0, ws, shopSet, street[s]);
             if (street[s] && signs > 0 && floors > 1) verticalSigns(s, x0, z0, x1, z1, base + groundH + 0.6f, top, signs);
         }
-        if (balconies) apartmentBalconies(x0, z0, x1, z1, street, base + groundH, floors - 1, floorH);
+        // (balconies are painted into the apartment styles' bays now: no geometry)
         rooftop(x0, z0, x1, z1, top);
         flatRoof(x0, z0, x1, z1, base, top, parapet, r.nextBoolean() ? lib.roofMembrane : lib.concrete, faces(x0, z0, x1, z1, t));
         if (bigSign) rooftopSign(x0, z0, x1, z1, top + parapet, street);
@@ -329,18 +405,18 @@ final class BuildingGen {
     }
 
     private void tower(float x0, float z0, float x1, float z1, float base, boolean[] street, boolean[] shops, int[] shopSet) {
-        int pod = pick(Kind.OFFICE_GRID);
+        TextureLibrary.BuildingStyle pod = style(r.nextBoolean() ? FacadeRecipes.Type.OFFICE : FacadeRecipes.Type.CIVIC);
         int podFloors = 2 + r.nextInt(3);
         float podTop = base + City.SHOP_H + (podFloors - 1) * City.FLOOR_H;
         float in = 3f + r.nextInt(3);
         float tx0 = x0 + in, tz0 = z0 + in, tx1 = x1 - in, tz1 = z1 - in;
         if (tx1 - tx0 >= 10f && tz1 - tz0 >= 10f) {
             // the tower first: the podium roof is cut round it
-            int tower = pick(r.nextBoolean() ? Kind.GLASS : Kind.OFFICE_GRID);
+            TextureLibrary.BuildingStyle tower = style(r.nextInt(3) > 0 ? FacadeRecipes.Type.CURTAIN : FacadeRecipes.Type.OFFICE);
             int floors = 12 + r.nextInt(28);
             float top = podTop + floors * 3.6f;
             Sectors.Tiles[] t = new Sectors.Tiles[4];
-            for (int s = 0; s < 4; s++) t[s] = facade(len(s, tx0, tz0, tx1, tz1), 0f, floors, 3.6f, tower, tower, shopSet, false);
+            for (int s = 0; s < 4; s++) t[s] = styled(len(s, tx0, tz0, tx1, tz1), 0f, floors, 3.6f, tower.bay, tower.ground, 0, tower, shopSet, false);
             rooftop(tx0, tz0, tx1, tz1, top);
             flatRoof(tx0, tz0, tx1, tz1, podTop, top, 1.2f, lib.roofMembrane, faces(tx0, tz0, tx1, tz1, t));
             // aviation light mast
@@ -350,8 +426,8 @@ final class BuildingGen {
         }
         Sectors.Tiles[] t = new Sectors.Tiles[4];
         for (int s = 0; s < 4; s++)
-            t[s] = facade(len(s, x0, z0, x1, z1), City.SHOP_H, podFloors - 1, City.FLOOR_H, pod,
-                    shops[s] ? -1 : (street[s] ? -2 : pod), shopSet, street[s]);
+            t[s] = styled(len(s, x0, z0, x1, z1), City.SHOP_H, podFloors - 1, City.FLOOR_H, street[s] ? pod.bay : pod.side,
+                    pod.side, shops[s] ? -1 : (street[s] ? -2 : 0), pod, shopSet, street[s]);
         flatRoof(x0, z0, x1, z1, base, podTop, 0.9f, lib.roofGravel, faces(x0, z0, x1, z1, t));
         ch.boxes.add(new Box(x0, footMin, z0, x1, podTop + 0.9f, z1));
     }
@@ -365,7 +441,7 @@ final class BuildingGen {
             if (r.nextBoolean()) plantBox(hx + 0.5f, hz + 0.5f, hx + 2.5f, hz + 2.5f, top + 3f, top + 4.6f, lib.metal, lib.metal);
             plantBox(hx, hz, hx + 3f, hz + 3f, top, top + 3f, lib.concrete, lib.roofTar);
         }
-        int n = 1 + r.nextInt(3);
+        int n = r.nextInt(3);
         for (int i = 0; i < n; i++) {
             float ax = x0 + 1.2f + r.nextFloat() * Math.max(0.1f, w - 4f), az = z0 + 1.2f + r.nextFloat() * Math.max(0.1f, d - 3f);
             if (ax + 1.6f > x1 - 0.5f || az + 1f > z1 - 0.5f) continue;

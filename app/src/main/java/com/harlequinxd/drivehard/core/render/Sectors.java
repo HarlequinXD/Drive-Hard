@@ -77,6 +77,13 @@ public final class Sectors {
         /** FULL tiles are facades with painted windows that light up at night. */
         public boolean glowFacade = true;
         public float winW = 1.4f, winH = 1.2f, sill = 0.95f, doorW = 0.95f, doorH = 2.15f;
+        /**
+         * Body: the storeys from {@code bodyFrom} up are one polygon covered by this texture (two
+         * bays by two storeys, repeating): {@code bodyU} metres of wall per texture repeat
+         * across. -1 for none (tile storey by storey).
+         */
+        public int body = -1, bodyFrom = 1;
+        public float bodyU = 4f;
 
         public Tiles(int floors) {
             this.floors = Math.max(0, floors);
