@@ -410,6 +410,12 @@ final class GroundPainter {
         float trimA = na.ring != null ? e.clearA : 0f, trimB = nb.ring != null ? e.clearB : 0f;
         if (gore || s < trimA || s > e.len - trimB) return plain;
         float hw = e.cls.halfWidth();
+        if (e.surface != com.harlequinxd.drivehard.core.road.RoadEdge.PAVED) {
+            // unsealed track: ruts across, no markings
+            int t = e.surface == com.harlequinxd.drivehard.core.road.RoadEdge.DIRT ? lib.dirtTrack : lib.gravelTrack;
+            float u = Math.max(0f, Math.min(0.999f, (off + hw) / (2f * hw)));
+            return sampleAcross(tex(t), u, (s % 20f) / 20f, TEXEL / (2f * hw));
+        }
         float ma = roads.mouth(e, na), mb = roads.mouth(e, nb);
         boolean atA = ma > 0f && s < trimA + ma, atB = mb > 0f && s > e.len - trimB - mb;
         if (atA || atB) {

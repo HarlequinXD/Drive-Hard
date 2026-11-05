@@ -56,6 +56,8 @@ public final class RoadNetwork {
         profiles();
         buildIndex();
         farms();
+        buildIndex();
+        farmTracks();
         splay();
         clearances();
         buildIndex();
@@ -1293,9 +1295,195 @@ public final class RoadNetwork {
             float[][] pl = bezier(j.x, j.z, j.x + lx * (hw + 10f), j.z + lz * (hw + 10f),
                     fx - dx * 10f, fz - dz * 10f, end.x, end.z, RoadClass.LANE.step);
             RoadEdge lane = addEdge(RoadClass.LANE, j.id, end.id, pl[0], pl[1]);
+            lane.surface = r.nextInt(3) == 0 ? RoadEdge.DIRT : RoadEdge.GRAVEL;
             profile(lane);
             pin(lane);
         }
+    }
+
+    /** Rural homes off the farm tracks: {x0, z0, x1, z1, face toward the driveway, seed}. */
+    public final List<float[]> homes = new ArrayList<>();
+
+    /**
+     * Unsealed farm roads: a gravel or dirt track leaves a country road or highway at a T-junction
+     * and winds up to 500 m into the fields, with several properties along it (farmsteads and
+     * country houses, alternating sides), each reached by its own short driveway, and a farm at
+     * the end of the road.
+     */
+    private void farmTracks() {
+        Random r = new Random(seed * 41L + 9);
+        float[] p = new float[5];
+        List<float[]> picks = new ArrayList<>();     // edge, s, side
+        int edgeCount = edges.size();
+        for (int ei = 0; ei < edgeCount; ei++) {
+            RoadEdge e = edges.get(ei);
+            if (e.cls != RoadClass.COUNTRY && e.cls != RoadClass.HIGHWAY) continue;
+            float s = 260f + r.nextFloat() * 500f;
+            while (s < e.len - 120f) {
+                if (!e.bridge[e.seg(s)] && s > e.clearA + 80f && s < e.len - e.clearB - 80f)
+                    picks.add(new float[]{ei, s, r.nextBoolean() ? 1 : -1});
+                s += 700f + r.nextFloat() * 1100f;
+            }
+        }
+        picks.sort((A, B) -> A[0] != B[0] ? Float.compare(A[0], B[0]) : Float.compare(B[1], A[1]));
+        List<Object[]> plans = new ArrayList<>();
+        for (float[] pk : picks) {
+            RoadEdge e = edges.get((int) pk[0]);
+            float s = pk[1], side = pk[2];
+            e.point(s, p);
+            float hw = e.cls.halfWidth();
+            float nx = p[4] * side, nz = -p[3] * side;
+            // plan the track: straight out from the road, then wandering gently
+            float length = 220f + r.nextFloat() * 280f;
+            List<float[]> wp = new ArrayList<>();
+            wp.add(new float[]{p[0], p[1]});
+            float x = p[0] + nx * (hw + 14f), z = p[1] + nz * (hw + 14f);
+            wp.add(new float[]{x, z});
+            float hx = nx, hz = nz, run = hw + 14f;
+            boolean ok = true;
+            List<Long> cells = new ArrayList<>();
+            while (run < length) {
+                float turn = (r.nextFloat() - 0.5f) * 0.7f;
+                float c = (float) Math.cos(turn), sn = (float) Math.sin(turn);
+                float tx = hx * c - hz * sn, tz = hx * sn + hz * c;
+                hx = tx; hz = tz;
+                float step = 55f + r.nextFloat() * 25f;
+                float qx = x + hx * step, qz = z + hz * step;
+                float h0 = terrain.natural(x, z), h1 = terrain.natural(qx, qz);
+                if (Math.abs(h1 - h0) / step > 0.11f || h1 < 3f || terrain.coastOver(qx, qz) > -120f
+                        || terrain.cityDistance(qx, qz) < 1300f || city.nearUrban(qx, qz, 300f)
+                        || roadClearance(qx, qz, 40f) < 30f || townNear(qx, qz, 80f) || !trackCellsFree(qx, qz, cells)) break;
+                x = qx; z = qz;
+                run += step;
+                wp.add(new float[]{x, z});
+            }
+            if (run < 160f) continue;
+            float[][] pl = spline(wp, RoadClass.LANE.step);
+            float[] ls = new float[pl[0].length];
+            for (int i = 1; i < ls.length; i++) ls[i] = ls[i - 1] + (float) Math.hypot(pl[0][i] - pl[0][i - 1], pl[1][i] - pl[1][i - 1]);
+            float total = ls[ls.length - 1];
+            // properties along the way (alternating sides) and one at the end
+            List<int[]> stops = new ArrayList<>();     // vertex index, side (0 = end of road)
+            int sideNow = r.nextBoolean() ? 1 : -1;
+            for (float d = 70f + r.nextFloat() * 40f; d < total - 70f; d += 95f + r.nextFloat() * 70f) {
+                int vi = 1;
+                while (vi < ls.length - 2 && ls[vi] < d) vi++;
+                stops.add(new int[]{vi, sideNow});
+                sideNow = -sideNow;
+            }
+            stops.add(new int[]{ls.length - 1, 0});
+            // place the sites first; drop the stops that do not fit
+            List<float[]> placed = new ArrayList<>();   // vi, side, kind (0 farm, 1 home), gate x, z, dx, dz, list index
+            for (int[] st : stops) {
+                int vi = st[0];
+                float px = pl[0][vi], pz = pl[1][vi];
+                int a = Math.max(0, vi - 1), b = Math.min(ls.length - 1, vi + 1);
+                float tx = pl[0][b] - pl[0][a], tz = pl[1][b] - pl[1][a], tl = (float) Math.hypot(tx, tz);
+                tx /= tl; tz /= tl;
+                float ox, oz, off;
+                if (st[1] == 0) { ox = tx; oz = tz; off = 6f; }       // straight on at the end of the road
+                else { ox = tz * st[1]; oz = -tx * st[1]; off = 0f; }
+                boolean farm = st[1] == 0 || r.nextInt(5) < 2;
+                float dist = st[1] == 0 ? off : 16f + r.nextFloat() * (farm ? 30f : 22f);
+                float half = farm ? 15f : 9f, deep = farm ? 13f : 8f;
+                float cx = px + ox * (dist + deep), cz = pz + oz * (dist + deep);
+                int face = Math.abs(ox) > Math.abs(oz) ? (ox > 0 ? 2 : 3) : (oz > 0 ? 0 : 1);
+                boolean wide = face < 2;
+                float x0 = cx - (wide ? half : deep), x1 = cx + (wide ? half : deep), z0 = cz - (wide ? deep : half), z1 = cz + (wide ? deep : half);
+                if (!propertySite(x0, z0, x1, z1, pl, vi)) continue;
+                float[] rec = {x0, z0, x1, z1, face, r.nextInt()};
+                if (farm) { farms.add(rec); placed.add(new float[]{vi, st[1], 0, farms.size() - 1}); }
+                else { homes.add(rec); placed.add(new float[]{vi, st[1], 1, homes.size() - 1}); }
+            }
+            if (placed.isEmpty()) continue;
+            for (long k : cells) farmCells.add(k);
+            plans.add(new Object[]{pk, pl, placed, r.nextInt(5) < 3 ? RoadEdge.GRAVEL : RoadEdge.DIRT, r.nextInt()});
+        }
+        // now build them: split the roads from the far end of each edge so earlier distances stay valid
+        for (Object[] plan : plans) {
+            float[] pk = (float[]) plan[0];
+            float[][] pl = (float[][]) plan[1];
+            @SuppressWarnings("unchecked") List<float[]> placed = (List<float[]>) plan[2];
+            int surface = (Integer) plan[3];
+            Random r2 = new Random((Integer) plan[4]);
+            RoadEdge e = edges.get((int) pk[0]);
+            float s = pk[1];
+            // cut the track short after the last property
+            int lastV = 0;
+            for (float[] q : placed) lastV = Math.max(lastV, (int) q[0]);
+            int jn = splitAt(e, s, RoadNode.Kind.JUNCTION);
+            int prev = jn, prevV = 0;
+            placed.sort((A, B) -> Float.compare(A[0], B[0]));
+            List<int[]> branchNodes = new ArrayList<>();
+            for (int qi = 0; qi < placed.size(); qi++) {
+                int vi = (int) placed.get(qi)[0];
+                if (vi <= prevV) vi = prevV + 1;
+                if (vi >= pl[0].length) break;
+                boolean end = vi >= lastV;
+                RoadNode nd = addNode(pl[0][vi], pl[1][vi], end ? RoadNode.Kind.END : RoadNode.Kind.JUNCTION);
+                RoadEdge tr = addEdge(RoadClass.LANE, prev, nd.id, Arrays.copyOfRange(pl[0], prevV, vi + 1), Arrays.copyOfRange(pl[1], prevV, vi + 1));
+                tr.surface = surface;
+                profile(tr);
+                pin(tr);
+                branchNodes.add(new int[]{nd.id, qi});
+                prev = nd.id;
+                prevV = vi;
+                if (end) break;
+            }
+            // driveways from the track to each gate
+            for (int[] bn : branchNodes) {
+                float[] q = placed.get(bn[1]);
+                float[] f = q[2] == 0 ? farms.get((int) q[3]) : homes.get((int) q[3]);
+                RoadNode j = nodes.get(bn[0]);
+                int face = (int) f[4];
+                float fx, fz, dx, dz;
+                switch (face) {
+                    case 0: fx = (f[0] + f[2]) * 0.5f; fz = f[1]; dx = 0; dz = 1; break;
+                    case 1: fx = (f[0] + f[2]) * 0.5f; fz = f[3]; dx = 0; dz = -1; break;
+                    case 2: fx = f[0]; fz = (f[1] + f[3]) * 0.5f; dx = 1; dz = 0; break;
+                    default: fx = f[2]; fz = (f[1] + f[3]) * 0.5f; dx = -1; dz = 0; break;
+                }
+                if (Math.hypot(fx - j.x, fz - j.z) < 5f) continue;
+                RoadNode gate = addNode(fx + dx * 3f, fz + dz * 3f, RoadNode.Kind.END);
+                float mx = (j.x + fx) * 0.5f, mz = (j.z + fz) * 0.5f;
+                float[][] dw = bezier(j.x, j.z, mx, mz, fx - dx * 6f, fz - dz * 6f, gate.x, gate.z, RoadClass.LANE.step);
+                RoadEdge drive = addEdge(RoadClass.LANE, j.id, gate.id, dw[0], dw[1]);
+                drive.surface = q[2] == 0 ? surface : (r2.nextInt(3) == 0 ? RoadEdge.PAVED : RoadEdge.GRAVEL);
+                profile(drive);
+                pin(drive);
+            }
+            trackCount++;
+        }
+    }
+
+    public int trackCount;
+
+    private boolean townNear(float x, float z, float margin) {
+        for (Town t : towns) if (t.size != Town.Size.HAMLET && x > t.x0 - margin && x < t.x1 + margin && z > t.z0 - margin && z < t.z1 + margin) return true;
+        return false;
+    }
+
+    /** The 32 m cells around a track point are not used by a farm or another track yet (collects them). */
+    private boolean trackCellsFree(float x, float z, List<Long> cells) {
+        int a = (int) Math.floor(x / 32f), b = (int) Math.floor(z / 32f);
+        for (int dz = -1; dz <= 1; dz++)
+            for (int dx = -1; dx <= 1; dx++) {
+                long k = ((long) (a + dx) << 32) ^ ((b + dz) & 0xFFFFFFFFL);
+                if (farmCells.contains(k)) return false;
+            }
+        for (int dz = -1; dz <= 1; dz++)
+            for (int dx = -1; dx <= 1; dx++) cells.add(((long) (a + dx) << 32) ^ ((b + dz) & 0xFFFFFFFFL));
+        return true;
+    }
+
+    /** A property beside a track: on gentle open land, clear of every road (the track included). */
+    private boolean propertySite(float x0, float z0, float x1, float z1, float[][] track, int vi) {
+        // keep 5 m off the track itself
+        for (int i = 0; i < track[0].length; i++) {
+            float tx = track[0][i], tz = track[1][i];
+            if (tx > x0 - 5f && tx < x1 + 5f && tz > z0 - 5f && tz < z1 + 5f) return false;
+        }
+        return farmSite(x0, z0, x1, z1);
     }
 
     /** The straight run from the road to the yard crosses no other road. */

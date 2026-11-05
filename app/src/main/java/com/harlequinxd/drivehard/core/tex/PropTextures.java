@@ -124,4 +124,41 @@ public final class PropTextures {
         for (int x = 0; x < 16; x++) m.px[x] = Img.mul(c, 0.6f);
         return m.texture();
     }
+
+    /**
+     * An unsealed farm track seen from above: u runs across the track (0..1 = edge to edge), v
+     * along it (one tile = 20 m). Gravel: grey-brown stones with two packed wheel ruts. Dirt:
+     * brown earth with darker ruts and a grassy strip down the middle, ragged grassy edges.
+     */
+    public static Texture track(boolean dirt, int seed) {
+        Img m = new Img(32, 128);
+        java.util.Random r = new java.util.Random(seed);
+        int base = dirt ? rgb(132, 104, 72) : rgb(150, 142, 128);
+        int rut = dirt ? rgb(104, 80, 54) : rgb(126, 118, 104);
+        int grass = rgb(92, 118, 58);
+        m.fill(base);
+        m.grain(0, 0, 32, 128, 0.10f, 0.10f, seed);
+        for (int y = 0; y < 128; y++) {
+            // wheel ruts wander a little
+            float wob = (float) Math.sin(y * 0.11f + seed) * 0.6f;
+            for (int x = 0; x < 32; x++) {
+                float u = (x + 0.5f) / 32f;
+                float d1 = Math.abs(u - 0.27f - wob / 32f), d2 = Math.abs(u - 0.73f - wob / 32f);
+                float dr = Math.min(d1, d2);
+                int c = m.get(x, y);
+                if (dr < 0.07f) c = mix(c, rut, 0.75f * (1f - dr / 0.07f) + 0.15f);
+                if (dirt && Math.abs(u - 0.5f) < 0.09f) c = mix(c, grass, 0.6f + r.nextFloat() * 0.3f);
+                float edge = Math.min(u, 1f - u);
+                if (edge < 0.07f) c = mix(c, grass, (dirt ? 0.8f : 0.45f) * (1f - edge / 0.07f) + r.nextFloat() * 0.15f);
+                m.set(x, y, c);
+            }
+        }
+        // loose stones / clods
+        for (int k = 0; k < 220; k++) {
+            int x = r.nextInt(32), y = r.nextInt(128);
+            int c = m.get(x, y);
+            m.set(x, y, r.nextBoolean() ? Img.mul(c, 1.25f) : Img.mul(c, 0.75f));
+        }
+        return m.texture();
+    }
 }

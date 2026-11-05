@@ -358,6 +358,23 @@ public final class Countryside {
             add(st);
             farmCount++;
         }
+        // country houses up the farm tracks, each at the end of its own driveway
+        for (float[] f : roads.homes) {
+            Site st = new Site();
+            st.x0 = f[0]; st.z0 = f[1]; st.x1 = f[2]; st.z1 = f[3];
+            st.kind = LOT; st.face = (int) f[4]; st.seed = (int) f[5];
+            st.design = rnd.nextInt(HouseGen.SUBURB_DESIGNS);
+            st.rx = Float.NaN;
+            st.ground = lotGround(st);
+            // the driveway arrives at the middle of the frontage: gravel across to the carport
+            float w = st.face < 2 ? st.x1 - st.x0 : st.z1 - st.z0;
+            float[] cp = st.ground.get(0);
+            float[] lu = toLocal(st, cp);
+            float[] pad = local(st, Math.min(w * 0.5f - 1.6f, lu[0]), 0f, Math.max(w * 0.5f + 1.6f, lu[2]), 3.2f);
+            st.ground.add(0, new float[]{pad[0], pad[1], pad[2], pad[3], lib.gravel});
+            reserve(st.x0, st.z0, st.x1, st.z1);
+            add(st);
+        }
         // fishing harbours: quay, breakwaters, boats and sheds
         for (float[] h : roads.harbours) {
             Site st = new Site();
@@ -568,15 +585,14 @@ public final class Countryside {
     private List<float[]> lotGround(Site st) {
         List<float[]> g = new ArrayList<>();
         HouseGen.Design d = HouseGen.design(lib, false, st.design);
-        float W = st.x1 - st.x0, D = st.z1 - st.z0;
+        float W = st.face < 2 ? st.x1 - st.x0 : st.z1 - st.z0, D = st.face < 2 ? st.z1 - st.z0 : st.x1 - st.x0;
         float[] lay = HouseGen.layout(d, W, D, true);
         float u0, u1;
         if (!Float.isNaN(lay[4])) { u0 = lay[4]; u1 = lay[5]; }
         else { u0 = d.leftDoor ? lay[2] - 3.2f : lay[0] + 0.2f; u1 = u0 + 3f; }
         float v1 = Float.isNaN(lay[4]) ? lay[1] : Math.min(D - 1f, lay[1] + 5.4f);
-        // local u along the frontage: rows face N (u = x - x0) or S (u = x1 - x)
-        float x0 = st.face == 0 ? st.x0 + u0 : st.x1 - u1, x1 = st.face == 0 ? st.x0 + u1 : st.x1 - u0;
-        float z0 = st.face == 0 ? st.z0 : st.z1 - v1, z1 = st.face == 0 ? st.z0 + v1 : st.z1;
+        float[] q = local(st, u0, 0f, u1, v1);
+        float x0 = q[0], z0 = q[1], x1 = q[2], z1 = q[3];
         g.add(new float[]{x0, z0, x1, z1, lib.concrete});
         return g;
     }
@@ -651,6 +667,16 @@ public final class Countryside {
                         s.x0, s.z0, s.x1, s.z1, street, new boolean[4], city.shopsSuburb);
                 garden(ch, s, r);
                 break;
+        }
+    }
+
+    /** Inverse of {@link #local}: a world rectangle {x0, z0, x1, z1} to {u0, v0, u1, v1}. */
+    private static float[] toLocal(Site s, float[] r) {
+        switch (s.face) {
+            case 0: return new float[]{r[0] - s.x0, r[1] - s.z0, r[2] - s.x0, r[3] - s.z0};
+            case 1: return new float[]{s.x1 - r[2], s.z1 - r[3], s.x1 - r[0], s.z1 - r[1]};
+            case 2: return new float[]{s.z1 - r[3], r[0] - s.x0, s.z1 - r[1], r[2] - s.x0};
+            default: return new float[]{r[1] - s.z0, s.x1 - r[2], r[3] - s.z0, s.x1 - r[0]};
         }
     }
 

@@ -179,6 +179,37 @@ public class SimTest {
                         && cityMap.relief[mapPixel(cityMap, c.spawnX, c.spawnZ)] != cityMap.relief[mapCorner]);
         check("countryside has villages and farms", net.villages.size() > 60 && c.countryside.farmCount > 800);
         {
+            int gravel = 0, dirt = 0, longTracks = 0;
+            for (var e : net.edges) {
+                if (e.cls != com.harlequinxd.drivehard.core.road.RoadClass.LANE) continue;
+                if (e.surface == com.harlequinxd.drivehard.core.road.RoadEdge.GRAVEL) gravel++;
+                if (e.surface == com.harlequinxd.drivehard.core.road.RoadEdge.DIRT) dirt++;
+            }
+            // whole tracks: walk from each junction on a main road along LANE edges
+            for (var e : net.edges) {
+                if (e.cls != com.harlequinxd.drivehard.core.road.RoadClass.LANE || e.surface == 0) continue;
+                var na = net.nodes.get(e.a);
+                boolean fromMain = false;
+                for (int id : na.edges) { var o = net.edges.get(id); fromMain |= o.cls == com.harlequinxd.drivehard.core.road.RoadClass.COUNTRY || o.cls == com.harlequinxd.drivehard.core.road.RoadClass.HIGHWAY; }
+                if (!fromMain) continue;
+                float run = 0f;
+                var cur = e;
+                int guard = 0;
+                while (cur != null && guard++ < 20) {
+                    run += cur.len;
+                    var nb = net.nodes.get(cur.b);
+                    com.harlequinxd.drivehard.core.road.RoadEdge next = null;
+                    for (int id : nb.edges) { var o = net.edges.get(id); if (o != cur && o.a == nb.id && o.surface == cur.surface && o.len > 40f && o.cls == cur.cls) next = o; }
+                    cur = next;
+                }
+                if (run > 250f) longTracks++;
+            }
+            System.out.printf("farm roads: %d tracks, %d homes, lanes gravel %d dirt %d, %d tracks over 250 m%n",
+                    net.trackCount, net.homes.size(), gravel, dirt, longTracks);
+            check("gravel and dirt farm tracks with properties along them", net.trackCount > 100 && net.homes.size() > 100
+                    && gravel > 200 && dirt > 100 && longTracks > 50);
+        }
+        {
             boolean[] reach = new boolean[net.nodes.size()];
             java.util.ArrayDeque<Integer> bfs = new java.util.ArrayDeque<>();
             int cityCentre = net.cityNode[c.nbx / 2][c.nbz / 2];

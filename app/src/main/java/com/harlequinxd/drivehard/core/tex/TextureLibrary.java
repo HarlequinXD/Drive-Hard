@@ -136,7 +136,7 @@ public final class TextureLibrary {
     public HouseTextures.Door[] houseDoorKind;
     public HouseTextures.Roof[] houseRoofKind;
     /** Building props: a/c unit front and casing, balcony front and slab, power line ribbon. */
-    public int aircon, airconSide, balconyFront, balconySlab, powerLines;
+    public int gravelTrack, dirtTrack, aircon, airconSide, balconyFront, balconySlab, powerLines;
     /** Alley clutter: beer crates, rubbish bins, cardboard, gas bottles. */
     public int crateYellow, crateRed, bin, cardboard, gasBottle;
     public int fence, signTownOffice, signPost, signSuper, signSchool, signClinic, signGas, schoolWall, superWall, canopy, field;
@@ -221,6 +221,8 @@ public final class TextureLibrary {
         bin = add(PropTextures.bin(seed + 3416));
         cardboard = add(PropTextures.cardboard(seed + 3417));
         gasBottle = add(PropTextures.gasBottle(seed + 3418));
+        gravelTrack = add(PropTextures.track(false, seed + 3419));
+        dirtTrack = add(PropTextures.track(true, seed + 3420));
     }
 
     public int add(Texture t) {

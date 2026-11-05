@@ -23,6 +23,9 @@ public final class RoadEdge {
     public float rampSide;
     /** The edge this piece was split from (itself if never split). */
     public int origin;
+    /** Surface of farm lanes and tracks: PAVED, GRAVEL or DIRT. */
+    public int surface;
+    public static final int PAVED = 0, GRAVEL = 1, DIRT = 2;
 
     RoadEdge(int id, RoadClass cls, int a, int b, float[] x, float[] z, boolean oneWay) {
         this.id = id;
