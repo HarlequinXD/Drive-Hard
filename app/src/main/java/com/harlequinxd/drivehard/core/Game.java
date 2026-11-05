@@ -55,6 +55,10 @@ public final class Game {
     private final float[] door = new float[2];
     private final List<Vehicle> trafficObstacles = new ArrayList<>();
     public final SpriteSheet sheet, lamps, signals, umbrellas, poles;
+    /** The player swimming (wider frames, anchored at the waterline) and the splash burst. */
+    public final SpriteSheet swimSheet, splashSheet;
+    private final int swimTex, splashTex;
+    private final int[] rippleTex = new int[com.harlequinxd.drivehard.core.tex.PropTextures.RIPPLE_FRAMES];
     private final int playerTex, lampTex, signalTex, umbrellaTex, poleTex;
     public final Texture[] textures = new Texture[4096];
     public final SpriteCache cache;
@@ -93,7 +97,22 @@ public final class Game {
         if (progress != null) progress.step("Painting building textures", 0.00f);
         lib = new TextureLibrary(seed);
         if (progress != null) progress.step("Baking characters and props", 0.10f);
-        sheet = new SpriteBaker().bake(new CharacterModel(CharacterSpec.player()));
+        CharacterModel playerModel = new CharacterModel(CharacterSpec.player());
+        sheet = new SpriteBaker().bake(playerModel, Animations.LAND);
+        SpriteBaker swimBaker = new SpriteBaker();
+        swimBaker.frameW = 96; swimBaker.frameH = 64; swimBaker.anchorX = 48; swimBaker.anchorY = 40;
+        swimSheet = swimBaker.bake(playerModel, Animations.SWIM);
+        swimTex = lib.add(Texture.padded(swimSheet.pixels, swimSheet.width, swimSheet.height));
+        {
+            int sf = 8, sw = 48, sh = 48, perRow = 512 / sw;
+            int[] frames = com.harlequinxd.drivehard.core.tex.PropTextures.splash(sf, sw, sh, 4242);
+            int[] atlas = new int[512 * sh];
+            for (int f = 0; f < sf; f++)
+                for (int y = 0; y < sh; y++) System.arraycopy(frames, f * sw * sh + y * sw, atlas, y * 512 + f * sw, sw);
+            splashSheet = new SpriteSheet(atlas, 512, sh, sw, sh, sf, 1, perRow, sw / 2, sh - 4, 32f);
+            splashTex = lib.add(new Texture(512, sh, atlas));
+        }
+        for (int i = 0; i < rippleTex.length; i++) rippleTex[i] = lib.add(com.harlequinxd.drivehard.core.tex.PropTextures.ripple(i));
         lamps = PropSprites.lamp();
         signals = PropSprites.signals();
         umbrellas = PropSprites.umbrellas();
@@ -275,6 +294,7 @@ public final class Game {
                 if (popT > 0.15f && player.onGround) mode = Mode.ON_FOOT;
                 break;
         }
+        updateWaterFx(dt);
         driveCamera(dt);
         float fx = mode == Mode.DRIVING || mode == Mode.ENTERING ? vehicle.x : player.x;
         float fz = mode == Mode.DRIVING || mode == Mode.ENTERING ? vehicle.z : player.z;
@@ -288,7 +308,7 @@ public final class Game {
         boolean driving = mode == Mode.DRIVING || mode == Mode.ENTERING;
         float wantDist = driving ? 7f + Math.min(2.5f, Math.abs(vehicle.speed) * 0.09f) : 6f;
         cam.distance += (wantDist - cam.distance) * Math.min(1f, dt * 3f);
-        cam.targetHeight += ((driving ? 1.5f : 1.1f) - cam.targetHeight) * Math.min(1f, dt * 3f);
+        cam.targetHeight += ((driving ? 1.5f : player.swimming ? 0.55f : 1.1f) - cam.targetHeight) * Math.min(1f, dt * 3f);
         if (driving && camIdle > 0.8f && Math.abs(vehicle.speed) > 1f) {
             float behind = vehicle.yaw + (float) Math.PI;
             float diff = behind - cam.yaw;
@@ -576,13 +596,140 @@ public final class Game {
 
     private void drawPlayer(SoftRenderer r) {
         Player p = player;
+        drawWaterFx(r);
+        if (p.swimming) {
+            // only what is above the surface is drawn: the sheet is anchored at the waterline
+            SpriteSheet ss = swimSheet;
+            int f = Animations.firstFrame(p.anim, Animations.SWIM) + p.animFrame;
+            int dir = ss.directionFor(p.facing, cam.yaw);
+            int u = ss.frameX(dir, f), v = ss.frameY(dir, f);
+            r.billboard(swimTex, p.x, p.y, p.z, ss.left(), ss.right(), 0f, ss.top(), u, v, u + ss.frameW, v + ss.anchorY, -0.8f);
+            return;
+        }
         float gy = city.groundHeight(p.x, p.z, Player.RADIUS, p.y + 0.01f, 0.01f);
         float air = Math.min(1f, (p.y - gy) / 3f);
-        r.groundQuad(lib.shadow, p.x, gy + 0.02f, p.z, 0.38f * (1f - air * 0.4f), SoftRenderer.MODE_SHADOW, SoftRenderer.L_SHADOW);
+        if (p.waterDepth < 0.15f)
+            r.groundQuad(lib.shadow, p.x, gy + 0.02f, p.z, 0.38f * (1f - air * 0.4f), SoftRenderer.MODE_SHADOW, SoftRenderer.L_SHADOW);
         SpriteSheet s = sheet;
+        if (p.anim.ordinal() >= Animations.Anim.SWIM_TREAD.ordinal()) { p.anim = Animations.Anim.IDLE; p.animFrame = 0; }
+        int dir = s.directionFor(p.facing, cam.yaw), frame = Animations.firstFrame(p.anim) + p.animFrame;
+        if (p.waterDepth > 0.02f && p.y < 0f && mode == Mode.ON_FOOT) {
+            // wading: cut the sprite at the water surface (her legs are under it)
+            float under = Math.min(s.top() - 0.1f, -p.y);
+            int u = s.frameX(dir, frame), v = s.frameY(dir, frame);
+            int cut = (int) (under * s.pixelsPerMeter);
+            r.billboard(playerTex, p.x, p.y, p.z, s.left(), s.right(), under, s.top(), u, v, u + s.frameW, v + s.anchorY - cut, -0.8f);
+            return;
+        }
         // while hopping in, draw her just in front of the car so she reads as climbing in
-        sprite(r, playerTex, s, s.directionFor(p.facing, cam.yaw), Animations.firstFrame(p.anim) + p.animFrame, p.x, p.y, p.z,
-                mode == Mode.ENTERING ? -1.6f : -0.8f);
+        sprite(r, playerTex, s, dir, frame, p.x, p.y, p.z, mode == Mode.ENTERING ? -1.6f : -0.8f);
+    }
+
+    // ------------------------------------------------------------------ water effects
+
+    /** A ripple ring on the water or a splash burst. */
+    private static final class WaterFx {
+        float x, y, z, age, life, size;
+        boolean splash;
+    }
+
+    private final List<WaterFx> waterFx = new ArrayList<>();
+    private float fxTimer, wakeTimer, lastPhase;
+
+    private void ripple(float x, float z, float size, float life) {
+        if (waterFx.size() > 60) return;
+        WaterFx f = new WaterFx();
+        f.x = x; f.z = z; f.size = size; f.life = life; f.y = 0.03f;
+        waterFx.add(f);
+    }
+
+    private void splash(float x, float y, float z, float size) {
+        if (waterFx.size() > 60) return;
+        WaterFx f = new WaterFx();
+        f.x = x; f.y = y; f.z = z; f.size = size; f.life = 0.55f; f.splash = true;
+        waterFx.add(f);
+    }
+
+    /**
+     * Splashes and ripples for the player in the sea: footsteps splash and ring the water when
+     * wading; strokes throw spray from the hands and kicks (crawl) or push a ring out from the
+     * head (breaststroke), a wake of rings trails behind, treading water sends out slow rings,
+     * and jumping in throws up a big splash.
+     */
+    private void updateWaterFx(float dt) {
+        for (int i = waterFx.size() - 1; i >= 0; i--) {
+            WaterFx f = waterFx.get(i);
+            f.age += dt;
+            if (f.age >= f.life) waterFx.remove(i);
+        }
+        Player p = player;
+        if (mode != Mode.ON_FOOT && mode != Mode.EXITING) return;
+        float fx = (float) Math.sin(p.facing), fz = (float) Math.cos(p.facing), sx = fz, sz = -fx;
+        if (p.splashImpact < -1f) {
+            float k = Math.min(1.8f, 0.7f - p.splashImpact * 0.12f);
+            splash(p.x, 0f, p.z, k);
+            ripple(p.x, p.z, 1.6f * k, 1.4f);
+            ripple(p.x, p.z, 2.4f * k, 2.0f);
+        }
+        boolean wet = p.swimming || p.waterDepth > 0.08f;
+        if (!wet) { lastPhase = p.cyclePhase(); return; }
+        float speed = (float) Math.sqrt(p.vx * p.vx + p.vz * p.vz);
+        float ph = p.cyclePhase();
+        boolean wrap = ph < lastPhase - 0.2f, half = lastPhase < 0.5f && ph >= 0.5f;
+        lastPhase = ph;
+        fxTimer -= dt;
+        wakeTimer -= dt;
+        if (p.swimming) {
+            switch (p.anim) {
+                case SWIM_FREE:
+                    if (wrap || half) {
+                        float side = wrap ? 1f : -1f;
+                        splash(p.x + fx * 0.95f + sx * 0.3f * side, 0f, p.z + fz * 0.95f + sz * 0.3f * side, 0.45f);
+                        ripple(p.x + fx * 0.9f + sx * 0.3f * side, p.z + fz * 0.9f + sz * 0.3f * side, 0.9f, 1.1f);
+                        splash(p.x - fx * 1.05f, 0f, p.z - fz * 1.05f, 0.3f);
+                    }
+                    break;
+                case SWIM_BREAST:
+                    if (wrap) ripple(p.x + fx * 0.5f, p.z + fz * 0.5f, 1.4f, 1.6f);
+                    if (half) splash(p.x - fx * 0.9f, 0f, p.z - fz * 0.9f, 0.3f);
+                    break;
+                default:
+                    if (fxTimer <= 0f) { ripple(p.x, p.z, 1.2f, 1.8f); fxTimer = 0.9f; }
+                    break;
+            }
+            if (speed > 0.4f && wakeTimer <= 0f) {
+                ripple(p.x - fx * 0.7f, p.z - fz * 0.7f, 0.7f + speed * 0.25f, 1.3f);
+                wakeTimer = 0.45f;
+            }
+        } else {
+            // wading: a splash at each step, rings round the legs
+            float depth = Math.min(1f, p.waterDepth);
+            if (speed > 0.5f && p.onGround && (wrap || half)) {
+                float side = wrap ? 1f : -1f;
+                float k = Math.min(1.1f, 0.25f + speed * 0.09f) * (0.5f + depth);
+                splash(p.x + fx * 0.25f + sx * 0.12f * side, 0f, p.z + fz * 0.25f + sz * 0.12f * side, k);
+                ripple(p.x, p.z, 0.8f + speed * 0.12f, 1.2f);
+            } else if (fxTimer <= 0f) {
+                ripple(p.x, p.z, 0.7f + depth * 0.4f, 1.6f);
+                fxTimer = 1.3f;
+            }
+        }
+    }
+
+    private void drawWaterFx(SoftRenderer r) {
+        for (WaterFx f : waterFx) {
+            float t = f.age / f.life;
+            if (f.splash) {
+                int frame = Math.min(splashSheet.frames - 1, (int) (t * splashSheet.frames));
+                int u = splashSheet.frameX(0, frame), v = splashSheet.frameY(0, frame);
+                float k = f.size;
+                r.billboard(splashTex, f.x, f.y, f.z, splashSheet.left() * k, splashSheet.right() * k,
+                        splashSheet.bottom() * k, splashSheet.top() * k, u, v, u + splashSheet.frameW, v + splashSheet.frameH, -1.0f);
+            } else {
+                int frame = Math.min(rippleTex.length - 1, (int) (t * rippleTex.length));
+                r.groundQuad(rippleTex[frame], f.x, f.y, f.z, f.size, SoftRenderer.MODE_ALPHA, SoftRenderer.L_DECAL, -0.2f);
+            }
+        }
     }
 
     private void drawSprites(Chunk c, SoftRenderer r, Terrain terrain) {

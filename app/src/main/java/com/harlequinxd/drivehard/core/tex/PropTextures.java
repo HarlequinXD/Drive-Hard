@@ -161,4 +161,79 @@ public final class PropTextures {
         }
         return m.texture();
     }
+
+    /** Frames of an expanding ripple ring on water (64x64, cut-out alpha, dithered as it fades). */
+    public static final int RIPPLE_FRAMES = 8;
+
+    public static Texture ripple(int frame) {
+        Img m = new Img(64, 64);
+        float t = frame / (float) (RIPPLE_FRAMES - 1);
+        float rr = 6f + t * 23f;                       // ring radius in texels
+        float fade = (1f - t) * (1f - t * 0.3f);
+        int crest = rgb(226, 240, 242), trough = rgb(52, 128, 150);
+        for (int y = 0; y < 64; y++)
+            for (int x = 0; x < 64; x++) {
+                float dx = x + 0.5f - 32f, dy = y + 0.5f - 32f;
+                float d = (float) Math.sqrt(dx * dx + dy * dy);
+                // the ring is slightly uneven, like a real ripple on a moving surface
+                float wob = (float) Math.sin(Math.atan2(dy, dx) * 5 + frame) * 0.6f;
+                float c1 = Math.abs(d - rr - wob), c2 = Math.abs(d - (rr - 3f) - wob);
+                float n = Noise.rnd(x, y, 4100 + frame);
+                int c = 0;
+                if (c1 < 0.9f && n < fade * (0.9f - c1 * 0.5f)) c = crest;
+                else if (c2 < 0.8f && n < fade * 0.3f) c = trough;
+                else if (t < 0.3f && d < rr - 4f && n < (0.3f - t) * 0.9f) c = crest;    // froth in the middle at first
+                m.px[y * 64 + x] = c;
+            }
+        return m.texture();
+    }
+
+    /**
+     * Splash burst, frame by frame (48x48, anchored at the bottom centre, 32 px per metre):
+     * a crown of water thrown up and out, droplets arcing away and falling back.
+     */
+    public static int[] splash(int frames, int fw, int fh, int seed) {
+        int[] out = new int[frames * fw * fh];
+        java.util.Random r = new java.util.Random(seed);
+        int n = 70;
+        float[] vx = new float[n], vy = new float[n], sz = new float[n];
+        for (int i = 0; i < n; i++) {
+            float a = (float) ((r.nextFloat() - 0.5f) * Math.PI * 0.85f);
+            float sp = 2.2f + r.nextFloat() * 3.2f;
+            vx[i] = (float) Math.sin(a) * sp;
+            vy[i] = (float) Math.cos(a) * sp * (0.7f + r.nextFloat() * 0.5f);
+            sz[i] = r.nextFloat() < 0.25f ? 2f : 1f;
+        }
+        float ppm = 32f;
+        for (int f = 0; f < frames; f++) {
+            float t = (f + 1) / (float) frames * 0.55f;      // seconds after the splash
+            int base = f * fw * fh;
+            // the crown: a white column / sheet that rises and collapses
+            float ch = Math.max(0f, 0.55f * (float) Math.sin(Math.min(1f, t / 0.42f) * Math.PI)) * ppm;
+            float cw = (0.18f + t * 0.6f) * ppm;
+            for (int y = 0; y < fh; y++)
+                for (int x = 0; x < fw; x++) {
+                    float dx = Math.abs(x + 0.5f - fw * 0.5f), hy = fh - 4 - y;
+                    if (hy < 0 || hy > ch) continue;
+                    float edge = dx / Math.max(1f, cw * (1f - 0.4f * hy / Math.max(1f, ch)));
+                    if (edge > 1f) continue;
+                    float k = Noise.rnd(x, y, seed + f * 7);
+                    if (k > 0.35f + 0.6f * (1f - edge)) continue;
+                    out[base + y * fw + x] = mix(rgb(250, 252, 252), rgb(176, 214, 226), edge * 0.7f + k * 0.3f);
+                }
+            // droplets on ballistic arcs
+            for (int i = 0; i < n; i++) {
+                float px = fw * 0.5f + vx[i] * t * ppm, py = (fh - 4) - (vy[i] * t - 4.9f * t * t) * ppm;
+                if (py > fh - 3) continue;
+                int s2 = (int) sz[i];
+                for (int a = 0; a < s2; a++)
+                    for (int b = 0; b < s2; b++) {
+                        int X = (int) px + a, Y = (int) py + b;
+                        if (X < 0 || Y < 0 || X >= fw || Y >= fh) continue;
+                        out[base + Y * fw + X] = i % 3 == 0 ? rgb(200, 228, 236) : rgb(248, 252, 252);
+                    }
+            }
+        }
+        return out;
+    }
 }

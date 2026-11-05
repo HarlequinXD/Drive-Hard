@@ -60,13 +60,15 @@ public class SimTest {
         }
         check("crossed the street onto the next sidewalk", crossed);
 
-        // walk east from the promenade toward the sea: must stop at the water line
+        // walk east from the promenade into the sea: she swims out and stops about 200 m offshore
         Player w = new Player(c.cityX1, c.spawnZ);
         c.chunks.ensureAround(w.x, w.z);
         w.y = c.surface(w.x, w.z);
-        for (int i = 0; i < 60 * 30; i++) { c.chunks.ensureAround(w.x, w.z); w.update(dt, 1f, 0f, false, c); }
-        System.out.printf("beach walk stopped at x=%.1f (city edge %.1f), ground %.2f%n", w.x, c.cityX1, c.terrain.height(w.x, w.z));
-        check("stopped at the sea", c.terrain.height(w.x, w.z) > -0.6f && w.x > c.cityX1 + 30f);
+        for (int i = 0; i < 60 * 400; i++) { c.chunks.ensureAround(w.x, w.z); w.update(dt, 1f, 0f, false, c); }
+        float off = c.terrain.coastOver(w.x, w.z);
+        System.out.printf("swam out to x=%.1f, %.0f m offshore, swimming %b, anim %s%n", w.x, off, w.swimming, w.anim);
+        check("swims out and stops about 200 m offshore", w.swimming && off > 185f && off <= City.SWIM_REACH + 1f
+                && w.anim == com.harlequinxd.drivehard.core.model.Animations.Anim.SWIM_TREAD);
 
         // hills exist and terrain is continuous
         float maxH = 0;

@@ -310,6 +310,13 @@ public final class City extends World {
         return terrain.height(x, z) < -0.5f;
     }
 
+    /** How far out a swimmer may go: about 200 m from the shore. */
+    public static final float SWIM_REACH = 200f;
+
+    @Override public boolean swimBlocked(float x, float z) {
+        return terrain.coastOver(x, z) > SWIM_REACH;
+    }
+
     /** Sidewalks/blocks and avenue medians sit one curb height above the road. */
     public boolean isRaised(float x, float z) {
         if (CURB == 0f) return false;

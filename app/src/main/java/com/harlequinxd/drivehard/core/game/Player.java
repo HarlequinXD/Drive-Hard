@@ -13,7 +13,20 @@ public final class Player {
     public static final float WALK_SPEED = 2.35f, RUN_SPEED = 6.9f, RUN_THRESHOLD = 0.72f;
     public static final float GRAVITY = 22f, JUMP_VELOCITY = 6.8f;
 
+    /** In the sea: wading below this depth, swimming above it (m of water at the feet). */
+    public static final float SWIM_DEPTH = 1.25f, STAND_DEPTH = 1.05f;
+    /** Breaststroke (walk), front crawl (run). */
+    public static final float BREAST_SPEED = 1.05f, CRAWL_SPEED = 2.1f;
+
     public float x, y, z, vx, vy, vz;
+    /** Swimming in deep water (y is then the water surface). */
+    public boolean swimming;
+    /** Depth of water where she stands or swims (0 on dry land). */
+    public float waterDepth;
+    /** Vertical speed when she hit the water this frame (negative), 0 otherwise: for the big splash. */
+    public float splashImpact;
+    /** Animation cycle phase 0..1 of the current loop (strokes, strides), for effects. */
+    public float cyclePhase() { return phase; }
     public float facing;               // yaw, facing vector = (sin, 0, cos)
     public boolean onGround = true;
 
@@ -32,10 +45,14 @@ public final class Player {
     public void update(float dt, float mx, float mz, boolean jump, World world) {
         float mag = (float) Math.sqrt(mx * mx + mz * mz);
         if (mag > 1f) { mx /= mag; mz /= mag; mag = 1f; }
+        splashImpact = 0f;
+        if (swimming) { swim(dt, mx, mz, mag, world); return; }
 
         // --- horizontal velocity
         float target = 0f;
         if (mag > 0.08f) target = mag >= RUN_THRESHOLD ? RUN_SPEED : WALK_SPEED * Math.max(0.6f, mag / RUN_THRESHOLD);
+        // wading: the deeper the water, the harder to push through it
+        if (waterDepth > 0.05f && onGround) target *= 1f - Math.min(0.6f, waterDepth * 0.55f);
         float dx = mag > 1e-4f ? mx / mag : 0f, dz = mag > 1e-4f ? mz / mag : 0f;
         float accel = onGround ? 22f : 7f;
         float tvx = dx * target, tvz = dz * target;
@@ -66,15 +83,27 @@ public final class Player {
         float px = x, pz = z;
         x += vx * dt;
         collideHorizontal(world, true);
-        if (world.blocked(x, z)) { x = px; vx = 0f; }
+        if (world.swimBlocked(x, z)) { x = px; vx = 0f; }
         z += vz * dt;
         collideHorizontal(world, false);
-        if (world.blocked(x, z)) { z = pz; vz = 0f; }
+        if (world.swimBlocked(x, z)) { z = pz; vz = 0f; }
         x = Math.max(world.minX + RADIUS, Math.min(world.maxX - RADIUS, x));
         z = Math.max(world.minZ + RADIUS, Math.min(world.maxZ - RADIUS, z));
 
         float floor = world.groundHeight(x, z, RADIUS, y, wasGround ? STEP : 0.02f);
         y += vy * dt;
+        if (floor < -SWIM_DEPTH && y < 0f) {
+            // dropped or walked into deep water: surface and swim
+            splashImpact = Math.min(-1f, vy);
+            swimming = true;
+            waterDepth = -floor;
+            y = 0f;
+            vy = 0f;
+            onGround = false;
+            anim = Anim.SWIM_TREAD;
+            animFrame = 0;
+            return;
+        }
         // ceiling
         if (vy > 0f) {
             for (Box b : world.near(x, z)) {
@@ -97,8 +126,73 @@ public final class Player {
         } else {
             onGround = false;
         }
-
+        // the sea: wade in the shallows, swim once it is deep enough (or when she falls into it)
+        waterDepth = Math.max(0f, -floor);
+        if (y < 0f && !wasGround && vy <= 0f && waterDepth > 0.2f && prevVy < -2.5f) splashImpact = prevVy;
+        if (waterDepth > SWIM_DEPTH && y < 0.05f) {
+            swimming = true;
+            y = 0f;
+            vy = 0f;
+            onGround = false;
+        }
+        prevVy = vy;
         animate(dt);
+    }
+
+    private float prevVy, bob;
+
+    /** Swimming at the surface: breaststroke when walking, front crawl when running, treading water. */
+    private void swim(float dt, float mx, float mz, float mag, World world) {
+        float target = 0f;
+        if (mag > 0.08f) target = mag >= RUN_THRESHOLD ? CRAWL_SPEED : BREAST_SPEED * Math.max(0.55f, mag / RUN_THRESHOLD);
+        float dx = mag > 1e-4f ? mx / mag : 0f, dz = mag > 1e-4f ? mz / mag : 0f;
+        // water drag: slow to speed up, glides to a stop
+        float accel = target > 0f ? 2.6f : 1.4f;
+        vx = approach(vx, dx * target, accel * dt);
+        vz = approach(vz, dz * target, accel * dt);
+        if (mag > 0.08f) {
+            float want = (float) Math.atan2(dx, dz);
+            float diff = wrap(want - facing);
+            float turn = 3.2f * dt;
+            facing = wrap(facing + Math.max(-turn, Math.min(turn, diff)));
+        }
+        float px = x, pz = z;
+        x += vx * dt;
+        collideHorizontal(world, true);
+        if (world.swimBlocked(x, z)) { x = px; vx = 0f; }
+        z += vz * dt;
+        collideHorizontal(world, false);
+        if (world.swimBlocked(x, z)) { z = pz; vz = 0f; }
+        x = Math.max(world.minX + RADIUS, Math.min(world.maxX - RADIUS, x));
+        z = Math.max(world.minZ + RADIUS, Math.min(world.maxZ - RADIUS, z));
+        // float at the surface with a gentle bob
+        bob += dt;
+        y = 0.03f * (float) Math.sin(bob * 2.1f);
+        vy = 0f;
+        onGround = false;
+        float floor = world.groundHeight(x, z, RADIUS, 0.5f, 0.5f);
+        waterDepth = Math.max(0f, -floor);
+        if (waterDepth < STAND_DEPTH) {
+            // her feet touch the bottom: stand up and wade out
+            swimming = false;
+            y = floor;
+            onGround = true;
+            animate(dt);
+            return;
+        }
+        float speed = (float) Math.sqrt(vx * vx + vz * vz);
+        if (speed < 0.3f) {
+            anim = Anim.SWIM_TREAD;
+            phase += dt / 1.5f;
+        } else if (speed > (BREAST_SPEED + CRAWL_SPEED) * 0.5f) {
+            anim = Anim.SWIM_FREE;
+            phase += speed * dt / 2.3f;            // metres per full arm cycle
+        } else {
+            anim = Anim.SWIM_BREAST;
+            phase += speed * dt / 1.6f;            // metres per stroke
+        }
+        phase -= (float) Math.floor(phase);
+        animFrame = (int) (phase * anim.frames) % anim.frames;
     }
 
     private void collideHorizontal(World world, boolean axisX) {

@@ -20,8 +20,11 @@ public abstract class World {
      */
     public float surface(float x, float z, float y) { return surface(x, z); }
 
-    /** True where the player may not go (open sea). */
+    /** True where vehicles may not go (the sea). */
     public boolean blocked(float x, float z) { return false; }
+
+    /** True where a swimmer may not go (too far out to sea). */
+    public boolean swimBlocked(float x, float z) { return false; }
 
     /** Highest walkable surface under a circle whose feet are at {@code y} (with step tolerance). */
     public float groundHeight(float x, float z, float radius, float y, float stepUp) {
