@@ -299,7 +299,7 @@ public final class TextureLibrary implements java.io.Serializable {
 
     /** Designs and paints the house kits (in parallel). */
     private void houseKits(long seed, boolean lowMemory) {
-        int ns = lowMemory ? 14 : 30, nf = lowMemory ? 5 : 10;
+        int ns = lowMemory ? 48 : 96, nf = lowMemory ? 16 : 32;
         HouseKits.Kit[] kits = new HouseKits.Kit[ns + nf];
         HouseKits.Parts[] parts = new HouseKits.Parts[ns + nf];
         HouseTextures.Material S = HouseTextures.Material.SIDING, U = HouseTextures.Material.STUCCO, B = HouseTextures.Material.BOARDS,
@@ -313,9 +313,9 @@ public final class TextureLibrary implements java.io.Serializable {
             HouseKits.Kit k = new HouseKits.Kit();
             k.farm = farm;
             k.floors = farm ? (r.nextInt(3) == 0 ? 1 : 2) : (r.nextInt(4) == 0 ? 1 : 2);
-            k.W = farm ? 9f + r.nextFloat() * 5f : 7f + r.nextFloat() * 5f;
-            k.D = farm ? 7.5f + r.nextFloat() * 3.5f : 6.5f + r.nextFloat() * 3.5f;
-            k.floorH = 2.8f + r.nextFloat() * 0.25f;
+            k.W = farm ? 8.5f + r.nextFloat() * 6f : 6.5f + r.nextFloat() * 6.5f;
+            k.D = farm ? 7f + r.nextFloat() * 4.5f : 6f + r.nextFloat() * 4.5f;
+            k.floorH = 2.75f + r.nextFloat() * 0.35f;
             int roll = r.nextInt(100);
             k.roof = farm ? (roll < 55 ? HouseKits.HIP : HouseKits.GABLE)
                     : roll < 35 ? HouseKits.GABLE : roll < 50 ? HouseKits.GABLE_FRONT : roll < 75 ? HouseKits.HIP : roll < 88 ? HouseKits.SHED : HouseKits.FLAT;
@@ -348,7 +348,10 @@ public final class TextureLibrary implements java.io.Serializable {
             p.balcony = !farm && k.floors > 1 && r.nextInt(5) < 2;
             p.hisashi = farm || r.nextInt(4) == 0;
             p.doorLeft = r.nextBoolean();
-            p.winH = 1.0f + r.nextFloat() * 0.35f;
+            p.winH = 0.9f + r.nextFloat() * 0.5f;
+            p.garage = !farm && k.W > 8.5f && r.nextInt(3) == 0;
+            p.grille = r.nextInt(3) == 0;
+            p.shutter = new int[]{0xB8BCBE, 0x9AA0A4, 0xC8C4B8, 0x7A8088, 0xD8D8D2}[r.nextInt(5)];
             k.roofTex = houseRoof[farm ? pickIdx(houseRoof, houseRoofKind, r, HouseTextures.Roof.KAWARA) : r.nextInt(houseRoof.length)];
             kits[i] = k;
             parts[i] = p;

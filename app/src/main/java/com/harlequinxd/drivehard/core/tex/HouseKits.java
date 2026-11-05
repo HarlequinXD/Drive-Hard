@@ -71,6 +71,11 @@ public final class HouseKits {
         public Texture mat1, mat2, win, small, garden, door, foundation;
         public int trim, rail;
         public boolean twoTone, balcony, hisashi, doorLeft, wideDoor;
+        /** A built-in garage (roller shutter) at the far end of the front from the door. */
+        public boolean garage;
+        /** Security grilles over the ground-floor windows (men-goshi), and their colour. */
+        public boolean grille;
+        public int shutter = 0xB8BCBE;
         public float winH = 1.2f;
     }
 
@@ -181,6 +186,16 @@ public final class HouseKits {
             out.add(new float[]{3, c - half, c + half, 0f, 2.1f});
             for (int i = Math.max(0, at - 1); i < Math.min(mods, at + dm + 1); i++) used[i] = true;
         }
+        if (f == FRONT && st == 0 && p.garage && mods >= 7) {
+            // the garage: about 2.7 m of shutter at the other end from the door
+            int gm = 3, at = p.doorLeft ? mods - gm : 0;
+            boolean free = true;
+            for (int i = at; i < at + gm; i++) free &= !used[i];
+            if (free) {
+                out.add(new float[]{5, margin + at * MODULE + 0.1f, margin + (at + gm) * MODULE - 0.1f, 0f, 2.25f});
+                for (int i = Math.max(0, at - 1); i < Math.min(mods, at + gm + 1); i++) used[i] = true;
+            }
+        }
         if (f == FRONT && st == 1 && p.balcony && mods >= 4) {
             int at = mods / 2 - 1;
             out.add(new float[]{4, margin + at * MODULE + 0.08f, margin + (at + 2) * MODULE - 0.08f, 0.05f, 2.0f});
@@ -213,6 +228,17 @@ public final class HouseKits {
         int kind = (int) o[0];
         float s0 = o[1], s1 = o[2], y0 = floorY + o[3], y1 = Math.min(k.top(f, 0.5f) - 0.2f, floorY + o[4]);
         if (y1 - y0 < 0.3f) return;
+        if (kind == 5) {
+            // garage: a roller shutter in a dark opening under a steel lintel
+            int c = 0xFF000000 | p.shutter;
+            rectM(m, f, w, h, s0 - 0.08f, y0, s1 + 0.08f, y1 + 0.18f, 0xFF2E2C2A);
+            int x0 = px(f, s0, w), x1 = px(f, s1, w), yt = py(f, y1, h), yb = py(f, y0, h);
+            for (int y = yt; y < yb; y++) for (int x = x0; x < x1; x++) m.set(x, y, mul(c, (y - yt) % 3 == 0 ? 1.1f : (y - yt) % 3 == 2 ? 0.82f : 0.97f));
+            rectM(m, f, w, h, s0 - 0.15f, y1, s1 + 0.15f, y1 + 0.16f, mul(0xFF000000 | p.trim, 0.8f));
+            shadeM(m, f, w, h, s0, y1 - 0.2f, s1, y1, 0.72f);
+            rectM(m, f, w, h, (s0 + s1) / 2 - 0.15f, y0 + 0.1f, (s0 + s1) / 2 + 0.15f, y0 + 0.16f, mul(c, 0.6f));
+            return;
+        }
         Texture t = kind == 1 ? p.small : kind == 2 || kind == 4 ? p.garden : kind == 3 ? p.door : p.win;
         int x0 = px(f, s0, w), x1 = px(f, s1, w), yt = py(f, y1, h), yb = py(f, y0, h);
         // the window or door itself (its own texture already carries the reveal's shading)
@@ -221,6 +247,13 @@ public final class HouseKits {
                 int tx = (int) ((x - x0 + 0.5f) / Math.max(1, x1 - x0) * t.w), ty = (int) ((y - yt + 0.5f) / Math.max(1, yb - yt) * t.h);
                 m.set(x, y, t.px[Math.min(t.h - 1, ty) * t.w + Math.min(t.w - 1, tx)]);
             }
+        // security grilles over ground-floor windows: vertical bars in a frame
+        if (p.grille && kind == 0 && floorY < PLINTH + 0.1f) {
+            int gc = 0xFF000000 | p.rail;
+            rectM(m, f, w, h, s0 - 0.04f, y0, s1 + 0.04f, y0 + 0.05f, gc);
+            rectM(m, f, w, h, s0 - 0.04f, y1 - 0.05f, s1 + 0.04f, y1, gc);
+            for (float s = s0; s <= s1; s += 0.12f) rectM(m, f, w, h, s, y0, s + 0.035f, y1, mul(gc, 0.9f));
+        }
         // a sill under windows, with its drip shadow
         if (kind == 0 || kind == 1) {
             rectM(m, f, w, h, s0 - 0.06f, y0 - 0.06f, s1 + 0.06f, y0, 0xFFC8CCD0);
