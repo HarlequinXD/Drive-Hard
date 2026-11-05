@@ -386,18 +386,37 @@ final class BuildingGen {
         return base + 0.15f;
     }
 
-    /** Timber barn / tool shed with a corrugated metal roof. */
+    /** Timber barn / tool shed with a corrugated metal roof: plank walls, big sliding plank doors. */
     private void shed(float x0, float z0, float x1, float z1, float base) {
-        int wall = pick(Kind.HOUSE_WOOD);
+        int wall = lib.barnWall[r.nextInt(lib.barnWall.length)];
+        int door = lib.barnDoor[r.nextInt(lib.barnDoor.length)];
         float top = base + 3.3f;
         Sectors.Tiles[] t = new Sectors.Tiles[4];
+        boolean longX = x1 - x0 >= z1 - z0;
         for (int s = 0; s < 4; s++) {
-            t[s] = facade(len(s, x0, z0, x1, z1), 0f, 1, 3.3f, wall, wall, null, false);
-            t[s].mat = t[s].matUp = wall;
-            t[s].glowFacade = false;                      // timber boards, no windows
+            boolean doors = longX ? (s == N || s == S) : (s == W || s == E);
+            t[s] = plankWall(len(s, x0, z0, x1, z1), 3.3f, wall, doors ? door : -1, 2.4f, 2.6f);
         }
         gableRoof(x0, z0, x1, z1, base, top, 0.55f, lib.metal, faces(x0, z0, x1, z1, t), SectorBuilder.plain(wall, lib.concrete));
         ch.boxes.add(new Box(x0, footMin, z0, x1, top + 1f, z1));
+    }
+
+    /** One storey of plank wall with an optional wide door in the middle (no windows). */
+    private Sectors.Tiles plankWall(float len, float h, int wall, int door, float doorW, float doorH) {
+        Sectors.Tiles t = new Sectors.Tiles(1);
+        t.mat = t.matUp = wall;
+        t.found = lib.concrete;
+        t.groundH = t.storeyH = h;
+        t.glowFacade = false;
+        int cols = Math.max(1, Math.round(len / 2.6f));
+        t.storey(0, cols, Sectors.PLAIN, 0);
+        if (door >= 0) {
+            t.kind[0][cols / 2] = Sectors.DOOR;
+            t.tex[0][cols / 2] = door;
+            t.doorW = doorW;
+            t.doorH = doorH;
+        }
+        return t;
     }
 
     /** Vinyl greenhouse: low milky walls under a pitched plastic roof. */
@@ -423,14 +442,14 @@ final class BuildingGen {
 
     /** Shrine hall: dark timber on a raised stone floor under a deep copper or tiled roof. */
     private void shrineHall(float x0, float z0, float x1, float z1, float base) {
-        int wall = pick(Kind.HOUSE_WOOD);
+        int wall = lib.barnWall[2];                          // dark weathered timber
+        int door = -1;
+        for (int i = 0; i < lib.houseDoorKind.length; i++)
+            if (lib.houseDoorKind[i] == com.harlequinxd.drivehard.core.tex.HouseTextures.Door.SLIDING_LATTICE) { door = lib.houseDoor[i]; break; }
         float floor = base + 0.6f, top = floor + 3.2f;
         Sectors.Tiles[] t = new Sectors.Tiles[4];
-        for (int s = 0; s < 4; s++) {
-            t[s] = facade(len(s, x0, z0, x1, z1), 0f, 1, 3.2f, wall, wall, null, false);
-            t[s].mat = t[s].matUp = wall;
-            t[s].glowFacade = false;
-        }
+        for (int s = 0; s < 4; s++)
+            t[s] = plankWall(len(s, x0, z0, x1, z1), 3.2f, wall, s == N || s == S ? door : -1, 2.2f, 2.3f);
         int roofTex = lib.houseRoof[lib.houseRoof.length - 1];
         for (int i = 0; i < lib.houseRoofKind.length; i++)
             if (lib.houseRoofKind[i] == com.harlequinxd.drivehard.core.tex.HouseTextures.Roof.KAWARA && r.nextBoolean()) { roofTex = lib.houseRoof[i]; break; }

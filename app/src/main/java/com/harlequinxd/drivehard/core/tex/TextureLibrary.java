@@ -131,6 +131,8 @@ public final class TextureLibrary {
     // ------------------------------------------------------------------ house generator parts
 
     public int[] houseMat, houseWin, houseDoor, houseRoof;
+    /** Plank walls and plank doors for barns, sheds and the shrine hall (no windows painted on). */
+    public int[] barnWall, barnDoor;
     public HouseTextures.Material[] houseMatKind;
     public HouseTextures.Window[] houseWinKind;
     public HouseTextures.Door[] houseDoorKind;
@@ -161,6 +163,14 @@ public final class TextureLibrary {
             houseMatKind[i] = (HouseTextures.Material) mats[i][0];
             houseMat[i] = add(HouseTextures.material(houseMatKind[i], (Integer) mats[i][1], seed + 3000 + i));
         }
+        int[] barnColours = {0x5A4434, 0x7A7068, 0x3A2C24, 0x6A3A2C, 0x8A7A62};
+        barnWall = new int[barnColours.length];
+        for (int i = 0; i < barnColours.length; i++)
+            barnWall[i] = add(HouseTextures.material(HouseTextures.Material.BARN, barnColours[i], seed + 3050 + i));
+        int[] barnDoors = {0x4A3A2E, 0x6A6460, 0x7A3A2A};
+        barnDoor = new int[barnDoors.length];
+        for (int i = 0; i < barnDoors.length; i++)
+            barnDoor[i] = add(HouseTextures.door(HouseTextures.Door.BARN, barnDoors[i], seed + 3060 + i));
         int[] frames = {0xB8BCC0, 0x5A4A3E, 0xEEEEEA, 0x2E2E30};
         java.util.List<Integer> wins = new java.util.ArrayList<>();
         java.util.List<HouseTextures.Window> winKinds = new java.util.ArrayList<>();
