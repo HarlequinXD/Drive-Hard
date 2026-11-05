@@ -41,7 +41,8 @@ public final class TextureLibrary implements java.io.Serializable {
 
     /** @param lowMemory phones: a third of the shopfront variants and half the facade variants */
     public TextureLibrary(long seed, boolean lowMemory) {
-        int shopCount = lowMemory ? SHOP_COUNT / 3 : SHOP_COUNT;
+        // shopfronts are 256 x 128 layered paintings now: one of each kind on phones, three on desktop
+        int shopCount = JpTextures.CATEGORIES.length * (lowMemory ? 1 : 3);
         shops = new int[shopCount];
         shopCategory = new int[shopCount];
         asphalt = add(asphalt(seed, false));
@@ -89,7 +90,7 @@ public final class TextureLibrary implements java.io.Serializable {
         for (int i = 0; i < shops.length; i++) {
             int cat = i % JpTextures.CATEGORIES.length;
             shopCategory[i] = cat;
-            shops[i] = add(JpTextures.shop(cat, s++, name));
+            shops[i] = add(ShopLayers.shop(cat, s++, name));
             shopNames.add(name[0]);
         }
         lobbies = new int[12];
