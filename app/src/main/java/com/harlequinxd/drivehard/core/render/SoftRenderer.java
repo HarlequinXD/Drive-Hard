@@ -37,7 +37,7 @@ public final class SoftRenderer extends Renderer {
     private final float[] P = new float[MAX_PRIMS * 3 * VA];
     private int primCount;
     /** Each triangle's whole polygon on screen (x, y per corner), for GBA scanline texture spans. */
-    private final float[] outline = new float[MAX_PRIMS * 4];
+    private final float[] outline = new float[MAX_PRIMS * 8];      // x, y, u, v per corner
     private final int[] pOut = new int[MAX_PRIMS], pOutN = new int[MAX_PRIMS];
     /** Primitives of the ground layer (terrain tiles): they write the occlusion depth. */
     private final boolean[] pGround = new boolean[MAX_PRIMS];
@@ -1086,10 +1086,13 @@ public final class SoftRenderer extends Renderer {
         if (bucket >= BUCKETS) bucket = BUCKETS - 1;
         int hb = layer * BUCKETS + bucket;
         int os = -1;
-        if (outlineLen + n * 2 <= outline.length) {
+        if (outlineLen + n * 4 <= outline.length) {
             os = outlineLen;
-            for (int k = 0; k < n; k++) { outline[os + k * 2] = scr[k * VA]; outline[os + k * 2 + 1] = scr[k * VA + 1]; }
-            outlineLen += n * 2;
+            for (int k = 0; k < n; k++) {
+                outline[os + k * 4] = scr[k * VA]; outline[os + k * 4 + 1] = scr[k * VA + 1];
+                outline[os + k * 4 + 2] = scr[k * VA + 2]; outline[os + k * 4 + 3] = scr[k * VA + 3];
+            }
+            outlineLen += n * 4;
         }
         for (int k = 1; k < n - 1; k++) {
             if (primCount >= MAX_PRIMS) return;
@@ -1189,39 +1192,36 @@ public final class SoftRenderer extends Renderer {
             int db = (y & 3) << 2;
             float iz = IZ > 1e-6f ? IZ : 1e-6f;
             float uA = Q / iz, vA = R / iz;
-            // GBA: the whole polygon's span on this row (clipped to the screen), exact at both ends
+            // GBA: the whole polygon walked edge by edge with no divide: u, v step linearly down its
+            // edges (on screen) and linearly across each row between them, so a quad warps as one
+            // piece, floors and roads included, with no seam along its diagonal
             boolean gspan = false;
             float gU = 0f, gV = 0f, gdU = 0f, gdV = 0f;
             if (tm == TEX_GBA && pOut[p] >= 0) {
                 int os = pOut[p], on = pOutN[p];
-                float pl = Float.MAX_VALUE, pr = -Float.MAX_VALUE;
+                float pl = Float.MAX_VALUE, pr = -Float.MAX_VALUE, ul = 0f, vl = 0f, ur = 0f, vr = 0f;
                 for (int e = 0; e < on; e++) {
-                    float ax = outline[os + e * 2], ay = outline[os + e * 2 + 1];
-                    int e2 = e + 1 == on ? 0 : e + 1;
-                    float bx = outline[os + e2 * 2], by = outline[os + e2 * 2 + 1];
+                    int ea = os + e * 4, eb = os + (e + 1 == on ? 0 : e + 1) * 4;
+                    float ax = outline[ea], ay = outline[ea + 1], bx = outline[eb], by = outline[eb + 1];
                     if ((ay <= yc && by > yc) || (by <= yc && ay > yc)) {
-                        float cxr = ax + (yc - ay) * (bx - ax) / (by - ay);
-                        if (cxr < pl) pl = cxr;
-                        if (cxr > pr) pr = cxr;
+                        float ft = (yc - ay) / (by - ay);
+                        float cxr = ax + (bx - ax) * ft;
+                        float cu = outline[ea + 2] + (outline[eb + 2] - outline[ea + 2]) * ft - ub;
+                        float cv = outline[ea + 3] + (outline[eb + 3] - outline[ea + 3]) * ft - vb;
+                        if (cxr < pl) { pl = cxr; ul = cu; vl = cv; }
+                        if (cxr > pr) { pr = cxr; ur = cu; vr = cv; }
                     }
                 }
-                if (pl < 0f) pl = 0f;
-                if (pr > width) pr = width;
                 if (pr - pl > 0.01f) {
-                    float zl = z0i + dzdx * (pl - x0) + dzdy * oy, zr = z0i + dzdx * (pr - x0) + dzdy * oy;
-                    if (zl > 1e-6f && zr > 1e-6f) {
-                        float ul = (q0 + dqdx * (pl - x0) + dqdy * oy) / zl, vl = (r0 + drdx * (pl - x0) + drdy * oy) / zl;
-                        float ur = (q0 + dqdx * (pr - x0) + dqdy * oy) / zr, vr = (r0 + drdx * (pr - x0) + drdy * oy) / zr;
-                        gdU = (ur - ul) / (pr - pl);
-                        gdV = (vr - vl) / (pr - pl);
-                        gU = ul + gdU * (xs + 0.5f - pl);
-                        gV = vl + gdV * (xs + 0.5f - pl);
-                        gspan = true;
-                    }
+                    gdU = (ur - ul) / (pr - pl);
+                    gdV = (vr - vl) / (pr - pl);
+                    gU = ul + gdU * (xs + 0.5f - pl);
+                    gV = vl + gdV * (xs + 0.5f - pl);
+                    gspan = true;
                 }
             }
-            // perspective: exact every 16 pixels, linear in between. GBA: exact at the span's two ends
-            // only, linear across the whole row. PS1: linear across the triangle.
+            // perspective: exact every 16 pixels, linear in between. GBA: linear down the polygon's
+            // edges and across its rows. PS1: linear across the triangle.
             for (int x = xs; x < xe; ) {
                 int n = tm == TEX_PERSPECTIVE ? (xe - x < 16 ? xe - x : 16) : xe - x;
                 float IZn = IZ + dzdx * n, Qn = Q + dqdx * n, Rn = R + drdx * n;

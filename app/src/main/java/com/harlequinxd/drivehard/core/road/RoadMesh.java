@@ -106,6 +106,8 @@ public final class RoadMesh {
     private float bias(float rural) { return 0f; }
     /** Metres per tile of the plain asphalt (the ground's 128-texel tiles). */
     private static final float TILE_M = com.harlequinxd.drivehard.core.tex.TerrainTiles.METRES;
+    /** Largest road polygon edge: affine (GBA) texturing warps less on smaller polygons. */
+    private static final float STEP = 4f;
 
     /** Flat strip between offsets o0..o1 from s a..b with world-ish uv (plain asphalt). */
     private void strip(GeoBuilder gb, float a, float b, float o0, float o1, float lift, int tex, float bias, int flags, float uScale, float vBase) {
@@ -215,16 +217,19 @@ public final class RoadMesh {
             if (ma > 0f && a < e.clearA + ma) mouthStrip(gb, a, Math.min(b, e.clearA + ma), true, hw, cls);
             if (mb > 0f && b > e.len - e.clearB - mb) mouthStrip(gb, Math.max(a, e.len - e.clearB - mb), b, false, hw, cls);
             if (lb - la > 0.05f) {
-                // cut at whole tiles, so every strip is at most one tile and they line up along the road
-                float t0 = (float) Math.floor(la / TILE_M) * TILE_M;
-                for (float sa0 = t0; sa0 < lb; sa0 += TILE_M) {
-                    float sa = Math.max(la, sa0), sb = Math.min(lb, sa0 + TILE_M);
+                // cut every 4 m (half a tile), so the strips line up along the road and stay small
+                float t0 = (float) Math.floor(la / STEP) * STEP;
+                for (float sa0 = t0; sa0 < lb; sa0 += STEP) {
+                    float sa = Math.max(la, sa0), sb = Math.min(lb, sa0 + STEP);
                     if (sb - sa < 0.02f) continue;
                     for (float[] bd : bands) {
                         int tex = gore ? -1 : (int) bd[2];
                         if (bd[3] > 0f) {
-                            if (tex < 0) strip(gb, sa, sb, -bd[1], bd[1], 0.04f, lib.tiles.asphalt, ROAD_BIAS, 0, 1f / TILE_M, vBase);
-                            else laneStrip(gb, sa, sb, -bd[1], bd[1], tex, laneBase);
+                            if (tex < 0) {
+                                // plain centre band: in halves, so no piece is wider than 4 m
+                                strip(gb, sa, sb, -bd[1], 0f, 0.04f, lib.tiles.asphalt, ROAD_BIAS, 0, 1f / TILE_M, vBase);
+                                strip(gb, sa, sb, 0f, bd[1], 0.04f, lib.tiles.asphalt, ROAD_BIAS, 0, 1f / TILE_M, vBase);
+                            } else laneStrip(gb, sa, sb, -bd[1], bd[1], tex, laneBase);
                             continue;
                         }
                         for (int side = -1; side <= 1; side += 2) {
@@ -274,25 +279,34 @@ public final class RoadMesh {
         float m = net.mouth(e, n);
         boolean painted = n.kind == RoadNode.Kind.CITY || givesWay(n);
         int tex = painted ? mouthTex(cls) : -1;
-        if (tex < 0) {
-            strip(gb, a, b, -hw, hw, 0.04f, lib.tiles.asphalt, ROAD_BIAS, 0, 1f / TILE_M, (float) Math.floor(a / 64f) * 64f);
-            return;
-        }
+        // pieces at most 4 m across and along
+        int na = Math.max(1, (int) Math.ceil(2f * hw / STEP)), nl = Math.max(1, (int) Math.ceil((b - a) / STEP));
         float start = atA ? e.clearA : e.len - e.clearB;   // junction-side end of the mouth
-        at(a, -hw, 0.04f, 0);
-        at(a, hw, 0.04f, 1);
-        at(b, hw, 0.04f, 2);
-        at(b, -hw, 0.04f, 3);
-        // arriving traffic keeps left: at node b it's on the + side, at node a on the - side
-        float u0 = atA ? 1f : 0f, u1 = atA ? 0f : 1f;
-        float va = 1f - Math.abs(a - start) / m, vb = 1f - Math.abs(b - start) / m;
-        uv[0] = u0; uv[1] = va;
-        uv[2] = u1; uv[3] = va;
-        uv[4] = u1; uv[5] = vb;
-        uv[6] = u0; uv[7] = vb;
         float lt = GeoBuilder.sunLight(0, 1, 0);
-        l[0] = l[1] = l[2] = l[3] = lt;
-        gb.quad(p, uv, l, tex, layer(), sortFlags(), bias(ROAD_BIAS), true);
+        for (int j = 0; j < nl; j++) {
+            float sa = a + (b - a) * j / nl, sb = a + (b - a) * (j + 1) / nl;
+            for (int i = 0; i < na; i++) {
+                float o0 = -hw + 2f * hw * i / na, o1 = -hw + 2f * hw * (i + 1) / na;
+                if (tex < 0) {
+                    strip(gb, sa, sb, o0, o1, 0.04f, lib.tiles.asphalt, ROAD_BIAS, 0, 1f / TILE_M, (float) Math.floor(a / 64f) * 64f);
+                    continue;
+                }
+                at(sa, o0, 0.04f, 0);
+                at(sa, o1, 0.04f, 1);
+                at(sb, o1, 0.04f, 2);
+                at(sb, o0, 0.04f, 3);
+                // arriving traffic keeps left: at node b it's on the + side, at node a on the - side
+                float f0 = (o0 + hw) / (2f * hw), f1 = (o1 + hw) / (2f * hw);
+                float u0 = atA ? 1f - f0 : f0, u1 = atA ? 1f - f1 : f1;
+                float va = 1f - Math.abs(sa - start) / m, vb = 1f - Math.abs(sb - start) / m;
+                uv[0] = u0; uv[1] = va;
+                uv[2] = u1; uv[3] = va;
+                uv[4] = u1; uv[5] = vb;
+                uv[6] = u0; uv[7] = vb;
+                l[0] = l[1] = l[2] = l[3] = lt;
+                gb.quad(p, uv, l, tex, layer(), sortFlags(), bias(ROAD_BIAS), true);
+            }
+        }
     }
 
     /** True if traffic on this edge gives way at node n (a higher-priority road meets it). */
@@ -478,7 +492,7 @@ public final class RoadMesh {
     private void tri(GeoBuilder gb, float ax, float ay, float az, float bx, float by, float bz, float cx, float cy, float cz,
                      int lay, int flags, float bias, float lt, boolean cityNode) {
         float e1 = (float) Math.hypot(bx - ax, bz - az), e2 = (float) Math.hypot(cx - ax, cz - az), e3 = (float) Math.hypot(cx - bx, cz - bz);
-        int n = Math.max(1, (int) Math.ceil(Math.max(e1, Math.max(e2, e3)) / (cityNode ? 6f : 4f)));
+        int n = Math.max(1, (int) Math.ceil(Math.max(e1, Math.max(e2, e3)) / STEP));
         for (int i = 0; i < n; i++)
             for (int j = 0; j < n - i; j++) {
                 emitTri(gb, n, i, j, i + 1, j, i, j + 1, ax, ay, az, bx, by, bz, cx, cy, cz, lay, flags, bias, lt, cityNode);

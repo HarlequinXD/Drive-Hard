@@ -661,7 +661,7 @@ public final class GlRenderer extends Renderer {
     }
 
     private ByteBuffer uploadBuf = direct(1 << 16);
-    private float[] upCorners = new float[4096 * 12];
+    private float[] upCorners = new float[4096 * CF];
     private IntBuffer indexBuf = direct(1 << 16).asIntBuffer();
 
     private Batch upload(Geo g) {
@@ -700,12 +700,14 @@ public final class GlRenderer extends Renderer {
             if ((fl & Geo.FLAG_DETAIL) != 0) flags |= 4;
             if (t.scrollU != 0f) { flags |= 8; scrollRate = t.scrollU; }
             int nv = g.vertexCount(i);
-            if (upCorners.length < (b.polys + 1) * 12) upCorners = java.util.Arrays.copyOf(upCorners, Math.max(upCorners.length * 2, (b.polys + 1) * 12));
+            if (upCorners.length < (b.polys + 1) * CF) upCorners = java.util.Arrays.copyOf(upCorners, Math.max(upCorners.length * 2, (b.polys + 1) * CF));
             for (int c = 0; c < 4; c++) {
                 int cc = Math.min(c, nv - 1);
-                upCorners[b.polys * 12 + c * 3] = g.pos[i * 12 + cc * 3];
-                upCorners[b.polys * 12 + c * 3 + 1] = g.pos[i * 12 + cc * 3 + 1];
-                upCorners[b.polys * 12 + c * 3 + 2] = g.pos[i * 12 + cc * 3 + 2];
+                upCorners[b.polys * CF + c * 3] = g.pos[i * 12 + cc * 3];
+                upCorners[b.polys * CF + c * 3 + 1] = g.pos[i * 12 + cc * 3 + 1];
+                upCorners[b.polys * CF + c * 3 + 2] = g.pos[i * 12 + cc * 3 + 2];
+                upCorners[b.polys * CF + 12 + c * 2] = g.uv[i * 8 + cc * 2];
+                upCorners[b.polys * CF + 12 + c * 2 + 1] = g.uv[i * 8 + cc * 2 + 1];
             }
             byte nx = (byte) Math.round(g.nrm[i * 3] * 127f), ny = (byte) Math.round(g.nrm[i * 3 + 1] * 127f), nz = (byte) Math.round(g.nrm[i * 3 + 2] * 127f);
             for (int c = 0; c < 4; c++) {
@@ -739,14 +741,14 @@ public final class GlRenderer extends Renderer {
         b.bytes = vb.limit() + indices * 4L;
         // the corners, for GBA scanline spans across whole polygons (clipped to the near plane)
         int rows = Math.max(1, (b.polys + 255) >> 8);
-        FloatBuffer cb = direct(rows * 256 * 12 * 4).asFloatBuffer();
-        cb.put(upCorners, 0, b.polys * 12);
+        FloatBuffer cb = direct(rows * 256 * CF * 4).asFloatBuffer();
+        cb.put(upCorners, 0, b.polys * CF);
         cb.position(0);
         gl.activeTexture(Gl.TEXTURE0 + 3);
         b.corners = newTexture(Gl.NEAREST, Gl.CLAMP_TO_EDGE);
-        gl.texImage2D(Gl.TEXTURE_2D, 0, RGBA32F, 768, rows, Gl.RGBA, Gl.FLOAT, cb);
+        gl.texImage2D(Gl.TEXTURE_2D, 0, RGBA32F, 256 * 5, rows, Gl.RGBA, Gl.FLOAT, cb);
         gl.activeTexture(Gl.TEXTURE0);
-        b.bytes += rows * 256L * 48;
+        b.bytes += rows * 256L * CF * 4;
         gpuBytes += b.bytes;
         statUploads += b.polys;
         return b;
@@ -983,9 +985,10 @@ public final class GlRenderer extends Renderer {
     private int runCount;
     private int otVbo, otVao;
     private ByteBuffer otBuf = direct(16384 * 4 * STRIDE);
-    /** Each ordered polygon's four corners (world), 3 RGBA32F texels each, 256 polygons a row. */
-    private float[] otCorners = new float[16384 * 12];
-    private ByteBuffer cornerBuf = direct(16384 * 12 * 4);
+    /** Each ordered polygon's four corners (world xyz, then uv), 5 RGBA32F texels each, 256 polygons a row. */
+    private float[] otCorners = new float[16384 * CF];
+    private ByteBuffer cornerBuf = direct(16384 * CF * 4);
+    private static final int CF = 20;
     private int cornerTex;
 
     private static int two(int lo, int hi) {
@@ -1088,12 +1091,14 @@ public final class GlRenderer extends Renderer {
                 int nv = g.vertexCount(i);
                 int nrm = four(Math.round(g.nrm[i * 3] * 127f), Math.round(g.nrm[i * 3 + 1] * 127f), Math.round(g.nrm[i * 3 + 2] * 127f), 0);
                 int texFlags = two(id, flags);
-                if (otCorners.length < (w + 1) * 12) otCorners = java.util.Arrays.copyOf(otCorners, otCorners.length * 2);
+                if (otCorners.length < (w + 1) * CF) otCorners = java.util.Arrays.copyOf(otCorners, otCorners.length * 2);
                 for (int c = 0; c < 4; c++) {
                     int cc = Math.min(c, nv - 1);
-                    otCorners[w * 12 + c * 3] = g.pos[i * 12 + cc * 3] + d.ox;
-                    otCorners[w * 12 + c * 3 + 1] = g.pos[i * 12 + cc * 3 + 1] + d.oy;
-                    otCorners[w * 12 + c * 3 + 2] = g.pos[i * 12 + cc * 3 + 2] + d.oz;
+                    otCorners[w * CF + c * 3] = g.pos[i * 12 + cc * 3] + d.ox;
+                    otCorners[w * CF + c * 3 + 1] = g.pos[i * 12 + cc * 3 + 1] + d.oy;
+                    otCorners[w * CF + c * 3 + 2] = g.pos[i * 12 + cc * 3 + 2] + d.oz;
+                    otCorners[w * CF + 12 + c * 2] = g.uv[i * 8 + cc * 2];
+                    otCorners[w * CF + 12 + c * 2 + 1] = g.uv[i * 8 + cc * 2 + 1];
                 }
                 for (int c = 0; c < 4; c++) {
                     int cc = Math.min(c, nv - 1), o = base + c * VI;
@@ -1114,8 +1119,9 @@ public final class GlRenderer extends Renderer {
                 int flags = dynFlags[q];
                 shadow = (flags & 32) != 0;
                 int texFlags = two(id, flags);
-                if (otCorners.length < (w + 1) * 12) otCorners = java.util.Arrays.copyOf(otCorners, otCorners.length * 2);
-                System.arraycopy(dynPos, q * 12, otCorners, w * 12, 12);
+                if (otCorners.length < (w + 1) * CF) otCorners = java.util.Arrays.copyOf(otCorners, otCorners.length * 2);
+                System.arraycopy(dynPos, q * 12, otCorners, w * CF, 12);
+                System.arraycopy(dynUv, q * 8, otCorners, w * CF + 12, 8);
                 for (int c = 0; c < 4; c++) {
                     int o = base + c * VI;
                     s[o] = Float.floatToRawIntBits(dynPos[q * 12 + c * 3]);
@@ -1157,15 +1163,15 @@ public final class GlRenderer extends Renderer {
         }
         // the corners, for whole-polygon scanline spans (GBA texture mapping)
         int rows = Math.max(1, (w + 255) >> 8);
-        int floats = rows * 256 * 12;
+        int floats = rows * 256 * CF;
         if (cornerBuf.capacity() < floats * 4) cornerBuf = direct(floats * 4 + (floats << 1));
         cornerBuf.clear();
-        cornerBuf.asFloatBuffer().put(otCorners, 0, w * 12);
+        cornerBuf.asFloatBuffer().put(otCorners, 0, w * CF);
         cornerBuf.limit(floats * 4);
         gl.activeTexture(Gl.TEXTURE0 + 3);
         if (cornerTex == 0) cornerTex = newTexture(Gl.NEAREST, Gl.CLAMP_TO_EDGE);
         gl.bindTexture(Gl.TEXTURE_2D, cornerTex);
-        gl.texImage2D(Gl.TEXTURE_2D, 0, RGBA32F, 768, rows, Gl.RGBA, Gl.FLOAT, cornerBuf);
+        gl.texImage2D(Gl.TEXTURE_2D, 0, RGBA32F, 256 * 5, rows, Gl.RGBA, Gl.FLOAT, cornerBuf);
         gl.activeTexture(Gl.TEXTURE0);
         quadIndices(w);
         gl.bindVertexArray(otVao);
