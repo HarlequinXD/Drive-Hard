@@ -214,12 +214,47 @@ public final class GeoBuilder {
     }
 
     /**
-     * Flat ground cover (sidewalks, lots, parks, car parks, paths). The ground is a painted map, so
-     * this is not geometry: the area is recorded for the ground painter.
+     * Flat ground cover (sidewalks, lots, parks, car parks, paths, yards): polygons laid on the
+     * terrain in the decal layer, cut into cells of at most {@code cell} metres so they follow it.
+     * (The layer, flags and bias asked for are from the painted-map days and no longer matter:
+     * ground cover always lies in the decal layer, over the terrain tiles and under the roads.)
      */
     public void floorAreaT(float ax, float az, float bx, float bz, float off, int tex, float uScale, float vScale,
                            int layer, float cell, int flags, float bias) {
         if (paint != null) paint.add(new float[]{ax, az, bx, bz, tex, uScale, vScale});
+        if (dry || bx - ax < 0.01f || bz - az < 0.01f) return;
+        float step = Math.max(1f, cell);
+        int nx = Math.max(1, (int) Math.ceil((bx - ax) / step)), nz = Math.max(1, (int) Math.ceil((bz - az) / step));
+        float lift = Math.max(off, 0.02f);
+        for (int j = 0; j < nz; j++)
+            for (int i = 0; i < nx; i++) {
+                float x0 = ax + (bx - ax) * i / nx, x1 = ax + (bx - ax) * (i + 1) / nx;
+                float z0 = az + (bz - az) * j / nz, z1 = az + (bz - az) * (j + 1) / nz;
+                floorT(x0, z0, x1, z1, lift, tex, uScale, vScale, SoftRenderer.L_DECAL, 0, 0f, true);
+            }
+    }
+
+    /**
+     * One terrain tile cell: corners (x0,z0) (x1,z0) (x1,z1) (x0,z1) at heights y00 y10 y11 y01,
+     * mapped to the part u0..u1, v0..v1 of a tile (u along x, v along z), lit by the slope.
+     */
+    public void groundCell(float x0, float z0, float x1, float z1, float y00, float y10, float y11, float y01,
+                           float u0, float v0, float u1, float v1, int tex, int layer) {
+        if (dry) return;
+        float[] p = p4, t = t4, l = l4;
+        // corner order as floor4: (x0,z1) (x1,z1) (x1,z0) (x0,z0), facing up
+        p[0] = x0; p[1] = y01; p[2] = z1;
+        p[3] = x1; p[4] = y11; p[5] = z1;
+        p[6] = x1; p[7] = y10; p[8] = z0;
+        p[9] = x0; p[10] = y00; p[11] = z0;
+        t[0] = u0; t[1] = v1;
+        t[2] = u1; t[3] = v1;
+        t[4] = u1; t[5] = v0;
+        t[6] = u0; t[7] = v0;
+        l[0] = tl(x0, z1); l[1] = tl(x1, z1); l[2] = tl(x1, z0); l[3] = tl(x0, z0);
+        // never culled: a cell is rarely flat, and one normal can't speak for both its triangles over
+        // a ridge (back slopes are hidden by the ground's depth test anyway)
+        target().add(p, t, l, tex, layer, 0, 0f, true);
     }
 
     // ------------------------------------------------------------------ walls

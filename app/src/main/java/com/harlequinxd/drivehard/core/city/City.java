@@ -10,6 +10,7 @@ import com.harlequinxd.drivehard.core.road.RoadMesh;
 import com.harlequinxd.drivehard.core.road.RoadNetwork;
 import com.harlequinxd.drivehard.core.tex.JpTextures;
 import com.harlequinxd.drivehard.core.tex.Noise;
+import com.harlequinxd.drivehard.core.tex.TerrainTiles;
 import com.harlequinxd.drivehard.core.tex.TextureLibrary;
 
 import java.util.ArrayList;
@@ -89,7 +90,6 @@ public final class City extends World implements java.io.Serializable {
         if (progress != null) progress.step("Planting farms and forests", 0.88f);
         countryside = new Countryside(this, lib, seed);
         if (progress != null) progress.step("Painting road markings", 0.94f);
-        streetPaint = streetPaint();
         chunks = new ChunkManager(this);
         minX = terrain.islandX0 - 9000; maxX = terrain.islandX1 + 3000; minZ = terrain.islandZ0 - 9000; maxZ = terrain.islandZ1 + 9000;
         // start downtown: on the sidewalk of the central avenue, beside the most central built-up block
@@ -402,7 +402,7 @@ public final class City extends World implements java.io.Serializable {
         return ch;
     }
 
-    /** The Mode 7 ground map: loaded chunks' painted tiles, flat colours beyond. */
+    /** The ground tiles (sea-floor heights and water maps) of loaded chunks, flat colours beyond. */
     public com.harlequinxd.drivehard.core.render.Ground.Source groundSource() {
         return new com.harlequinxd.drivehard.core.render.Ground.Source() {
             @Override public com.harlequinxd.drivehard.core.render.Ground.Tile tile(int cx, int cz) {
@@ -411,72 +411,8 @@ public final class City extends World implements java.io.Serializable {
             }
             @Override public float height(float x, float z) { return Math.max(-0.05f, terrain.height(x, z)); }
             @Override public int color(float x, float z) { return GroundPainter.farColor(terrain, x, z); }
+            @Override public int sandTexture() { return lib.tiles.base[TerrainTiles.SAND]; }
         };
-    }
-
-    // ------------------------------------------------------------------ painted city ground
-
-    /** Street medians and the promenade, bucketed by 256 m cells for quick lookup. */
-    private final java.util.Map<Long, List<float[]>> streetPaint;
-
-    private static long paintCell(int i, int j) { return ((long) i << 32) ^ (j & 0xFFFFFFFFL); }
-    private final java.util.concurrent.ConcurrentHashMap<Integer, List<float[]>> blockPaint = new java.util.concurrent.ConcurrentHashMap<>();
-
-    /** Avenue medians and the seaside promenade path. */
-    private java.util.Map<Long, List<float[]>> streetPaint() {
-        List<float[]> out = new ArrayList<>();
-        GeoBuilder gb = new GeoBuilder(terrain, new Chunk(0, 0));
-        gb.dry = true;
-        gb.paint = out;
-        Chunk dummy = new Chunk(0, 0);
-        for (int i = 0; i <= nbx; i++)
-            for (int j = 0; j < nbz; j++)
-                if (nsStreet(i, j)) roadSegment(dummy, gb, true, rx0[i], rx1[i], rz1[j], rz0[j + 1], avenueX[i]);
-        for (int j = 0; j <= nbz; j++)
-            for (int i = 0; i < nbx; i++)
-                if (ewStreet(i, j)) roadSegment(dummy, gb, false, rz0[j], rz1[j], rx1[i], rx0[i + 1], avenueZ[j]);
-        // the seaside promenade beside the built-up blocks of the east edge
-        for (int j = 0; j < nbz; j++)
-            if (blockActive(nbx - 1, j)) out.add(new float[]{cityX1 + 10f, rz0[j], cityX1 + 15f, rz1[j + 1], lib.pavers, 2f, 2f});
-        java.util.Map<Long, List<float[]>> map = new java.util.HashMap<>();
-        for (float[] r : out)
-            for (int j = (int) Math.floor(r[1] / 256f); j <= (int) Math.floor(r[3] / 256f); j++)
-                for (int i = (int) Math.floor(r[0] / 256f); i <= (int) Math.floor(r[2] / 256f); i++)
-                    map.computeIfAbsent(paintCell(i, j), k -> new ArrayList<>()).add(r);
-        return map;
-    }
-
-    /**
-     * Ground areas painted into the map in this rectangle: sidewalks, lots, parks, car parks,
-     * plazas and medians, each {x0, z0, x1, z1, texture, uScale, vScale}. A block's areas come from a
-     * dry run of its generator (same seed, no geometry), cached.
-     */
-    void groundPaint(float x0, float z0, float x1, float z1, List<float[]> out) {
-        if (x1 < cityX0 - 30f || x0 > cityX1 + 30f || z1 < cityZ0 || z0 > cityZ1) return;
-        java.util.Set<float[]> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
-        for (int cj = (int) Math.floor(z0 / 256f); cj <= (int) Math.floor(z1 / 256f); cj++)
-            for (int ci = (int) Math.floor(x0 / 256f); ci <= (int) Math.floor(x1 / 256f); ci++) {
-                List<float[]> l = streetPaint.get(paintCell(ci, cj));
-                if (l == null) continue;
-                for (float[] r : l) if (r[2] > x0 && r[0] < x1 && r[3] > z0 && r[1] < z1 && seen.add(r)) out.add(r);
-            }
-        for (int j = 0; j < nbz; j++) {
-            if (rz0[j + 1] < z0 || rz1[j] > z1) continue;
-            for (int i = 0; i < nbx; i++) {
-                if (rx0[i + 1] < x0 || rx1[i] > x1) continue;
-                if (!blockActive(i, j)) continue;
-                final int bi = i, bj = j;
-                List<float[]> list = blockPaint.computeIfAbsent(j * nbx + i, k -> {
-                    List<float[]> l = new ArrayList<>();
-                    GeoBuilder gb = new GeoBuilder(terrain, new Chunk(0, 0));
-                    gb.dry = true;
-                    gb.paint = l;
-                    block(new Chunk(0, 0), gb, bi, bj);
-                    return l;
-                });
-                for (float[] r : list) if (r[2] > x0 && r[0] < x1 && r[3] > z0 && r[1] < z1) out.add(r);
-            }
-        }
     }
 
     private static boolean in(float x, float z, float x0, float z0, float x1, float z1) {
@@ -485,22 +421,116 @@ public final class City extends World implements java.io.Serializable {
 
     // ------------------------------------------------------------------ terrain, water, vegetation
 
+    /**
+     * The ground of one chunk as tiled polygons: every 8 m cell is one quad carrying one 128-texel
+     * tile (ground types at the grid corners pick the tile or a transition tile; crops and city
+     * ground take theirs whole). Cells a road runs through are cut into 2 m pieces and the pieces
+     * under the asphalt left out, so the road polygons lie in a gap cut for them. The sea pass
+     * draws what lies under the water. Its sea-floor / beach heights and water map are kept as
+     * the chunk's ground tile.
+     */
     private void terrainAndWater(Chunk ch, GeoBuilder gb, float x0, float z0, float x1, float z1) {
-        // what covers every 8 m cell of the chunk plus a one-cell border (for blending with neighbours)
-        GroundPainter.Surface[] grid = new GroundPainter.Surface[100];
+        TerrainTiles tt = lib.tiles;
+        int gx0 = Math.round(x0 / 8f), gz0 = Math.round(z0 / 8f);
+        // ground type at every grid corner, heights at the corners
+        int[] ct = new int[81];
+        float[] hg = new float[81];
+        for (int j = 0; j <= 8; j++)
+            for (int i = 0; i <= 8; i++) {
+                ct[j * 9 + i] = cornerType(x0 + i * 8f, z0 + j * 8f);
+                hg[j * 9 + i] = terrain.grid(gx0 + i, gz0 + j);
+            }
+        // cells cut finely around roads, with a one-cell border (to match the neighbours' edges)
+        boolean[] fine = new boolean[100];
         for (int j = -1; j <= 8; j++)
             for (int i = -1; i <= 8; i++) {
-                float ax = x0 + i * 8f, az = z0 + j * 8f;
-                grid[(j + 1) * 10 + (i + 1)] = surface(ax, az, ax + 8f, az + 8f);
+                float mx = x0 + i * 8f + 4f, mz = z0 + j * 8f + 4f;
+                fine[(j + 1) * 10 + (i + 1)] = !urban(mx, mz) && roads.onAsphalt(mx, mz, 5.8f, -1);
             }
-        // the ground itself is a painted map tile (Mode 7), not geometry
-        ch.ground = new GroundPainter(this).paint(ch.cx, ch.cz, grid);
+        // what covers every cell (crops; also decides vegetation)
+        GroundPainter.Surface[] grid = new GroundPainter.Surface[64];
+        for (int j = 0; j < 8; j++)
+            for (int i = 0; i < 8; i++) {
+                float ax = x0 + i * 8f, az = z0 + j * 8f;
+                grid[j * 8 + i] = surface(ax, az, ax + 8f, az + 8f);
+            }
+        gb.begin(false);
+        for (int j = 0; j < 8; j++)
+            for (int i = 0; i < 8; i++) {
+                float ax = x0 + i * 8f, az = z0 + j * 8f, bx = ax + 8f, bz = az + 8f;
+                int o = j * 9 + i;
+                float h00 = hg[o], h10 = hg[o + 1], h01 = hg[o + 9], h11 = hg[o + 10];
+                // under the sea (the sea pass draws it): both the shaped ground and the natural shore agree
+                if (Math.max(Math.max(h00, h10), Math.max(h01, h11)) < -0.3f
+                        && Math.max(Math.max(terrain.natural(ax, az), terrain.natural(bx, az)),
+                                    Math.max(terrain.natural(ax, bz), terrain.natural(bx, bz))) < 0.3f) continue;
+                GroundPainter.Surface sf = grid[j * 8 + i];
+                boolean urb = urban(ax + 4f, az + 4f);
+                int tex;
+                if (urb) tex = tt.asphalt;
+                else if (sf.crop != Countryside.Crop.NONE) tex = countryside.texture(sf.crop);
+                else tex = tt.tile(ct[o], ct[o + 1], ct[o + 10], ct[o + 9]);
+                if (fine[(j + 1) * 10 + (i + 1)]) fineCell(gb, ax, az, tex, fine, i, j, h00, h10, h11, h01);
+                else gb.groundCell(ax, az, bx, bz, h00, h10, h11, h01, 0f, 0f, 1f, 1f, tex, L_GROUND);
+                if (Countryside.paddy(sf.crop) && !fine[(j + 1) * 10 + (i + 1)]) countryside.levees(gb, ax, az, bx, bz);
+            }
+        // farm yards and konbini car parks, over the tiles
+        countryside.yards(x0, z0, x1, z1, (rx0, rz0, rx1, rz1, t) -> {
+            float a0 = Math.max(rx0, x0), a1 = Math.min(rx1, x1), b0 = Math.max(rz0, z0), b1 = Math.min(rz1, z1);
+            if (a1 - a0 > 0.05f && b1 - b0 > 0.05f) gb.floorAreaT(a0, b0, a1, b1, 0.03f, t, 2f, 2f, L_DECAL, 8f, 0, 0f);
+        });
+        // the sea-floor / beach heights and the water map for the animated sea
+        ch.ground = new GroundPainter(this).tile(ch.cx, ch.cz);
         for (int j = 0; j < 8; j++)
             for (int i = 0; i < 8; i++) {
                 float ax = x0 + i * 8f, az = z0 + j * 8f;
                 boolean overlaps = urban(ax + 4f, az + 4f) || urban(ax, az) || urban(ax + 8f, az + 8f);
-                GroundPainter.Surface sf = grid[(j + 1) * 10 + (i + 1)];
+                GroundPainter.Surface sf = grid[j * 8 + i];
                 if (!overlaps && sf.tex >= 0) vegetation(ch, gb, ax, az, sf.crop);
+            }
+    }
+
+    /** Natural ground type at a grid corner: rock on steep slopes, sand on beaches, hill grass up high. */
+    private int cornerType(float x, float z) {
+        float h = terrain.height(x, z);
+        float dx = (terrain.height(x + 4f, z) - terrain.height(x - 4f, z)) / 8f;
+        float dz = (terrain.height(x, z + 4f) - terrain.height(x, z - 4f)) / 8f;
+        if (dx * dx + dz * dz > 0.36f) return TerrainTiles.ROCK;
+        if (roads.influence(x, z) > 0.35f) return TerrainTiles.GRASS;       // road verges, cuttings and embankments
+        if (terrain.isSand(x, z, h) || h < 0.6f) return TerrainTiles.SAND;
+        return h > 22f ? TerrainTiles.HILL : TerrainTiles.GRASS;
+    }
+
+    /**
+     * A cell a road runs through, in 4 x 4 pieces of 2 m (each a quarter-tile of the same tile),
+     * leaving out the pieces wholly under asphalt. Inside, the pieces follow the true terrain; on an
+     * edge shared with an uncut neighbour they keep its straight edge, so no cracks open.
+     */
+    private void fineCell(GeoBuilder gb, float ax, float az, int tex, boolean[] fine, int i, int j,
+                          float h00, float h10, float h11, float h01) {
+        boolean w = fine[(j + 1) * 10 + i], e = fine[(j + 1) * 10 + i + 2], n = fine[j * 10 + i + 1], s = fine[(j + 2) * 10 + i + 1];
+        float[] hv = new float[25];
+        for (int vj = 0; vj <= 4; vj++)
+            for (int vi = 0; vi <= 4; vi++) {
+                float fx = vi / 4f, fz = vj / 4f;
+                float h;
+                if ((vi == 0 || vi == 4) && (vj == 0 || vj == 4)) h = vi == 0 ? (vj == 0 ? h00 : h01) : (vj == 0 ? h10 : h11);
+                else if (vi == 0 && !w) h = h00 + (h01 - h00) * fz;
+                else if (vi == 4 && !e) h = h10 + (h11 - h10) * fz;
+                else if (vj == 0 && !n) h = h00 + (h10 - h00) * fx;
+                else if (vj == 4 && !s) h = h01 + (h11 - h01) * fx;
+                else h = terrain.height(ax + vi * 2f, az + vj * 2f);
+                hv[vj * 5 + vi] = h;
+            }
+        for (int pj = 0; pj < 4; pj++)
+            for (int pi = 0; pi < 4; pi++) {
+                float px0 = ax + pi * 2f, pz0 = az + pj * 2f, px1 = px0 + 2f, pz1 = pz0 + 2f;
+                if (roads.onAsphalt(px0 + 1f, pz0 + 1f, -0.05f, -1) && roads.onAsphalt(px0, pz0, -0.05f, -1)
+                        && roads.onAsphalt(px1, pz0, -0.05f, -1) && roads.onAsphalt(px0, pz1, -0.05f, -1)
+                        && roads.onAsphalt(px1, pz1, -0.05f, -1)) continue;       // wholly under the road
+                int o = pj * 5 + pi;
+                gb.groundCell(px0, pz0, px1, pz1, hv[o], hv[o + 1], hv[o + 6], hv[o + 5],
+                        pi / 4f, pj / 4f, (pi + 1) / 4f, (pj + 1) / 4f, tex, L_GROUND);
             }
     }
 

@@ -206,17 +206,19 @@ final class GlShaders {
             + "out vec3 vWorld;\n"
             + "out float vDepth;\n"
             + "out vec3 vColor;\n"
+            + "uniform float uGroundS;\n"
             + "void main() {\n"
             + "  vWorld = aPos;\n"
             + "  vColor = aColor.rgb;\n"
             + "  float vz;\n"
-            // the ground's depth is written 6% farther: things standing on it always show
-            + "  gl_Position = project(aPos, 0.94, vz);\n"
+            // the ground's depth is written ~6% farther: things standing on it always show
+            + "  gl_Position = project(aPos, uGroundS, vz);\n"
             + "  vDepth = vz;\n"
             + "}\n";
 
     static final String GROUND_FS = HEAD + DITHER
-            + "uniform sampler2D uMap;\n"           // the tile's painted colours (with mips)
+            + "uniform sampler2D uMap;\n"           // the sand tile under the shallows (repeating)
+            + "uniform float uSandM;\n"            // metres per sand tile
             + "uniform sampler2D uWater;\n"         // sea-floor / sand height, 65 x 65 (linear)
             + "uniform sampler2D uWaves;\n"         // this frame's wave field: brightness / 2, highlight
             + "uniform sampler2D uAlong;\n"         // along-shore phase, 64 x 64
@@ -319,9 +321,14 @@ final class GlShaders {
             + "    c = floor(vColor * 255.0 / 8.0);\n"
             + "    c = c * 8.0 + floor(c / 4.0);\n"
             + "  } else {\n"
+            // dry land belongs to the terrain's polygons
+            + "    float lx = clamp(vWorld.x - uTile.x, 0.0, 64.0), lz = clamp(vWorld.z - uTile.y, 0.0, 64.0);\n"
+            + "    if (uHasWater == 0 || 0.8 - texture(uWater, vec2((lx + 0.5) / 65.0, (lz + 0.5) / 65.0)).r * 255.0 * 0.05 > 0.5) discard;\n"
             + "    if (dr > uMip.x * 2.0) mip = clamp(ceil(log2(dr / uMip.x)) - 1.0, 0.0, uMip.y - 1.0);\n"
-            + "    vec2 uv = clamp((vWorld.xz - uTile) / 64.0, 0.0, 0.99999);\n"
-            + "    vec3 m = textureLod(uMap, uv, mip).rgb;\n"
+            + "    ivec2 ts = textureSize(uMap, 0);\n"
+            + "    float st = exp2(min(mip, 3.0));\n"
+            + "    ivec2 ti = ivec2(mod(floor(vWorld.xz / uSandM * vec2(ts) / st) * st, vec2(ts)));\n"
+            + "    vec3 m = texelFetch(uMap, ti, 0).bgr;\n"
             // the 15-bit colour as 8-bit, as the CPU renderer expands it
             + "    vec3 q5 = floor(vec3(m.r * 31.0, m.g * 63.0, m.b * 31.0) + 0.5);\n"
             + "    q5.g = floor(q5.g / 2.0);\n"

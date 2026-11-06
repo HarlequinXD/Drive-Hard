@@ -5,15 +5,15 @@ import com.harlequinxd.drivehard.core.Environment;
 import java.util.Arrays;
 
 /**
- * Software renderer: a Mode 7 ground map ({@link #drawGround()}), whole polygons with
- * perspective-correct texturing, and sprites drawn as scaled rectangle blits.
+ * Software renderer: the animated sea as a Mode 7 pass ({@link #drawGround()}), whole polygons
+ * with GBA / PS1 / perspective texturing, and sprites drawn as scaled rectangle blits.
  *
  * <ul>
- * <li>The ground is rendered as the background, and polygons and sprites are drawn far-to-near
- *   through a PlayStation-style ordering table grouped by layer and depth (no Z-buffer between
- *   polygons).</li>
- * <li>The ground writes a per-pixel occlusion depth that polygons and sprites only test: hills
- *   hide the houses, trees and cars behind them.</li>
+ * <li>The sea is rendered first, then polygons and sprites are drawn far-to-near through a
+ *   PlayStation-style ordering table grouped by layer and depth (no Z-buffer between them).</li>
+ * <li>The sea and the ground layer's polygons (the tiled terrain) write a per-pixel occlusion
+ *   depth that everything above them only tests: hills hide the houses, trees and cars behind
+ *   them.</li>
  * <li>Colour is reduced to 15-bit with 4x4 ordered dither; fog by view depth.</li>
  * </ul>
  */
@@ -39,6 +39,10 @@ public final class SoftRenderer extends Renderer {
     /** Each triangle's whole polygon on screen (x, y per corner), for GBA scanline texture spans. */
     private final float[] outline = new float[MAX_PRIMS * 4];
     private final int[] pOut = new int[MAX_PRIMS], pOutN = new int[MAX_PRIMS];
+    /** Primitives of the ground layer (terrain tiles): they write the occlusion depth. */
+    private final boolean[] pGround = new boolean[MAX_PRIMS];
+    /** Primitives of the flat ground layers (terrain, decals, roads): GBA mapping is exact there, so they draw exact. */
+    private final boolean[] pFlat = new boolean[MAX_PRIMS];
     private int outlineLen;
 
     private static final int[] BAYER = {0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5};
@@ -114,6 +118,12 @@ public final class SoftRenderer extends Renderer {
     private final float[] groundZ;
     /** Small tolerance on the ground test (things touching the ground). */
     private static final float GROUND_SLACK = 1.004f;
+    /**
+     * Dry land in the sea pass: the polygons draw it. Its rows are marked, and whatever is still
+     * marked after the polygons (where the 8 m grid the pass marches stands above the true ground,
+     * by a ridge or a cutting) is sky or farther ground seen past the real surface: sky is filled in.
+     */
+    private static final int GAP = 0x00000000;
     private final float[] mipD = new float[Ground.MIPS];
     private Ground.Tile[] snap = new Ground.Tile[0];
     private int snapX, snapZ, snapN;
@@ -154,6 +164,7 @@ public final class SoftRenderer extends Renderer {
         if (ground == null) { Arrays.fill(groundZ, 0f); return; }
         updateWater();
         for (int k = 0; k < Ground.MIPS; k++) mipD[k] = Ground.TEXEL * focal * (1 << k) * 1.4f;
+        // pixels the sea pass leaves alone: the polygons cover them
         // snapshot of the tiles in view range: per-pixel lookups index an array, no shared map
         int reach = (int) Math.ceil(far / Ground.TILE) + 1;
         snapN = reach * 2 + 1;
@@ -200,16 +211,17 @@ public final class SoftRenderer extends Renderer {
     }
 
     private int groundColor(TileCache tc, float x, float z, int k) {
-        if (!tc.at(this, x, z)) {
-            int c = ground.color(x, z);
-            return ((c >> 19) & 31) << 10 | ((c >> 11) & 31) << 5 | ((c >> 3) & 31);
+        int c;
+        if (!tc.at(this, x, z)) c = ground.color(x, z);
+        else {
+            // the sand under the shallows: the ground's own sand tile, so the beach runs on beneath the sea
+            Texture t = textures[ground.sandTexture()];
+            int st = 1 << Math.min(k, 3);
+            int px = ((int) Math.floor(x * (t.w / Ground.SAND_M)) & t.wMask) & ~(st - 1);
+            int pz = ((int) Math.floor(z * (t.h / Ground.SAND_M)) & t.hMask) & ~(st - 1);
+            c = t.px[(pz << t.wShift) | px];
         }
-        int n = Ground.RES >> k;
-        float sc = n / Ground.TILE;
-        int px = (int) ((x - tc.x0) * sc), pz = (int) ((z - tc.z0) * sc);
-        if (px >= n) px = n - 1; else if (px < 0) px = 0;
-        if (pz >= n) pz = n - 1; else if (pz < 0) pz = 0;
-        return tc.t.mips[k][(((pz >> 3) * (n >> 3) + (px >> 3)) << 6) | ((pz & 7) << 3) | (px & 7)];
+        return ((c >> 19) & 31) << 10 | ((c >> 11) & 31) << 5 | ((c >> 3) & 31);
     }
 
     /** Season (dry grass turns straw coloured) and scene light applied to the 15-bit ground colours. */
@@ -572,9 +584,17 @@ public final class SoftRenderer extends Renderer {
             float dr = 1f / izc;
             float px = ex + dx * dr, pz = ez + dz * dr;
             int k = base + y;
-            colZ[k] = izc * 0.94f;
+            boolean loaded = tc.at(this, px, pz);
+            if (loaded && Float.isNaN(tc.t.waterAt(px - tc.x0, pz - tc.z0))) {
+                // dry land: the terrain's polygons draw it
+                cf[k] = GAP;
+                colZ[k] = 0f;
+                continue;
+            }
+            // the sea's depth is written a hair nearer than the terrain tiles', so it wins where both lie
+            colZ[k] = izc * (loaded ? 0.95f : 0.94f);
             int c = groundLut[groundColor(tc, px, pz, mip)];
-            if (tc.t != null && tc.t.water != null) c = water(tc, px, pz, dr, c, mip, x, y);
+            if (loaded) c = water(tc, px, pz, dr, c, mip, x, y);
             if (dr <= fs) cf[k] = c;
             else {
                 int fv = (int) Math.min(256f, (dr - fs) * fogK * 256f);
@@ -819,14 +839,30 @@ public final class SoftRenderer extends Renderer {
         }
         orderCount = n;
         statPrims = n;
-        if (pool == null) {
-            drawBand(0, H);
-            return;
+        if (pool == null) drawBand(0, H);
+        else {
+            try {
+                pool.invokeAll(bands);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
-        try {
-            pool.invokeAll(bands);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+        fillGaps();
+    }
+
+    /** Sky where the sea pass marked dry land that no polygon covered (see {@link #GAP}). */
+    private void fillGaps() {
+        int[] out = fb;
+        int[] sk = sky;
+        for (int y = 0; y < H; y++) {
+            int row = y * W;
+            for (int x = 0; x < W; x++) {
+                if (out[row + x] != GAP) continue;
+                if (env == null) { out[row + x] = sk[y * 4 + (x & 3)]; continue; }
+                float xs = (x + 0.5f - cx) / focal;
+                float dx = fx + rx * xs, dz = fz + rz * xs;
+                out[row + x] = skyPixel(x, y, dx, dz, dx * dx + dz * dz, (float) Math.atan2(dx, dz));
+            }
         }
     }
 
@@ -1069,6 +1105,8 @@ public final class SoftRenderer extends Renderer {
             pmode[p] = mode;
             pOut[p] = os;
             pOutN[p] = n;
+            pGround[p] = layer == L_GROUND;
+            pFlat[p] = layer != L_OBJECT;
             next[p] = head[hb];
             head[hb] = p;
         }
@@ -1108,7 +1146,7 @@ public final class SoftRenderer extends Renderer {
         float dqdx = ((q1 - q0) * dy2 - (q2 - q0) * dy1) * id, dqdy = ((q2 - q0) * dx1 - (q1 - q0) * dx2) * id;
         float drdx = ((r1 - r0) * dy2 - (r2 - r0) * dy1) * id, drdy = ((r2 - r0) * dx1 - (r1 - r0) * dx2) * id;
         // PS1: u and v straight across the triangle on screen
-        int tm = texMap;
+        int tm = texMap == TEX_GBA && pFlat[p] ? TEX_PERSPECTIVE : texMap;
         float dudx = ((u1 - u0) * dy2 - (u2 - u0) * dy1) * id, dudy = ((u2 - u0) * dx1 - (u1 - u0) * dx2) * id;
         float dvdx = ((v1 - v0) * dy2 - (v2 - v0) * dy1) * id, dvdy = ((v2 - v0) * dx1 - (v1 - v0) * dx2) * id;
         float l0 = A[i0 + 4], l1 = A[i1 + 4], l2 = A[i2 + 4];
@@ -1127,6 +1165,7 @@ public final class SoftRenderer extends Renderer {
         float invA = dy1 > 0f ? 1f / dy1 : 0f, invB = (y2 - y1) > 0f ? 1f / (y2 - y1) : 0f;
         int mode = pmode[p];
         boolean shadow = mode == MODE_SHADOW, alpha = mode == MODE_ALPHA, blend = mode == MODE_BLEND;
+        boolean ground = pGround[p];
         // opaque spans overlap their right neighbour by a pixel: seals T-junction hairline cracks
         int seal = mode == MODE_OPAQUE ? 1 : 0;
         int fr = fogR, fg = fogG, fbb = fogB;
@@ -1212,7 +1251,12 @@ public final class SoftRenderer extends Renderer {
                 }
                 for (int e = x + n; x < e; x++, U += dU, V += dV, L += dL, F += dF, AL += dA, IZ += dzdx) {
                     int k = row + x;
-                    if (IZ * GROUND_SLACK < zb[k]) continue;          // behind the ground (a hill)
+                    if (ground) {
+                        // terrain tiles: a depth buffer among themselves and with the sea
+                        float zt = IZ * 0.94f;
+                        if (zt <= zb[k]) continue;
+                        zb[k] = zt;
+                    } else if (IZ * GROUND_SLACK < zb[k]) continue;   // behind the ground (a hill)
                     if (shadow) {
                         int ty = V >> 16;
                         ty = ty < 0 ? 0 : (ty > hmax ? hmax : ty);

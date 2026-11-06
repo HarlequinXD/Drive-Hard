@@ -91,6 +91,8 @@ public final class GlRenderer extends Renderer {
         atlasPages = 0;
         gpuBytes = 0;
         otVao = otVbo = cornerTex = 0;
+        sandTex = 0;
+        sandId = -1;
     }
 
     @Override public void dispose() {
@@ -421,6 +423,7 @@ public final class GlRenderer extends Renderer {
         Program p = groundProg;
         gl.uniform1f(p.loc("uRows"), H);
         gl.uniform2f(p.loc("uMip"), Ground.TEXEL * focal * 1.4f, Ground.MIPS);
+        gl.uniform1f(p.loc("uSandM"), Ground.SAND_M);
         gl.uniform4f(p.loc("uTintDry"), tR / 256f, tG / 256f, tB / 256f, dryness);
         gl.uniform3f(p.loc("uFog"), fogR, fogG, fogB);
         gl.uniform3f(p.loc("uFogRange"), fogStart, 1f / (fogEnd - fogStart), far);
@@ -446,17 +449,22 @@ public final class GlRenderer extends Renderer {
                 float nx = Math.max(x0, Math.min(ex, x0 + Ground.TILE)) - ex, nz = Math.max(z0, Math.min(ez, z0 + Ground.TILE)) - ez;
                 if (nx * nx + nz * nz > far * far * 1.1f) continue;
                 Ground.Tile t = ground.tile(cx, cz);
+                // loaded dry land is all polygons; the pass draws the sea, and flat colours where nothing is loaded yet
+                if (t != null && t.water == null) continue;
                 GTile g = t == null ? null : tiles.get(t);
                 if (t != null && g == null && budget > 0) { g = uploadTile(t); budget--; }
+                if (t != null && g == null) continue;
                 boolean flatTile = g == null;
                 if (flatTile) g = flatTile(cx, cz);
                 if (!boxVisible(x0, g.minY, z0, x0 + Ground.TILE, g.maxY, z0 + Ground.TILE)) continue;
                 g.lastUse = frame;
                 gl.uniform1i(p.loc("uFlat"), flatTile ? 1 : 0);
                 gl.uniform1i(p.loc("uHasWater"), !flatTile && g.water != 0 ? 1 : 0);
+                // the sea's depth a hair nearer than the terrain tiles' (it wins where both lie)
+                gl.uniform1f(p.loc("uGroundS"), flatTile ? 0.94f : 0.95f);
                 gl.uniform2f(p.loc("uTile"), x0, z0);
                 gl.activeTexture(Gl.TEXTURE0);
-                gl.bindTexture(Gl.TEXTURE_2D, flatTile ? 0 : g.tex);
+                gl.bindTexture(Gl.TEXTURE_2D, flatTile ? 0 : sandTexture());
                 gl.activeTexture(Gl.TEXTURE0 + 1);
                 gl.bindTexture(Gl.TEXTURE_2D, g.water);
                 gl.bindVertexArray(g.vao);
@@ -510,24 +518,6 @@ public final class GlRenderer extends Renderer {
                 pos[k] = x0 + i * 4f; pos[k + 1] = top + (bot - top) * fz2; pos[k + 2] = z0 + j * 4f;
             }
         GTile g = meshTile(pos, null);
-        // the painted map, every mip, as 16-bit colour
-        g.tex = newTexture(Gl.NEAREST_MIPMAP_NEAREST, Gl.CLAMP_TO_EDGE);
-        gl.texParameteri(Gl.TEXTURE_2D, Gl.TEXTURE_BASE_LEVEL, 0);
-        gl.texParameteri(Gl.TEXTURE_2D, Gl.TEXTURE_MAX_LEVEL, Ground.MIPS - 1);
-        for (int k = 0; k < Ground.MIPS; k++) {
-            int n = Ground.RES >> k;
-            short[] m = t.mips[k];
-            ShortBuffer sb = direct(n * n * 2).asShortBuffer();
-            for (int pz = 0; pz < n; pz++)
-                for (int px = 0; px < n; px++) {
-                    int v = m[Ground.Tile.index(px, pz, n)];
-                    int r = (v >> 10) & 31, gg = (v >> 5) & 31, b = v & 31;
-                    sb.put((short) ((r << 11) | (((gg << 1) | (gg >> 4)) << 5) | b));
-                }
-            sb.flip();
-            gl.texImage2D(Gl.TEXTURE_2D, k, Gl.RGB565, n, n, Gl.RGB, Gl.UNSIGNED_SHORT_5_6_5, sb);
-            g.bytes += (long) n * n * 2;
-        }
         if (t.water != null) {
             int n = Ground.WRES + 1;
             ByteBuffer wb = direct(n * n);
@@ -542,6 +532,22 @@ public final class GlRenderer extends Renderer {
         tiles.put(t, g);
         gpuBytes += g.bytes;
         return g;
+    }
+
+    private int sandTex, sandId = -1;
+
+    /** The ground's sand tile as a repeating texture, for the sea floor in the shallows. */
+    private int sandTexture() {
+        int id = ground.sandTexture();
+        if (sandTex != 0 && sandId == id) return sandTex;
+        Texture t = textures[id];
+        if (sandTex == 0) sandTex = newTexture(Gl.NEAREST, Gl.REPEAT);
+        gl.bindTexture(Gl.TEXTURE_2D, sandTex);
+        IntBuffer px = direct(t.w * t.h * 4).asIntBuffer();
+        px.put(t.px, 0, t.w * t.h).flip();
+        gl.texImage2D(Gl.TEXTURE_2D, 0, Gl.RGBA8, t.w, t.h, Gl.RGBA, Gl.UNSIGNED_BYTE, px);
+        sandId = id;
+        return sandTex;
     }
 
     private GTile flatTile(int cx, int cz) {
@@ -695,7 +701,7 @@ public final class GlRenderer extends Renderer {
                 vb.putFloat(g.pos[i * 12 + c * 3]).putFloat(g.pos[i * 12 + c * 3 + 1]).putFloat(g.pos[i * 12 + c * 3 + 2]);
                 vb.putFloat(g.uv[i * 8 + c * 2]).putFloat(g.uv[i * 8 + c * 2 + 1]);
                 float cov = blend ? g.alpha[i * 4 + c] : 1f;
-                vb.putShort(unorm16(g.light[i * 4 + c] * 0.25f)).putShort(unorm16(cov)).putShort(unorm16(0.25f)).putShort((short) 0);
+                vb.putShort(unorm16(g.light[i * 4 + c] * 0.25f)).putShort(unorm16(cov)).putShort(unorm16(l == L_GROUND ? 0.235f : 0.25f)).putShort((short) 0);
                 vb.put(nx).put(ny).put(nz).put((byte) 0);
                 vb.putShort((short) id).putShort((short) flags);
             }
@@ -1218,11 +1224,14 @@ public final class GlRenderer extends Renderer {
         int dyn = 0;
         for (int layer = 0; layer < LAYERS; layer++) {
             // flat layers lie on the ground in layer order; objects and sprites use the depth buffer
+            // GBA scanline mapping is exact on the ground layers under the level camera: draw them exact
+            gl.uniform1i(p.loc("uTexMap"), layer != L_OBJECT && texMap == TEX_GBA ? TEX_PERSPECTIVE : texMap);
             if (psxSort && layer == L_OBJECT) {
                 drawOrderingTable(p);
                 continue;
             }
-            gl.depthMask(layer == L_OBJECT);
+            // the terrain tiles are the ground: a depth buffer among themselves, and what everything above tests
+            gl.depthMask(layer == L_OBJECT || layer == L_GROUND);
             gl.uniform1i(p.loc("uSingle"), 0);
             for (Draw d : draws) {
                 Batch b = batches.get(d.g);

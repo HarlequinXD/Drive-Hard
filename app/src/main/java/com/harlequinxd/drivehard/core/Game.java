@@ -149,12 +149,10 @@ public final class Game {
     public Game(long seed, Progress progress) { this(seed, progress, false); }
 
     /**
-     * @param lowMemory phones: ground painted at half resolution, fewer chunks kept loaded,
-     *                  a shorter view distance
+     * @param lowMemory phones: fewer texture variants, fewer chunks kept loaded, a shorter view distance
      */
     public Game(long seed, Progress progress, boolean lowMemory) {
         this.lowMemory = lowMemory;
-        com.harlequinxd.drivehard.core.render.Ground.lowMemory(lowMemory);
         env = new Environment(seed);
         // the character and prop sprites bake on another core while the island is generated
         final SpriteSheet[] baked = new SpriteSheet[5];
