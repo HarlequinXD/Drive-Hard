@@ -35,7 +35,13 @@ public final class GeoBuilder {
         end();
         cur = new Geo();
         curIsObject = object;
+        maxEdge = object ? BUILDING_TILE : 0f;
     }
+
+    /** Buildings are tiled in pieces of at most this many metres (affine GBA texturing warps less on small polygons). */
+    public static final float BUILDING_TILE = 4f;
+    /** While > 0, object-layer polygons longer than this are split into a grid of pieces this size or smaller. */
+    public float maxEdge;
 
     public void end() {
         if (cur != null && cur.count > 0) {
@@ -56,7 +62,76 @@ public final class GeoBuilder {
     java.util.List<float[]> paint;
 
     public void quad(float[] p, float[] uv, float[] l, int tex, int layer, int flags, float bias, boolean doubleSided) {
-        if (!dry) target().add(p, uv, l, tex, layer, flags, bias, doubleSided);
+        if (dry) return;
+        if (maxEdge > 0f && layer == SoftRenderer.L_OBJECT) {
+            float keep = maxEdge;
+            tiled(p, uv, l, tex, layer, flags, bias, doubleSided);
+            maxEdge = keep;
+        }
+        else target().add(p, uv, l, tex, layer, flags, bias, doubleSided);
+    }
+
+    private final float[] tp = new float[12], tuv = new float[8], tlt = new float[4];
+    private final float[] tp3 = new float[9], tuv3 = new float[6], tlt3 = new float[3];
+
+    /**
+     * A polygon split into a grid of pieces no longer than {@link #maxEdge}: positions, texture
+     * coordinates and light interpolated across it (bilinear for a quad, barycentric for a triangle).
+     */
+    private void tiled(float[] p, float[] uv, float[] l, int tex, int layer, int flags, float bias, boolean ds) {
+        float maxEdge = this.maxEdge;           // target() may open a batch (and reset the field)
+        Geo g = target();
+        if (p.length >= 12) {
+            float e01 = dist(p, 0, 1), e32 = dist(p, 3, 2), e12 = dist(p, 1, 2), e03 = dist(p, 0, 3);
+            int nu = Math.max(1, (int) Math.ceil(Math.max(e01, e32) / maxEdge - 1e-3f));
+            int nv = Math.max(1, (int) Math.ceil(Math.max(e12, e03) / maxEdge - 1e-3f));
+            if (nu == 1 && nv == 1) { g.add(p, uv, l, tex, layer, flags, bias, ds); return; }
+            for (int j = 0; j < nv; j++)
+                for (int i = 0; i < nu; i++) {
+                    float u0 = (float) i / nu, u1 = (float) (i + 1) / nu, v0 = (float) j / nv, v1 = (float) (j + 1) / nv;
+                    bil(p, uv, l, u0, v0, 0);
+                    bil(p, uv, l, u1, v0, 1);
+                    bil(p, uv, l, u1, v1, 2);
+                    bil(p, uv, l, u0, v1, 3);
+                    g.add(tp, tuv, tlt, tex, layer, flags, bias, ds);
+                }
+            return;
+        }
+        // a triangle: n x n smaller triangles on a barycentric grid
+        float m = Math.max(dist(p, 0, 1), Math.max(dist(p, 1, 2), dist(p, 2, 0)));
+        int n = Math.max(1, (int) Math.ceil(m / maxEdge - 1e-3f));
+        if (n == 1) { g.add(p, uv, l, tex, layer, flags, bias, ds); return; }
+        for (int j = 0; j < n; j++)
+            for (int i = 0; i < n - j; i++) {
+                // upright triangle (i, j) (i+1, j) (i, j+1), then the inverted one beside it
+                bar(p, uv, l, i, j, n, 0); bar(p, uv, l, i + 1, j, n, 1); bar(p, uv, l, i, j + 1, n, 2);
+                g.add(tp3, tuv3, tlt3, tex, layer, flags, bias, ds);
+                if (i + j + 1 < n) {
+                    bar(p, uv, l, i + 1, j, n, 0); bar(p, uv, l, i + 1, j + 1, n, 1); bar(p, uv, l, i, j + 1, n, 2);
+                    g.add(tp3, tuv3, tlt3, tex, layer, flags, bias, ds);
+                }
+            }
+    }
+
+    private static float dist(float[] p, int a, int b) {
+        float dx = p[b * 3] - p[a * 3], dy = p[b * 3 + 1] - p[a * 3 + 1], dz = p[b * 3 + 2] - p[a * 3 + 2];
+        return (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+    }
+
+    /** Corner k of a piece: the point (s, t) of quad p (s along 0-1 / 3-2, t along 0-3 / 1-2). */
+    private void bil(float[] p, float[] uv, float[] l, float s, float t, int k) {
+        float w0 = (1 - s) * (1 - t), w1 = s * (1 - t), w2 = s * t, w3 = (1 - s) * t;
+        for (int c = 0; c < 3; c++) tp[k * 3 + c] = p[c] * w0 + p[3 + c] * w1 + p[6 + c] * w2 + p[9 + c] * w3;
+        for (int c = 0; c < 2; c++) tuv[k * 2 + c] = uv[c] * w0 + uv[2 + c] * w1 + uv[4 + c] * w2 + uv[6 + c] * w3;
+        tlt[k] = l[0] * w0 + l[1] * w1 + l[2] * w2 + l[3] * w3;
+    }
+
+    /** Corner k of a small triangle: grid point (i, j) of n on triangle p. */
+    private void bar(float[] p, float[] uv, float[] l, int i, int j, int n, int k) {
+        float b1 = (float) i / n, b2 = (float) j / n, b0 = 1f - b1 - b2;
+        for (int c = 0; c < 3; c++) tp3[k * 3 + c] = p[c] * b0 + p[3 + c] * b1 + p[6 + c] * b2;
+        for (int c = 0; c < 2; c++) tuv3[k * 2 + c] = uv[c] * b0 + uv[2 + c] * b1 + uv[4 + c] * b2;
+        tlt3[k] = l[0] * b0 + l[1] * b1 + l[2] * b2;
     }
 
     /** Dither-blended overlay quad (coverage per vertex), drawn over what lies beneath it. */
@@ -65,7 +140,7 @@ public final class GeoBuilder {
     }
 
     public void quad3(float[] p, float[] uv, float[] l, int tex, int layer) {
-        if (!dry) target().add(p, uv, l, tex, layer, Geo.FLAG_NO_SUBDIV, 0f, false);
+        quad(p, uv, l, tex, layer, Geo.FLAG_NO_SUBDIV, 0f, false);
     }
 
     // ------------------------------------------------------------------ wall props
