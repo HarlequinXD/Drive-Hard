@@ -36,6 +36,10 @@ public final class SoftRenderer extends Renderer {
     private final int[] pmode = new int[MAX_PRIMS];
     private final float[] P = new float[MAX_PRIMS * 3 * VA];
     private int primCount;
+    /** Each triangle's whole polygon on screen (x, y per corner), for GBA scanline texture spans. */
+    private final float[] outline = new float[MAX_PRIMS * 4];
+    private final int[] pOut = new int[MAX_PRIMS], pOutN = new int[MAX_PRIMS];
+    private int outlineLen;
 
     private static final int[] BAYER = {0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5};
 
@@ -56,6 +60,7 @@ public final class SoftRenderer extends Renderer {
         if (key != lutKey) { lutKey = key; buildGroundLut(); }
         Arrays.fill(head, -1);
         primCount = 0;
+        outlineLen = 0;
         statPolys = 0;
         statPrims = 0;
     }
@@ -1046,6 +1051,12 @@ public final class SoftRenderer extends Renderer {
         if (bucket < 0) bucket = 0;
         if (bucket >= BUCKETS) bucket = BUCKETS - 1;
         int hb = layer * BUCKETS + bucket;
+        int os = -1;
+        if (outlineLen + n * 2 <= outline.length) {
+            os = outlineLen;
+            for (int k = 0; k < n; k++) { outline[os + k * 2] = scr[k * VA]; outline[os + k * 2 + 1] = scr[k * VA + 1]; }
+            outlineLen += n * 2;
+        }
         for (int k = 1; k < n - 1; k++) {
             if (primCount >= MAX_PRIMS) return;
             int p = primCount++;
@@ -1056,6 +1067,8 @@ public final class SoftRenderer extends Renderer {
             pdepth[p] = orderDepth;
             ptex[p] = texId;
             pmode[p] = mode;
+            pOut[p] = os;
+            pOutN[p] = n;
             next[p] = head[hb];
             head[hb] = p;
         }
@@ -1094,6 +1107,10 @@ public final class SoftRenderer extends Renderer {
         float dzdx = ((z1i - z0i) * dy2 - (z2i - z0i) * dy1) * id, dzdy = ((z2i - z0i) * dx1 - (z1i - z0i) * dx2) * id;
         float dqdx = ((q1 - q0) * dy2 - (q2 - q0) * dy1) * id, dqdy = ((q2 - q0) * dx1 - (q1 - q0) * dx2) * id;
         float drdx = ((r1 - r0) * dy2 - (r2 - r0) * dy1) * id, drdy = ((r2 - r0) * dx1 - (r1 - r0) * dx2) * id;
+        // PS1: u and v straight across the triangle on screen
+        int tm = texMap;
+        float dudx = ((u1 - u0) * dy2 - (u2 - u0) * dy1) * id, dudy = ((u2 - u0) * dx1 - (u1 - u0) * dx2) * id;
+        float dvdx = ((v1 - v0) * dy2 - (v2 - v0) * dy1) * id, dvdy = ((v2 - v0) * dx1 - (v1 - v0) * dx2) * id;
         float l0 = A[i0 + 4], l1 = A[i1 + 4], l2 = A[i2 + 4];
         float f0 = A[i0 + 5], f1 = A[i1 + 5], f2 = A[i2 + 5];
         float a0 = A[i0 + 6], a1 = A[i1 + 6], a2 = A[i2 + 6];
@@ -1136,14 +1153,63 @@ public final class SoftRenderer extends Renderer {
             int db = (y & 3) << 2;
             float iz = IZ > 1e-6f ? IZ : 1e-6f;
             float uA = Q / iz, vA = R / iz;
-            // exact texture coordinates every 16 pixels, linear in between
+            // GBA: the whole polygon's span on this row (clipped to the screen), exact at both ends
+            boolean gspan = false;
+            float gU = 0f, gV = 0f, gdU = 0f, gdV = 0f;
+            if (tm == TEX_GBA && pOut[p] >= 0) {
+                int os = pOut[p], on = pOutN[p];
+                float pl = Float.MAX_VALUE, pr = -Float.MAX_VALUE;
+                for (int e = 0; e < on; e++) {
+                    float ax = outline[os + e * 2], ay = outline[os + e * 2 + 1];
+                    int e2 = e + 1 == on ? 0 : e + 1;
+                    float bx = outline[os + e2 * 2], by = outline[os + e2 * 2 + 1];
+                    if ((ay <= yc && by > yc) || (by <= yc && ay > yc)) {
+                        float cxr = ax + (yc - ay) * (bx - ax) / (by - ay);
+                        if (cxr < pl) pl = cxr;
+                        if (cxr > pr) pr = cxr;
+                    }
+                }
+                if (pl < 0f) pl = 0f;
+                if (pr > width) pr = width;
+                if (pr - pl > 0.01f) {
+                    float zl = z0i + dzdx * (pl - x0) + dzdy * oy, zr = z0i + dzdx * (pr - x0) + dzdy * oy;
+                    if (zl > 1e-6f && zr > 1e-6f) {
+                        float ul = (q0 + dqdx * (pl - x0) + dqdy * oy) / zl, vl = (r0 + drdx * (pl - x0) + drdy * oy) / zl;
+                        float ur = (q0 + dqdx * (pr - x0) + dqdy * oy) / zr, vr = (r0 + drdx * (pr - x0) + drdy * oy) / zr;
+                        gdU = (ur - ul) / (pr - pl);
+                        gdV = (vr - vl) / (pr - pl);
+                        gU = ul + gdU * (xs + 0.5f - pl);
+                        gV = vl + gdV * (xs + 0.5f - pl);
+                        gspan = true;
+                    }
+                }
+            }
+            // perspective: exact every 16 pixels, linear in between. GBA: exact at the span's two ends
+            // only, linear across the whole row. PS1: linear across the triangle.
             for (int x = xs; x < xe; ) {
-                int n = xe - x < 16 ? xe - x : 16;
+                int n = tm == TEX_PERSPECTIVE ? (xe - x < 16 ? xe - x : 16) : xe - x;
                 float IZn = IZ + dzdx * n, Qn = Q + dqdx * n, Rn = R + drdx * n;
-                float izn = IZn > 1e-6f ? IZn : 1e-6f;
-                float uB = Qn / izn, vB = Rn / izn;
-                int U = (int) (uA * 65536f), V = (int) (vA * 65536f);
-                int dU = (int) ((uB - uA) / n * 65536f), dV = (int) ((vB - vA) / n * 65536f);
+                int U, V, dU, dV;
+                if (tm == TEX_PS1) {
+                    float uL = u0 + dudx * ox + dudy * oy, vL = v0 + dvdx * ox + dvdy * oy;
+                    U = (int) (uL * 65536f); V = (int) (vL * 65536f);
+                    dU = (int) (dudx * 65536f); dV = (int) (dvdx * 65536f);
+                } else if (gspan) {
+                    U = (int) (gU * 65536f); V = (int) (gV * 65536f);
+                    dU = (int) (gdU * 65536f); dV = (int) (gdV * 65536f);
+                } else if (tm == TEX_GBA) {
+                    int m = n > 1 ? n - 1 : 1;
+                    float IZl = IZ + dzdx * m;
+                    float izl = IZl > 1e-6f ? IZl : 1e-6f;
+                    float uB = (Q + dqdx * m) / izl, vB = (R + drdx * m) / izl;
+                    U = (int) (uA * 65536f); V = (int) (vA * 65536f);
+                    dU = (int) ((uB - uA) / m * 65536f); dV = (int) ((vB - vA) / m * 65536f);
+                } else {
+                    float izn = IZn > 1e-6f ? IZn : 1e-6f;
+                    float uB = Qn / izn, vB = Rn / izn;
+                    U = (int) (uA * 65536f); V = (int) (vA * 65536f);
+                    dU = (int) ((uB - uA) / n * 65536f); dV = (int) ((vB - vA) / n * 65536f);
+                }
                 for (int e = x + n; x < e; x++, U += dU, V += dV, L += dL, F += dF, AL += dA, IZ += dzdx) {
                     int k = row + x;
                     if (IZ * GROUND_SLACK < zb[k]) continue;          // behind the ground (a hill)
@@ -1176,8 +1242,9 @@ public final class SoftRenderer extends Renderer {
                 }
                 Q = Qn;
                 R = Rn;
-                uA = uB;
-                vA = vB;
+                float izn = IZ > 1e-6f ? IZ : 1e-6f;
+                uA = Q / izn;
+                vA = R / izn;
             }
         }
     }

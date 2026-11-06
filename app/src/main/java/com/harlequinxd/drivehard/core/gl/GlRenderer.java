@@ -45,7 +45,7 @@ public final class GlRenderer extends Renderer {
     private static final int STRIDE = 36;                     // static / dynamic vertex
     /** Video memory kept for chunk batches before the least recently drawn go. */
     private static final long BATCH_BUDGET = 96L << 20;
-    private static final int RGBA16UI = 0x8D76, RGBA_INTEGER = 0x8D99;
+    private static final int RGBA16UI = 0x8D76, RGBA_INTEGER = 0x8D99, RGBA32F = 0x8814;
 
     private final Gl gl;
     private boolean ready;
@@ -90,7 +90,7 @@ public final class GlRenderer extends Renderer {
         atlasTex = 0;
         atlasPages = 0;
         gpuBytes = 0;
-        otVao = otVbo = 0;
+        otVao = otVbo = cornerTex = 0;
     }
 
     @Override public void dispose() {
@@ -105,6 +105,7 @@ public final class GlRenderer extends Renderer {
         for (Single s : singles.values()) gl.deleteTexture(s.tex);
         singles.clear();
         if (otVao != 0) { gl.deleteVertexArray(otVao); gl.deleteBuffer(otVbo); otVao = otVbo = 0; }
+        if (cornerTex != 0) { gl.deleteTexture(cornerTex); cornerTex = 0; }
     }
 
     // ------------------------------------------------------------------ set up
@@ -954,6 +955,10 @@ public final class GlRenderer extends Renderer {
     private int runCount;
     private int otVbo, otVao;
     private ByteBuffer otBuf = direct(16384 * 4 * STRIDE);
+    /** Each ordered polygon's four corners (world), 3 RGBA32F texels each, 256 polygons a row. */
+    private float[] otCorners = new float[16384 * 12];
+    private ByteBuffer cornerBuf = direct(16384 * 12 * 4);
+    private int cornerTex;
 
     private static int two(int lo, int hi) {
         return LE ? (lo & 0xFFFF) | (hi << 16) : (hi & 0xFFFF) | (lo << 16);
@@ -1055,6 +1060,13 @@ public final class GlRenderer extends Renderer {
                 int nv = g.vertexCount(i);
                 int nrm = four(Math.round(g.nrm[i * 3] * 127f), Math.round(g.nrm[i * 3 + 1] * 127f), Math.round(g.nrm[i * 3 + 2] * 127f), 0);
                 int texFlags = two(id, flags);
+                if (otCorners.length < (w + 1) * 12) otCorners = java.util.Arrays.copyOf(otCorners, otCorners.length * 2);
+                for (int c = 0; c < 4; c++) {
+                    int cc = Math.min(c, nv - 1);
+                    otCorners[w * 12 + c * 3] = g.pos[i * 12 + cc * 3] + d.ox;
+                    otCorners[w * 12 + c * 3 + 1] = g.pos[i * 12 + cc * 3 + 1] + d.oy;
+                    otCorners[w * 12 + c * 3 + 2] = g.pos[i * 12 + cc * 3 + 2] + d.oz;
+                }
                 for (int c = 0; c < 4; c++) {
                     int cc = Math.min(c, nv - 1), o = base + c * VI;
                     s[o] = Float.floatToRawIntBits(g.pos[i * 12 + cc * 3] + d.ox);
@@ -1074,6 +1086,8 @@ public final class GlRenderer extends Renderer {
                 int flags = dynFlags[q];
                 shadow = (flags & 32) != 0;
                 int texFlags = two(id, flags);
+                if (otCorners.length < (w + 1) * 12) otCorners = java.util.Arrays.copyOf(otCorners, otCorners.length * 2);
+                System.arraycopy(dynPos, q * 12, otCorners, w * 12, 12);
                 for (int c = 0; c < 4; c++) {
                     int o = base + c * VI;
                     s[o] = Float.floatToRawIntBits(dynPos[q * 12 + c * 3]);
@@ -1113,6 +1127,18 @@ public final class GlRenderer extends Renderer {
             otVao = gl.genVertexArray();
             otVbo = gl.genBuffer();
         }
+        // the corners, for whole-polygon scanline spans (GBA texture mapping)
+        int rows = Math.max(1, (w + 255) >> 8);
+        int floats = rows * 256 * 12;
+        if (cornerBuf.capacity() < floats * 4) cornerBuf = direct(floats * 4 + (floats << 1));
+        cornerBuf.clear();
+        cornerBuf.asFloatBuffer().put(otCorners, 0, w * 12);
+        cornerBuf.limit(floats * 4);
+        gl.activeTexture(Gl.TEXTURE0 + 3);
+        if (cornerTex == 0) cornerTex = newTexture(Gl.NEAREST, Gl.CLAMP_TO_EDGE);
+        gl.bindTexture(Gl.TEXTURE_2D, cornerTex);
+        gl.texImage2D(Gl.TEXTURE_2D, 0, RGBA32F, 768, rows, Gl.RGBA, Gl.FLOAT, cornerBuf);
+        gl.activeTexture(Gl.TEXTURE0);
         quadIndices(w);
         gl.bindVertexArray(otVao);
         gl.bindBuffer(Gl.ARRAY_BUFFER, otVbo);
@@ -1126,6 +1152,9 @@ public final class GlRenderer extends Renderer {
     private void drawOrderingTable(Program p) {
         gl.depthMask(false);
         gl.uniform3f(p.loc("uOffset"), 0f, 0f, 0f);
+        gl.uniform1i(p.loc("uCorners"), 1);
+        gl.activeTexture(Gl.TEXTURE0 + 3);
+        gl.bindTexture(Gl.TEXTURE_2D, cornerTex);
         gl.bindVertexArray(otVao);
         for (int r = 0; r < runCount; r++) {
             int from = runStart[r], to = r + 1 < runCount ? runStart[r + 1] : otQuads;
@@ -1146,6 +1175,7 @@ public final class GlRenderer extends Renderer {
             if (runShadow[r]) gl.disable(Gl.BLEND);
         }
         gl.uniform1i(p.loc("uSingle"), 0);
+        gl.uniform1i(p.loc("uCorners"), 0);
     }
 
     // ------------------------------------------------------------------ flush
@@ -1171,6 +1201,10 @@ public final class GlRenderer extends Renderer {
         gl.uniform3f(p.loc("uFog"), fogR, fogG, fogB);
         gl.uniform2f(p.loc("uFogRange"), fogStart, 1f / (fogEnd - fogStart));
         gl.uniform1f(p.loc("uDetail"), detailDist);
+        gl.uniform1i(p.loc("uTexMap"), texMap);
+        gl.uniform1i(p.loc("uCorners"), 0);
+        gl.uniform1i(p.loc("uCornerTex"), 3);
+        gl.uniform1f(p.loc("uNear"), near);
         gl.uniform1f(p.loc("uScroll"), scrollRate * time);
         gl.uniform1i(p.loc("uAtlas"), 0);
         gl.uniform1i(p.loc("uInfo"), 1);

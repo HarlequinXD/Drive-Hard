@@ -15,6 +15,21 @@ public abstract class Renderer {
     public static final int L_WATER = 0, L_GROUND = 1, L_DECAL = 2, L_RAISED = 3, L_SHADOW = 4, L_OBJECT = 5, LAYERS = 6;
     public static final int MODE_OPAQUE = 0, MODE_ALPHA = 1, MODE_SHADOW = 2, MODE_BLEND = 3, MODE_SPRITE = 4;
 
+    /** Texture mapping: exact perspective (texels correct everywhere). */
+    public static final int TEX_PERSPECTIVE = 0;
+    /**
+     * Texture mapping the way the GBA's software 3D engines did it (V-Rally 3, Stuntman, Asterix &amp;
+     * Obelix XXL, Driv3r): each scanline of a polygon is exact at its two ends, where the rasteriser
+     * already divides once per edge, and stepped linearly across. Floors and roads under the level
+     * camera come out true, since each row is one depth, while walls and slopes bow and swim
+     * sideways, more the closer they are.
+     */
+    public static final int TEX_GBA = 1;
+    /** Texture mapping like the PS1: linear across the whole triangle on screen (warps on diagonals). */
+    public static final int TEX_PS1 = 2;
+    /** How textures sit on polygons: {@link #TEX_GBA}, {@link #TEX_PS1} or {@link #TEX_PERSPECTIVE}. */
+    public int texMap = TEX_GBA;
+
     public final int W, H;
     /** The finished frame (CPU renderer); null when the frame lives on the GPU. */
     public final int[] fb;
