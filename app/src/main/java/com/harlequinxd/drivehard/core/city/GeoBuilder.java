@@ -38,8 +38,8 @@ public final class GeoBuilder {
         maxEdge = object ? BUILDING_TILE : 0f;
     }
 
-    /** Buildings are tiled in pieces of at most this many metres (affine GBA texturing warps less on small polygons). */
-    public static final float BUILDING_TILE = 4f;
+    /** Buildings are tiled in pieces of at most this many metres, like the terrain's 8 m tiles (affine GBA texturing warps less on small polygons). */
+    public static final float BUILDING_TILE = 8f;
     /** While > 0, object-layer polygons longer than this are split into a grid of pieces this size or smaller. */
     public float maxEdge;
 

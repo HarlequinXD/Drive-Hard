@@ -396,7 +396,7 @@ public final class City extends World implements java.io.Serializable {
         countryside.fences(ch, gb, x0, z0, x1, z1);
         gb.end();
         gb.begin(false);
-        gb.maxEdge = GeoBuilder.BUILDING_TILE;                  // city blocks: tiled at 4 m like every building
+        gb.maxEdge = GeoBuilder.BUILDING_TILE;                  // city blocks: tiled at 8 m like every building
         SectorBuilder.toMeshes(ch.sectors, gb);
         gb.end();
         gb.maxEdge = 0f;
