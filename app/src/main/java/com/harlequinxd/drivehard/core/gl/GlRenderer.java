@@ -9,6 +9,7 @@ import com.harlequinxd.drivehard.core.render.Texture;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
 import java.nio.ShortBuffer;
 import java.util.ArrayList;
@@ -639,6 +640,8 @@ public final class GlRenderer extends Renderer {
 
     private static final class Batch {
         int vao, vbo, ibo, lastUse;
+        /** Each polygon's four corners (3 RGBA32F texels, 256 a row), for whole-polygon GBA spans. */
+        int corners;
         final int[] first = new int[LAYERS], count = new int[LAYERS];
         long bytes;
         int polys;
@@ -658,6 +661,7 @@ public final class GlRenderer extends Renderer {
     }
 
     private ByteBuffer uploadBuf = direct(1 << 16);
+    private float[] upCorners = new float[4096 * 12];
     private IntBuffer indexBuf = direct(1 << 16).asIntBuffer();
 
     private Batch upload(Geo g) {
@@ -696,6 +700,13 @@ public final class GlRenderer extends Renderer {
             if ((fl & Geo.FLAG_DETAIL) != 0) flags |= 4;
             if (t.scrollU != 0f) { flags |= 8; scrollRate = t.scrollU; }
             int nv = g.vertexCount(i);
+            if (upCorners.length < (b.polys + 1) * 12) upCorners = java.util.Arrays.copyOf(upCorners, Math.max(upCorners.length * 2, (b.polys + 1) * 12));
+            for (int c = 0; c < 4; c++) {
+                int cc = Math.min(c, nv - 1);
+                upCorners[b.polys * 12 + c * 3] = g.pos[i * 12 + cc * 3];
+                upCorners[b.polys * 12 + c * 3 + 1] = g.pos[i * 12 + cc * 3 + 1];
+                upCorners[b.polys * 12 + c * 3 + 2] = g.pos[i * 12 + cc * 3 + 2];
+            }
             byte nx = (byte) Math.round(g.nrm[i * 3] * 127f), ny = (byte) Math.round(g.nrm[i * 3 + 1] * 127f), nz = (byte) Math.round(g.nrm[i * 3 + 2] * 127f);
             for (int c = 0; c < 4; c++) {
                 vb.putFloat(g.pos[i * 12 + c * 3]).putFloat(g.pos[i * 12 + c * 3 + 1]).putFloat(g.pos[i * 12 + c * 3 + 2]);
@@ -726,6 +737,16 @@ public final class GlRenderer extends Renderer {
         attributes();
         gl.bindVertexArray(0);
         b.bytes = vb.limit() + indices * 4L;
+        // the corners, for GBA scanline spans across whole polygons (clipped to the near plane)
+        int rows = Math.max(1, (b.polys + 255) >> 8);
+        FloatBuffer cb = direct(rows * 256 * 12 * 4).asFloatBuffer();
+        cb.put(upCorners, 0, b.polys * 12);
+        cb.position(0);
+        gl.activeTexture(Gl.TEXTURE0 + 3);
+        b.corners = newTexture(Gl.NEAREST, Gl.CLAMP_TO_EDGE);
+        gl.texImage2D(Gl.TEXTURE_2D, 0, RGBA32F, 768, rows, Gl.RGBA, Gl.FLOAT, cb);
+        gl.activeTexture(Gl.TEXTURE0);
+        b.bytes += rows * 256L * 48;
         gpuBytes += b.bytes;
         statUploads += b.polys;
         return b;
@@ -749,6 +770,7 @@ public final class GlRenderer extends Renderer {
     }
 
     private void freeBatch(Batch b) {
+        if (b.corners != 0) gl.deleteTexture(b.corners);
         gl.deleteVertexArray(b.vao);
         gl.deleteBuffer(b.vbo);
         gl.deleteBuffer(b.ibo);
@@ -1224,8 +1246,6 @@ public final class GlRenderer extends Renderer {
         int dyn = 0;
         for (int layer = 0; layer < LAYERS; layer++) {
             // flat layers lie on the ground in layer order; objects and sprites use the depth buffer
-            // GBA scanline mapping is exact on the ground layers under the level camera: draw them exact
-            gl.uniform1i(p.loc("uTexMap"), layer != L_OBJECT && texMap == TEX_GBA ? TEX_PERSPECTIVE : texMap);
             if (psxSort && layer == L_OBJECT) {
                 drawOrderingTable(p);
                 continue;
@@ -1233,15 +1253,20 @@ public final class GlRenderer extends Renderer {
             // the terrain tiles are the ground: a depth buffer among themselves, and what everything above tests
             gl.depthMask(layer == L_OBJECT || layer == L_GROUND);
             gl.uniform1i(p.loc("uSingle"), 0);
+            gl.uniform1i(p.loc("uCorners"), 1);
+            gl.activeTexture(Gl.TEXTURE0 + 3);
             for (Draw d : draws) {
                 Batch b = batches.get(d.g);
                 if (b == null || b.count[layer] == 0) continue;
                 gl.uniform3f(p.loc("uOffset"), d.ox, d.oy, d.oz);
+                gl.bindTexture(Gl.TEXTURE_2D, b.corners);
                 gl.bindVertexArray(b.vao);
                 gl.drawElements(Gl.TRIANGLES, b.count[layer], Gl.UNSIGNED_INT, b.first[layer] * 4);
                 statPrims += b.count[layer] / 3;
                 if (layer == L_OBJECT) statBatches++;
             }
+            gl.activeTexture(Gl.TEXTURE0);
+            gl.uniform1i(p.loc("uCorners"), 0);
             if (nDyn > 0) {
                 gl.uniform3f(p.loc("uOffset"), 0f, 0f, 0f);
                 dyn = drawDynamic(dyn, layer);

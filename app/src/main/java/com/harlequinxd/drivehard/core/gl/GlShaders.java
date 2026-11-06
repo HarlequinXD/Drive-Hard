@@ -98,7 +98,7 @@ final class GlShaders {
             + "    int pi = gl_VertexID >> 2;\n"
             + "    ivec2 t = ivec2((pi & 255) * 3, pi >> 8);\n"
             + "    vec4 a = texelFetch(uCornerTex, t, 0), b = texelFetch(uCornerTex, t + ivec2(1, 0), 0), c = texelFetch(uCornerTex, t + ivec2(2, 0), 0);\n"
-            + "    vec3 P[4] = vec3[4](a.xyz, vec3(a.w, b.xy), vec3(b.zw, c.x), c.yzw);\n"
+            + "    vec3 P[4] = vec3[4](a.xyz + uOffset, vec3(a.w, b.xy) + uOffset, vec3(b.zw, c.x) + uOffset, c.yzw + uOffset);\n"
             + "    vec2 S[5]; int n = 0;\n"
             + "    for (int i = 0; i < 4; i++) {\n"
             + "      vec3 A = P[i], B = P[(i + 1) & 3];\n"

@@ -41,8 +41,6 @@ public final class SoftRenderer extends Renderer {
     private final int[] pOut = new int[MAX_PRIMS], pOutN = new int[MAX_PRIMS];
     /** Primitives of the ground layer (terrain tiles): they write the occlusion depth. */
     private final boolean[] pGround = new boolean[MAX_PRIMS];
-    /** Primitives of the flat ground layers (terrain, decals, roads): GBA mapping is exact there, so they draw exact. */
-    private final boolean[] pFlat = new boolean[MAX_PRIMS];
     private int outlineLen;
 
     private static final int[] BAYER = {0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5};
@@ -1106,7 +1104,6 @@ public final class SoftRenderer extends Renderer {
             pOut[p] = os;
             pOutN[p] = n;
             pGround[p] = layer == L_GROUND;
-            pFlat[p] = layer != L_OBJECT;
             next[p] = head[hb];
             head[hb] = p;
         }
@@ -1146,7 +1143,7 @@ public final class SoftRenderer extends Renderer {
         float dqdx = ((q1 - q0) * dy2 - (q2 - q0) * dy1) * id, dqdy = ((q2 - q0) * dx1 - (q1 - q0) * dx2) * id;
         float drdx = ((r1 - r0) * dy2 - (r2 - r0) * dy1) * id, drdy = ((r2 - r0) * dx1 - (r1 - r0) * dx2) * id;
         // PS1: u and v straight across the triangle on screen
-        int tm = texMap == TEX_GBA && pFlat[p] ? TEX_PERSPECTIVE : texMap;
+        int tm = texMap;
         float dudx = ((u1 - u0) * dy2 - (u2 - u0) * dy1) * id, dudy = ((u2 - u0) * dx1 - (u1 - u0) * dx2) * id;
         float dvdx = ((v1 - v0) * dy2 - (v2 - v0) * dy1) * id, dvdy = ((v2 - v0) * dx1 - (v1 - v0) * dx2) * id;
         float l0 = A[i0 + 4], l1 = A[i1 + 4], l2 = A[i2 + 4];
