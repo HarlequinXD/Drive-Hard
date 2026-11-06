@@ -52,6 +52,14 @@ public final class GlRenderer extends Renderer {
     private int frame;
     /** PS1 vertex snapping (whole-pixel vertices, the slight wobble of the original hardware). */
     public boolean snap = true;
+    /**
+     * PlayStation ordering table instead of a depth buffer between objects: every object polygon and
+     * sprite is sorted far-to-near by its average depth (its farthest for {@link Geo#FLAG_SORT_FAR}) and
+     * painted in that order, so nearer polygons simply cover farther ones, with the PS1's sorting
+     * quirks. The ground alone still writes depth, so hills hide what is behind them. This is the
+     * same order {@link com.harlequinxd.drivehard.core.render.SoftRenderer} draws in.
+     */
+    public boolean psxSort = true;
     /** Polygons uploaded per frame at most (keeps streaming smooth). */
     public int uploadBudget = 60000;
     public int tileBudget = 8;
@@ -82,6 +90,7 @@ public final class GlRenderer extends Renderer {
         atlasTex = 0;
         atlasPages = 0;
         gpuBytes = 0;
+        otVao = otVbo = 0;
     }
 
     @Override public void dispose() {
@@ -95,6 +104,7 @@ public final class GlRenderer extends Renderer {
         flats.clear();
         for (Single s : singles.values()) gl.deleteTexture(s.tex);
         singles.clear();
+        if (otVao != 0) { gl.deleteVertexArray(otVao); gl.deleteBuffer(otVbo); otVao = otVbo = 0; }
     }
 
     // ------------------------------------------------------------------ set up
@@ -875,22 +885,28 @@ public final class GlRenderer extends Renderer {
         gl.bindVertexArray(dynVao);
         gl.bindBuffer(Gl.ARRAY_BUFFER, dynVbo);
         gl.bufferData(Gl.ARRAY_BUFFER, Math.max(4, vb.limit()), vb, Gl.STREAM_DRAW);
-        if (dynIboQuads < n) {
-            int quads = Math.max(1024, Integer.highestOneBit(Math.max(1, n)) << 1);
-            IntBuffer ib = direct(quads * 6 * 4).asIntBuffer();
-            for (int q = 0; q < quads; q++) {
-                int v = q * 4;
-                ib.put(v).put(v + 1).put(v + 2).put(v).put(v + 2).put(v + 3);
-            }
-            ib.flip();
-            gl.bindBuffer(Gl.ELEMENT_ARRAY_BUFFER, dynIbo);
-            gl.bufferData(Gl.ELEMENT_ARRAY_BUFFER, quads * 6 * 4, ib, Gl.STATIC_DRAW);
-            dynIboQuads = quads;
-        }
+        quadIndices(n);
+        gl.bindVertexArray(dynVao);
         gl.bindBuffer(Gl.ELEMENT_ARRAY_BUFFER, dynIbo);
         attributes();
         gl.bindVertexArray(0);
         return n;
+    }
+
+    /** Grows the shared quad index buffer (0 1 2, 0 2 3 per quad) to at least n quads. */
+    private void quadIndices(int n) {
+        if (dynIboQuads >= n) return;
+        int quads = Math.max(1024, Integer.highestOneBit(Math.max(1, n)) << 1);
+        IntBuffer ib = direct(quads * 6 * 4).asIntBuffer();
+        for (int q = 0; q < quads; q++) {
+            int v = q * 4;
+            ib.put(v).put(v + 1).put(v + 2).put(v).put(v + 2).put(v + 3);
+        }
+        ib.flip();
+        gl.bindVertexArray(0);
+        gl.bindBuffer(Gl.ELEMENT_ARRAY_BUFFER, dynIbo);
+        gl.bufferData(Gl.ELEMENT_ARRAY_BUFFER, quads * 6 * 4, ib, Gl.STATIC_DRAW);
+        dynIboQuads = quads;
     }
 
     /** Draws this frame's quads of one layer (they are sorted by layer, then texture). */
@@ -925,6 +941,213 @@ public final class GlRenderer extends Renderer {
         return k;
     }
 
+    // ------------------------------------------------------------------ ordering table
+
+    private static final boolean LE = ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN;
+    private static final int VI = STRIDE / 4;                 // ints per vertex
+    private long[] otKeys = new long[16384];
+    private int[] otDraw = new int[16384], otPoly = new int[16384];
+    private int otCount, otQuads;
+    private int[] otStage = new int[16384 * 4 * VI];
+    private int[] runStart = new int[256], runTex = new int[256];
+    private boolean[] runShadow = new boolean[256];
+    private int runCount;
+    private int otVbo, otVao;
+    private ByteBuffer otBuf = direct(16384 * 4 * STRIDE);
+
+    private static int two(int lo, int hi) {
+        return LE ? (lo & 0xFFFF) | (hi << 16) : (hi & 0xFFFF) | (lo << 16);
+    }
+
+    private static int four(int a, int b, int c, int d) {
+        return LE ? (a & 255) | (b & 255) << 8 | (c & 255) << 16 | d << 24
+                  : (d & 255) | (c & 255) << 8 | (b & 255) << 16 | a << 24;
+    }
+
+    private void otAdd(float depth, int draw, int poly) {
+        if (otCount == otKeys.length) {
+            int n = otCount * 2;
+            otKeys = java.util.Arrays.copyOf(otKeys, n);
+            otDraw = java.util.Arrays.copyOf(otDraw, n);
+            otPoly = java.util.Arrays.copyOf(otPoly, n);
+        }
+        int k = otCount++;
+        otKeys[k] = ((long) ~Float.floatToIntBits(Math.max(0f, depth)) << 32) | (k & 0xffffffffL);
+        otDraw[k] = draw;
+        otPoly[k] = poly;
+    }
+
+    /**
+     * Fills the ordering table with this frame's object polygons (from the batches' own polygon
+     * lists, so nothing waits for an upload) and object-layer sprites, sorts it far to near, and
+     * streams the vertices in that order. Runs split only where the texture page or blend changes.
+     */
+    private void buildOrderingTable() {
+        otCount = 0;
+        float far2 = far * far, detail2 = detailDist * detailDist;
+        for (int di = 0; di < draws.size(); di++) {
+            Draw d = draws.get(di);
+            Geo g = d.g;
+            float ox = d.ox, oy = d.oy, oz = d.oz;
+            for (int i = 0; i < g.count; i++) {
+                if (g.layer(i) != L_OBJECT) continue;
+                int o = i * 12;
+                float p0x = g.pos[o] + ox, p0y = g.pos[o + 1] + oy, p0z = g.pos[o + 2] + oz;
+                float nx = g.nrm[i * 3], ny = g.nrm[i * 3 + 1], nz = g.nrm[i * 3 + 2];
+                // no depth buffer between polygons, so back faces must go before they are painted
+                if ((nx != 0f || ny != 0f || nz != 0f) && nx * (ex - p0x) + ny * (ey - p0y) + nz * (ez - p0z) <= 0f) continue;
+                float dx = p0x - ex, dz = p0z - ez, d2 = dx * dx + dz * dz;
+                if (d2 > far2 * 1.6f) continue;
+                int fl = g.flags(i);
+                if ((fl & Geo.FLAG_DETAIL) != 0 && d2 > detail2) continue;
+                int nv = g.vertexCount(i);
+                float zsum = 0f, zmax = -Float.MAX_VALUE;
+                boolean allNear = true, allFar = true;
+                for (int c = 0; c < nv; c++) {
+                    float vz = (g.pos[o + c * 3] + ox - ex) * fx + (g.pos[o + c * 3 + 1] + oy - ey) * fy + (g.pos[o + c * 3 + 2] + oz - ez) * fz;
+                    zsum += vz;
+                    if (vz > zmax) zmax = vz;
+                    if (vz >= near) allNear = false;
+                    if (vz <= far) allFar = false;
+                }
+                if (allNear || allFar) continue;
+                otAdd(((fl & Geo.FLAG_SORT_FAR) != 0 ? zmax : zsum / nv) + g.bias[i], di, i);
+            }
+        }
+        for (int q = 0; q < dynCount; q++) {
+            if (dynLayer[q] != L_OBJECT) continue;
+            int o = q * 12;
+            float vz = 0f;
+            for (int c = 0; c < 4; c++) vz += (dynPos[o + c * 3] - ex) * fx + (dynPos[o + c * 3 + 1] - ey) * fy + (dynPos[o + c * 3 + 2] - ez) * fz;
+            vz *= 0.25f;
+            // a sprite's depth bias rides in its light's third channel as vz / (vz + bias)
+            float k = dynLit[q * 3 + 2];
+            otAdd(k > 0f && k != 1f ? vz / k : vz, -1, q);
+        }
+        java.util.Arrays.sort(otKeys, 0, otCount);
+        statPrims += otCount;
+
+        // vertices in painting order
+        if (otStage.length < otCount * 4 * VI) otStage = new int[otCount * 4 * VI + 4096 * VI];
+        int[] s = otStage;
+        int w = 0;
+        runCount = 0;
+        int curTex = Integer.MIN_VALUE;
+        boolean curShadow = false;
+        int lo16 = unorm16(0.25f);
+        for (int n = 0; n < otCount; n++) {
+            int k = (int) otKeys[n];
+            int di = otDraw[k], i = otPoly[k];
+            int run;
+            boolean shadow = false;
+            int base = w * 4 * VI;
+            if (di >= 0) {
+                Draw d = draws.get(di);
+                Geo g = d.g;
+                int id = g.tex[i];
+                if (!atlas(id)) continue;
+                Texture t = textures[id];
+                int fl = g.flags(i);
+                boolean alpha = (fl & Geo.FLAG_ALPHA) != 0, blend = (fl & Geo.FLAG_BLEND) != 0 && g.alpha != null;
+                int flags = blend ? 2 | 16 : (alpha ? 1 : 16);
+                if ((fl & Geo.FLAG_DETAIL) != 0) flags |= 4;
+                if (t.scrollU != 0f) { flags |= 8; scrollRate = t.scrollU; }
+                int nv = g.vertexCount(i);
+                int nrm = four(Math.round(g.nrm[i * 3] * 127f), Math.round(g.nrm[i * 3 + 1] * 127f), Math.round(g.nrm[i * 3 + 2] * 127f), 0);
+                int texFlags = two(id, flags);
+                for (int c = 0; c < 4; c++) {
+                    int cc = Math.min(c, nv - 1), o = base + c * VI;
+                    s[o] = Float.floatToRawIntBits(g.pos[i * 12 + cc * 3] + d.ox);
+                    s[o + 1] = Float.floatToRawIntBits(g.pos[i * 12 + cc * 3 + 1] + d.oy);
+                    s[o + 2] = Float.floatToRawIntBits(g.pos[i * 12 + cc * 3 + 2] + d.oz);
+                    s[o + 3] = Float.floatToRawIntBits(g.uv[i * 8 + cc * 2]);
+                    s[o + 4] = Float.floatToRawIntBits(g.uv[i * 8 + cc * 2 + 1]);
+                    s[o + 5] = two(unorm16(g.light[i * 4 + cc] * 0.25f), unorm16(blend ? g.alpha[i * 4 + cc] : 1f));
+                    s[o + 6] = two(lo16, 0);
+                    s[o + 7] = nrm;
+                    s[o + 8] = texFlags;
+                }
+                run = -1;
+            } else {
+                int q = i, id = dynTex[q];
+                boolean inAtlas = atlas(id);
+                int flags = dynFlags[q];
+                shadow = (flags & 32) != 0;
+                int texFlags = two(id, flags);
+                for (int c = 0; c < 4; c++) {
+                    int o = base + c * VI;
+                    s[o] = Float.floatToRawIntBits(dynPos[q * 12 + c * 3]);
+                    s[o + 1] = Float.floatToRawIntBits(dynPos[q * 12 + c * 3 + 1]);
+                    s[o + 2] = Float.floatToRawIntBits(dynPos[q * 12 + c * 3 + 2]);
+                    s[o + 3] = Float.floatToRawIntBits(dynUv[q * 8 + c * 2]);
+                    s[o + 4] = Float.floatToRawIntBits(dynUv[q * 8 + c * 2 + 1]);
+                    s[o + 5] = two(unorm16(dynLit[q * 3] * 0.25f), unorm16(dynLit[q * 3 + 1]));
+                    s[o + 6] = two(unorm16(dynLit[q * 3 + 2] * 0.25f), 0);
+                    s[o + 7] = 0;
+                    s[o + 8] = texFlags;
+                }
+                run = inAtlas ? -1 : id;
+            }
+            if (run != curTex || shadow != curShadow || runCount == 0) {
+                if (runCount == runStart.length) {
+                    runStart = java.util.Arrays.copyOf(runStart, runCount * 2);
+                    runTex = java.util.Arrays.copyOf(runTex, runCount * 2);
+                    runShadow = java.util.Arrays.copyOf(runShadow, runCount * 2);
+                }
+                runStart[runCount] = w;
+                runTex[runCount] = run;
+                runShadow[runCount] = shadow;
+                runCount++;
+                curTex = run;
+                curShadow = shadow;
+            }
+            w++;
+        }
+        otQuads = w;
+        int bytes = w * 4 * STRIDE;
+        if (otBuf.capacity() < bytes) otBuf = direct(bytes + (bytes >> 1));
+        otBuf.clear();
+        otBuf.asIntBuffer().put(s, 0, w * 4 * VI);
+        otBuf.limit(bytes);
+        if (otVao == 0) {
+            otVao = gl.genVertexArray();
+            otVbo = gl.genBuffer();
+        }
+        quadIndices(w);
+        gl.bindVertexArray(otVao);
+        gl.bindBuffer(Gl.ARRAY_BUFFER, otVbo);
+        gl.bufferData(Gl.ARRAY_BUFFER, Math.max(4, bytes), otBuf, Gl.STREAM_DRAW);
+        gl.bindBuffer(Gl.ELEMENT_ARRAY_BUFFER, dynIbo);
+        attributes();
+        gl.bindVertexArray(0);
+    }
+
+    /** Paints the ordering table: far to near, tested against the ground's depth only. */
+    private void drawOrderingTable(Program p) {
+        gl.depthMask(false);
+        gl.uniform3f(p.loc("uOffset"), 0f, 0f, 0f);
+        gl.bindVertexArray(otVao);
+        for (int r = 0; r < runCount; r++) {
+            int from = runStart[r], to = r + 1 < runCount ? runStart[r + 1] : otQuads;
+            if (to <= from) continue;
+            int id = runTex[r];
+            gl.uniform1i(p.loc("uSingle"), id < 0 ? 0 : 1);
+            gl.activeTexture(Gl.TEXTURE0);
+            gl.bindTexture(Gl.TEXTURE_2D_ARRAY, atlasTex);
+            if (id >= 0) {
+                gl.activeTexture(Gl.TEXTURE0 + 2);
+                gl.bindTexture(Gl.TEXTURE_2D, single(textures[id]));
+            }
+            if (runShadow[r]) {
+                gl.enable(Gl.BLEND);
+                gl.blendFunc(Gl.DST_COLOR, Gl.ZERO);
+            }
+            gl.drawElements(Gl.TRIANGLES, (to - from) * 6, Gl.UNSIGNED_INT, from * 6 * 4);
+            if (runShadow[r]) gl.disable(Gl.BLEND);
+        }
+        gl.uniform1i(p.loc("uSingle"), 0);
+    }
+
     // ------------------------------------------------------------------ flush
 
     @Override public void flush() {
@@ -940,6 +1163,7 @@ public final class GlRenderer extends Renderer {
             if (b != null) b.lastUse = frame;
         }
         int nDyn = writeDynamic();
+        if (psxSort) buildOrderingTable();
         Program p = poly;
         gl.useProgram(p.id);
         camera(p);
@@ -960,6 +1184,10 @@ public final class GlRenderer extends Renderer {
         int dyn = 0;
         for (int layer = 0; layer < LAYERS; layer++) {
             // flat layers lie on the ground in layer order; objects and sprites use the depth buffer
+            if (psxSort && layer == L_OBJECT) {
+                drawOrderingTable(p);
+                continue;
+            }
             gl.depthMask(layer == L_OBJECT);
             gl.uniform1i(p.loc("uSingle"), 0);
             for (Draw d : draws) {

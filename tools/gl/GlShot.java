@@ -24,6 +24,7 @@ public final class GlShot {
         SoftRenderer soft = new SoftRenderer(W, H);
         soft.setThreads(4);
         GlRenderer gpu = new GlRenderer(new FfmGl(), W, H);
+        gpu.psxSort = !Boolean.getBoolean("zbuf");      // -Dzbuf=true: the old depth-buffered objects
         for (Renderer r : new Renderer[]{soft, gpu}) {
             r.textures = g.textures;
             r.ground = g.city.groundSource();
