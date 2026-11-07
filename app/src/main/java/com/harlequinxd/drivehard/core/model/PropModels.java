@@ -147,55 +147,109 @@ public final class PropModels {
      */
     public static List<Part> trafficSignal(int state) {
         List<Part> parts = new ArrayList<>();
-        int metal = 0x9CA2A6;
+        int metal = 0xA4AAAE, dark = 0x2A2E32, housing = 0x7C8286;
+        // pole on a base collar, capped
         parts.add(new Lathe().sides(8)
-                .ring(0f, 0.16f, 0.16f).ring(0.25f, 0.14f, 0.14f).ring(0.3f, 0.1f, 0.1f)
-                .ring(5.4f, 0.085f, 0.085f).ring(5.5f, 0.04f, 0.04f)
+                .ring(0f, 0.2f, 0.2f).ring(0.22f, 0.2f, 0.2f).ring(0.26f, 0.13f, 0.13f).ring(0.32f, 0.11f, 0.11f)
+                .ring(5.4f, 0.09f, 0.09f).ring(5.48f, 0.11f, 0.11f).ring(5.56f, 0.03f, 0.03f)
                 .color(metal).build(0));
-        float armY = 5.1f, armLen = 3.6f;
-        parts.add(new Lathe().sides(6).ring(0f, 0.06f, 0.06f).ring(armLen, 0.045f, 0.045f).color(metal)
+        float armY = 5.1f, armLen = 3.8f;
+        // the arm and a diagonal brace under it
+        parts.add(new Lathe().sides(6).ring(0f, 0.065f, 0.065f).ring(armLen, 0.05f, 0.05f).color(metal)
                 .transform(Mat4.mul(Mat4.translation(0, armY, 0), Mat4.rotZ((float) (-Math.PI / 2)))).build(0));
-        float hx = armLen - 0.6f, hy = armY - 0.05f;
-        parts.add(box(0.62f, 0.2f, 0.12f, 0x6A6E70, Mat4.translation(hx, hy, 0f)));
-        parts.add(box(0.7f, 0.26f, 0.02f, 0x1A1A1C, Mat4.translation(hx, hy, -0.13f)));
-        int[] lit = {0x30E0B0, 0xFFC830, 0xFF3828};
-        int[] dark = {0x1A3A34, 0x3A3418, 0x3A1A18};
-        // seen from the front (+Z), screen-right is +X: green on the left, red on the right
+        float bl = (float) Math.hypot(1.4f, 0.7f);
+        parts.add(new Lathe().sides(5).ring(0f, 0.03f, 0.03f).ring(bl, 0.03f, 0.03f).color(metal)
+                .transform(Mat4.mul(Mat4.translation(0.05f, armY - 0.7f, 0), Mat4.rotZ((float) -Math.atan2(1.4f, 0.7f)))).build(0));
+        // the junction's name plate hung under the arm: blue, white border
+        parts.add(box(0.5f, 0.15f, 0.025f, 0xF2F4F6, Mat4.translation(1.25f, armY - 0.3f, 0.02f)));
+        parts.add(box(0.46f, 0.12f, 0.03f, 0x2A5CB0, Mat4.translation(1.25f, armY - 0.3f, 0.025f)));
+        // the signal head: housing, a black backplate with a white rim, three lamps under deep visors
+        float hx = armLen - 0.7f, hy = armY - 0.02f;
+        parts.add(box(0.68f, 0.22f, 0.14f, housing, Mat4.translation(hx, hy, 0f)));
+        parts.add(box(0.8f, 0.3f, 0.02f, 0xD8DCDE, Mat4.translation(hx, hy, -0.15f)));
+        parts.add(box(0.77f, 0.27f, 0.025f, 0x18191B, Mat4.translation(hx, hy, -0.16f)));
+        int[] lit = {0x38F0C0, 0xFFD030, 0xFF3A28};
+        int[] off = {0x1C3C36, 0x3C3618, 0x3C1C1A};
         int[] order = {SIGNAL_GREEN, SIGNAL_YELLOW, SIGNAL_RED};
         for (int i = 0; i < 3; i++) {
             int lamp = order[i];
             boolean on = lamp == state;
-            float lx = hx - 0.4f + i * 0.4f;
-            Lathe l = Lathe.ellipsoid(on ? 0.15f : 0.13f, on ? 0.15f : 0.13f, 0.04f, 4, 8)
-                    .color(on ? lit[lamp] : dark[lamp]).transform(Mat4.translation(lx, hy, 0.13f));
+            float lx = hx - 0.44f + i * 0.44f;
+            parts.add(box(0.17f, 0.17f, 0.012f, dark, Mat4.translation(lx, hy, 0.142f)));
+            Lathe l = Lathe.ellipsoid(0.145f, 0.145f, 0.035f, 4, 10).color(on ? lit[lamp] : off[lamp])
+                    .transform(Mat4.translation(lx, hy, 0.15f));
             if (on) l.emissive();
             parts.add(l.build(0));
-            parts.add(box(0.16f, 0.015f, 0.1f, 0x5A5E60, Mat4.translation(lx, hy + 0.17f, 0.2f)));
+            // visor: a hood over the top and down both sides
+            parts.add(box(0.18f, 0.012f, 0.13f, housing, Mat4.translation(lx, hy + 0.175f, 0.27f)));
+            parts.add(box(0.012f, 0.1f, 0.11f, housing, Mat4.translation(lx - 0.17f, hy + 0.08f, 0.25f)));
+            parts.add(box(0.012f, 0.1f, 0.11f, housing, Mat4.translation(lx + 0.17f, hy + 0.08f, 0.25f)));
         }
-        // pedestrian signal (red/green figure box) facing the crosswalk
-        parts.add(box(0.18f, 0.32f, 0.1f, 0x6A6E70, Mat4.translation(0.25f, 2.6f, 0f)));
-        parts.add(box(0.12f, 0.12f, 0.02f, state == SIGNAL_GREEN ? 0x30E0B0 : 0x3A1A18, Mat4.translation(0.25f, 2.42f, 0.11f), state == SIGNAL_GREEN));
-        parts.add(box(0.12f, 0.12f, 0.02f, state != SIGNAL_GREEN ? 0xFF3828 : 0x1A3A34, Mat4.translation(0.25f, 2.76f, 0.11f), state != SIGNAL_GREEN));
+        // pedestrian signal: a box with two lamps (walking figure green, standing figure red)
+        float py = 2.75f;
+        parts.add(box(0.2f, 0.38f, 0.12f, housing, Mat4.translation(0.3f, py, 0f)));
+        boolean walk = state == SIGNAL_GREEN;
+        parts.add(box(0.14f, 0.14f, 0.02f, walk ? 0x38F0C0 : 0x1C3C36, Mat4.translation(0.3f, py - 0.17f, 0.12f), walk));
+        parts.add(box(0.14f, 0.14f, 0.02f, !walk ? 0xFF3A28 : 0x3C1C1A, Mat4.translation(0.3f, py + 0.17f, 0.12f), !walk));
+        parts.add(box(0.2f, 0.012f, 0.1f, housing, Mat4.translation(0.3f, py + 0.36f, 0.2f)));
+        parts.add(box(0.2f, 0.012f, 0.1f, housing, Mat4.translation(0.3f, py + 0.02f, 0.2f)));
+        // the push button box for pedestrians, and a little sign above it
+        parts.add(box(0.08f, 0.13f, 0.06f, 0xE8C020, Mat4.translation(0f, 1.15f, 0.14f)));
+        parts.add(box(0.11f, 0.08f, 0.015f, 0xF2F4F6, Mat4.translation(0f, 1.42f, 0.13f)));
         return parts;
     }
 
     // ------------------------------------------------------------------ utility pole
 
-    /** Concrete utility pole with cross-arms, insulators and a transformer; wires run along Z. */
+    /**
+     * Japanese concrete utility pole: a tiger-striped guard at the foot, a pole number plate and
+     * a long advert plate, step bolts up the sides, two cross-arms with white insulators, a
+     * transformer drum on its bracket with bushings, and the service cable down the pole.
+     */
     public static List<Part> utilityPole() {
         List<Part> parts = new ArrayList<>();
-        parts.add(new Lathe().sides(8)
-                .ring(0f, 0.17f, 0.17f).ring(10.5f, 0.11f, 0.11f).ring(10.6f, 0.05f, 0.05f)
-                .color((x, y, z) -> y < 1.8f ? ((((int) (y / 0.25f)) & 1) == 0 ? 0xE8C020 : 0x202020) : 0xB8B4AC)
-                .build(0));
-        for (float y : new float[]{9.9f, 9.2f}) {
-            parts.add(box(0.05f, 0.05f, 0.75f, 0x7A7672, Mat4.translation(0, y, 0)));
-            for (float z = -0.6f; z <= 0.61f; z += 0.6f)
-                parts.add(box(0.04f, 0.08f, 0.04f, 0xE8E8E0, Mat4.translation(0, y + 0.12f, z)));
+        // the foot in short rings, so the guard's stripes and the casting seams show
+        Lathe pole = new Lathe().sides(8);
+        for (float y = 0f; y < 10.5f; y += y < 1.8f ? 0.22f : 1.1f)
+            pole.ring(y, 0.18f - y * 0.0067f, 0.18f - y * 0.0067f);
+        pole.ring(10.5f, 0.11f, 0.11f).ring(10.6f, 0.05f, 0.05f)
+                .color((x, y, z) -> {
+                    if (y < 1.76f) return (((int) (y / 0.22f)) & 1) == 0 ? 0xF0C420 : 0x1E1E20;
+                    return ((int) (y / 2.2f) & 1) == 0 ? 0xBCB8B0 : 0xB2AEA6;      // casting seams
+                });
+        parts.add(pole.build(0));
+        // pole number plate and the advert plate under it
+        parts.add(box(0.13f, 0.11f, 0.012f, 0xF2F2EE, Mat4.translation(0f, 1.95f, 0.18f)));
+        parts.add(box(0.11f, 0.03f, 0.014f, 0x2A5CB0, Mat4.translation(0f, 2.02f, 0.18f)));
+        parts.add(box(0.16f, 0.55f, 0.015f, 0x2E7AC4, Mat4.translation(0f, 2.75f, 0.18f)));
+        parts.add(box(0.13f, 0.42f, 0.017f, 0xF6F2E2, Mat4.translation(0f, 2.82f, 0.18f)));
+        parts.add(box(0.13f, 0.07f, 0.018f, 0xD82828, Mat4.translation(0f, 2.4f, 0.18f)));
+        // step bolts, alternating sides
+        for (float y = 2.6f; y < 8.8f; y += 0.45f) {
+            float side = ((int) ((y - 2.6f) / 0.45f) & 1) == 0 ? 1f : -1f;
+            parts.add(box(0.11f, 0.018f, 0.018f, 0x3A3C3E, Mat4.translation(side * 0.2f, y, 0f)));
         }
-        parts.add(new Lathe().sides(8).ring(-0.45f, 0.28f, 0.28f).ring(0.45f, 0.28f, 0.28f).color(0x8A9096)
-                .transform(Mat4.translation(0.42f, 7.8f, 0)).build(0));
-        parts.add(box(0.03f, 0.3f, 0.12f, 0x5A5E60, Mat4.translation(0.2f, 4.0f, 0)));
+        // cross-arms with insulators
+        for (float y : new float[]{9.9f, 9.2f}) {
+            parts.add(box(0.05f, 0.05f, 0.8f, 0x6E6A66, Mat4.translation(0, y, 0)));
+            for (float z = -0.65f; z <= 0.66f; z += 0.65f)
+                if (Math.abs(z) > 0.1f || y > 9.5f)
+                    parts.add(new Lathe().sides(6).ring(0f, 0.045f, 0.045f).ring(0.05f, 0.06f, 0.06f).ring(0.1f, 0.045f, 0.045f)
+                            .ring(0.15f, 0.06f, 0.06f).ring(0.2f, 0.03f, 0.03f).color(0xF0F0EA)
+                            .transform(Mat4.translation(0, y + 0.05f, z)).build(0));
+        }
+        // the transformer: drum, bracket, bushings and its cooling fins
+        parts.add(box(0.2f, 0.04f, 0.12f, 0x5A5E60, Mat4.translation(0.22f, 7.3f, 0)));
+        parts.add(new Lathe().sides(10).ring(-0.48f, 0.27f, 0.27f).ring(-0.46f, 0.3f, 0.3f).ring(0.42f, 0.3f, 0.3f)
+                .ring(0.46f, 0.26f, 0.26f).ring(0.5f, 0.1f, 0.1f).color(0x8E969C)
+                .transform(Mat4.translation(0.45f, 7.85f, 0)).build(0));
+        for (float z : new float[]{-0.12f, 0.12f})
+            parts.add(new Lathe().sides(6).ring(0f, 0.035f, 0.035f).ring(0.18f, 0.03f, 0.03f).color(0x3A3C3E)
+                    .transform(Mat4.translation(0.45f, 8.35f, z)).build(0));
+        // the service cable from the transformer down the pole
+        parts.add(new Lathe().sides(4).ring(0f, 0.025f, 0.025f).ring(3.6f, 0.025f, 0.025f).color(0x1E1E20)
+                .transform(Mat4.translation(-0.17f, 3.9f, 0.06f)).build(0));
+        parts.add(box(0.07f, 0.16f, 0.06f, 0x5A5E60, Mat4.translation(-0.2f, 3.8f, 0.05f)));
         return parts;
     }
 

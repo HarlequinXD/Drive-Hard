@@ -22,6 +22,11 @@ public final class SpriteBaker {
     /** Zero: sprites are rendered straight-on (no tilt) and only rotated about the vertical axis. */
     public float pitchDeg = 0f;
     public boolean outline = true;
+    /**
+     * Pixel-art finish (props): rendered at one sample per pixel, each pixel's light snapped to
+     * its colour's seven-step ramp through a Bayer dither, with a selective outline.
+     */
+    public boolean pixelArt;
 
     // light direction in view space (x right, y up, z toward viewer)
     private static final float LX, LY, LZ;
@@ -176,7 +181,8 @@ public final class SpriteBaker {
                         ? 0xFF000000 | ((r / cnt) << 16) | ((g / cnt) << 8) | (b / cnt) : 0;
             }
         }
-        if (outline) addOutline(out);
+        if (pixelArt) com.harlequinxd.drivehard.core.tex.PixelArt.outline(out, frameW, frameH);
+        else if (outline) addOutline(out);
         return out;
     }
 
@@ -235,7 +241,10 @@ public final class SpriteBaker {
                 float len = (float) Math.sqrt(nnx * nnx + nny * nny + nnz * nnz);
                 if (len < 1e-6f) { nnx = 0; nny = 0; nnz = 1; } else { nnx /= len; nny /= len; nnz /= len; }
                 if (nnz < 0f) { nnx = -nnx; nny = -nny; nnz = -nnz; }   // two-sided
-                int cc = shine < 0f ? (color & 0xFFFFFF) : shade(br, bg, bb, nnx, nny, nnz, shine);
+                int cc;
+                if (shine < 0f) cc = color & 0xFFFFFF;
+                else if (pixelArt) cc = pixelShade(color, nnx, nny, nnz, shine, px, py) & 0xFFFFFF;
+                else cc = shade(br, bg, bb, nnx, nny, nnz, shine);
                 if (jitter != 0) {
                     int r2 = Math.max(0, Math.min(255, ((cc >> 16) & 255) * (256 + jitter * 4) >> 8));
                     int g2 = Math.max(0, Math.min(255, ((cc >> 8) & 255) * (256 + jitter * 4) >> 8));
@@ -246,6 +255,17 @@ public final class SpriteBaker {
                 mbuf[idx] = true;
             }
         }
+    }
+
+    /** The light at a pixel as ramp steps of its own colour, dithered. */
+    private int pixelShade(int color, float nx, float ny, float nz, float shine, int x, int y) {
+        float diff = Math.max(0f, nx * LX + ny * LY + nz * LZ);
+        float amb = 0.36f + 0.16f * ny;
+        float ref = 0.36f + 0.78f * LZ;                     // a face turned straight to the viewer
+        float hx = LX, hy = LY, hz = LZ + 1f, hl = (float) Math.sqrt(hx * hx + hy * hy + hz * hz);
+        float spec = (float) Math.pow(Math.max(0f, (nx * hx + ny * hy + nz * hz) / hl), 24) * Math.max(0.25f, shine * 2f);
+        float steps = (amb + 0.78f * diff - ref) * 5.5f + spec * 3f;
+        return com.harlequinxd.drivehard.core.tex.PixelArt.shadeStep(color | 0xFF000000, steps, x, y);
     }
 
     private static int shade(float r, float g, float b, float nx, float ny, float nz, float shine) {

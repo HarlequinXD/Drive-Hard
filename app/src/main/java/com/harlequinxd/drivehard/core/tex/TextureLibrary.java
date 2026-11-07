@@ -119,7 +119,9 @@ public final class TextureLibrary implements java.io.Serializable {
         gravel = add(FarmTextures.gravel(seed));
         guardrail = add(FarmTextures.guardrail(seed));
         // the ground's 128-texel, 8 m tiles; lanes and junction mouths are cut from the same asphalt
+        int terrainFrom = list.size();
         tiles = new TerrainTiles(this, seed);
+        int terrainTo = list.size();
         Texture asp = list.get(tiles.asphalt);
         float tm = TerrainTiles.METRES;
         laneCountry = add(FarmTextures.lane(asp, tm, 3.0f, FarmTextures.LINE_DASH5, FarmTextures.LINE_SOLID));
@@ -140,8 +142,24 @@ public final class TextureLibrary implements java.io.Serializable {
         laneTown = add(FarmTextures.lane(asp, tm, 2.75f, FarmTextures.LINE_NONE, FarmTextures.LINE_SOLID));
         walkStrip = add(FarmTextures.walkStrip(asp, 1.75f));
         mouthTown = add(FarmTextures.mouth(asp, tm, 9f, 3f, 2.75f, false, true));
+        int lanesTo = list.size();
         houseTextures((int) seed);
         houseKits(seed, lowMemory);
+        // the pixel-art finish: baked relief light and dithered palettes on everything
+        java.util.Set<Integer> done = new java.util.HashSet<>();
+        done.add(shadow);
+        List<Texture> ground = new ArrayList<>(), roads = new ArrayList<>();
+        for (int i = terrainFrom; i < terrainTo; i++) {
+            if (i == tiles.asphalt) continue;
+            ground.add(list.get(i));
+            done.add(i);
+        }
+        roads.add(list.get(tiles.asphalt));
+        done.add(tiles.asphalt);
+        for (int i = terrainTo; i < lanesTo; i++) { roads.add(list.get(i)); done.add(i); }
+        PixelArt.stylizeGroup(ground, (int) seed);
+        PixelArt.stylizeGroup(roads, (int) seed + 1);
+        PixelArt.stylizeAll(list, done);
     }
 
     // ------------------------------------------------------------------ house generator parts

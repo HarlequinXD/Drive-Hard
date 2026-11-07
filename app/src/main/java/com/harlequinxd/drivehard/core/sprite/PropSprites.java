@@ -111,6 +111,7 @@ public final class PropSprites {
         return baker(176, 128, 88, 122, 20f).bakeStatic(v);
     }
 
+    /** Props are drawn as pixel art: one sample per pixel, dithered ramps, selective outline. */
     private static SpriteBaker baker(int w, int h, int ax, int ay, float ppm) {
         SpriteBaker b = new SpriteBaker();
         b.frameW = w;
@@ -118,7 +119,8 @@ public final class PropSprites {
         b.anchorX = ax;
         b.anchorY = ay;
         b.pixelsPerMeter = ppm;
-        b.supersample = 2;
+        b.supersample = 1;
+        b.pixelArt = true;
         return b;
     }
 }
