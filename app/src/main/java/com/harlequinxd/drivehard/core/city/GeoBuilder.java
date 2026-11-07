@@ -298,7 +298,7 @@ public final class GeoBuilder {
                            int layer, float cell, int flags, float bias) {
         if (paint != null) paint.add(new float[]{ax, az, bx, bz, tex, uScale, vScale});
         if (dry || bx - ax < 0.01f || bz - az < 0.01f) return;
-        float step = Math.max(1f, Math.min(cell, 4f));      // footpaths and lots: pieces of at most 4 m
+        float step = Math.max(1f, Math.min(cell, 8f));      // footpaths and lots: pieces of at most one tile (8 m)
         int nx = Math.max(1, (int) Math.ceil((bx - ax) / step)), nz = Math.max(1, (int) Math.ceil((bz - az) / step));
         float lift = Math.max(off, 0.02f);
         for (int j = 0; j < nz; j++)

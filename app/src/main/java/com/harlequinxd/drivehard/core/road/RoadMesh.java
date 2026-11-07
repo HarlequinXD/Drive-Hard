@@ -31,8 +31,7 @@ import static com.harlequinxd.drivehard.core.render.SoftRenderer.L_RAISED;
  * roads sit cleanly in cuttings and on embankments. Bridges get decks, parapets and piers;
  * freeways get a median barrier and guardrails; country roads get utility poles and wires.
  *
- * Road surfaces are polygons laid over the tiled terrain (which is cut away under them): lane
- * strips one 8 m, 128-texel tile long, junction polygons and mouths, all in the raised ground
+ * Road surfaces are polygons laid over the tiled terrain: lane strips one 8 m, 128-texel tile long, junction polygons and mouths, all in the raised ground
  * layer, drawn after the terrain and tested against its depth, so hills still hide them.
  */
 public final class RoadMesh {
@@ -106,8 +105,8 @@ public final class RoadMesh {
     private float bias(float rural) { return 0f; }
     /** Metres per tile of the plain asphalt (the ground's 128-texel tiles). */
     private static final float TILE_M = com.harlequinxd.drivehard.core.tex.TerrainTiles.METRES;
-    /** Largest road polygon edge: affine (GBA) texturing warps less on smaller polygons. */
-    private static final float STEP = 4f;
+    /** Largest road polygon edge: one ground tile (8 m). */
+    private static final float STEP = TILE_M;
 
     /** Flat strip between offsets o0..o1 from s a..b with world-ish uv (plain asphalt). */
     private void strip(GeoBuilder gb, float a, float b, float o0, float o1, float lift, int tex, float bias, int flags, float uScale, float vBase) {
@@ -217,7 +216,7 @@ public final class RoadMesh {
             if (ma > 0f && a < e.clearA + ma) mouthStrip(gb, a, Math.min(b, e.clearA + ma), true, hw, cls);
             if (mb > 0f && b > e.len - e.clearB - mb) mouthStrip(gb, Math.max(a, e.len - e.clearB - mb), b, false, hw, cls);
             if (lb - la > 0.05f) {
-                // cut every 4 m (half a tile), so the strips line up along the road and stay small
+                // cut at whole tiles (8 m), so every strip is one tile and they line up along the road
                 float t0 = (float) Math.floor(la / STEP) * STEP;
                 for (float sa0 = t0; sa0 < lb; sa0 += STEP) {
                     float sa = Math.max(la, sa0), sb = Math.min(lb, sa0 + STEP);
@@ -226,7 +225,7 @@ public final class RoadMesh {
                         int tex = gore ? -1 : (int) bd[2];
                         if (bd[3] > 0f) {
                             if (tex < 0) {
-                                // plain centre band: in halves, so no piece is wider than 4 m
+                                // plain centre band: in halves, so no piece is wider than a tile
                                 strip(gb, sa, sb, -bd[1], 0f, 0.04f, lib.tiles.asphalt, ROAD_BIAS, 0, 1f / TILE_M, vBase);
                                 strip(gb, sa, sb, 0f, bd[1], 0.04f, lib.tiles.asphalt, ROAD_BIAS, 0, 1f / TILE_M, vBase);
                             } else laneStrip(gb, sa, sb, -bd[1], bd[1], tex, laneBase);
@@ -279,7 +278,7 @@ public final class RoadMesh {
         float m = net.mouth(e, n);
         boolean painted = n.kind == RoadNode.Kind.CITY || givesWay(n);
         int tex = painted ? mouthTex(cls) : -1;
-        // pieces at most 4 m across and along
+        // pieces at most one tile (8 m) across and along
         int na = Math.max(1, (int) Math.ceil(2f * hw / STEP)), nl = Math.max(1, (int) Math.ceil((b - a) / STEP));
         float start = atA ? e.clearA : e.len - e.clearB;   // junction-side end of the mouth
         float lt = GeoBuilder.sunLight(0, 1, 0);

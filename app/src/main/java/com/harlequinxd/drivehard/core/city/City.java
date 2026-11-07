@@ -426,8 +426,8 @@ public final class City extends World implements java.io.Serializable {
     /**
      * The ground of one chunk as tiled polygons: every 8 m cell is one quad carrying one 128-texel
      * tile (ground types at the grid corners pick the tile or a transition tile; crops and city
-     * ground take theirs whole). Cells a road runs through are cut into 2 m pieces and the pieces
-     * under the asphalt left out, so the road polygons lie in a gap cut for them. The sea pass
+     * ground take theirs whole). Cells a road runs through are cut into 2 m pieces that follow the
+     * road's bed, and the road polygons lie on them. The sea pass
      * draws what lies under the water. Its sea-floor / beach heights and water map are kept as
      * the chunk's ground tile.
      */
@@ -504,9 +504,11 @@ public final class City extends World implements java.io.Serializable {
     }
 
     /**
-     * A cell a road runs through, in 4 x 4 pieces of 2 m (each a quarter-tile of the same tile),
-     * leaving out the pieces wholly under asphalt. Inside, the pieces follow the true terrain; on an
-     * edge shared with an uncut neighbour they keep its straight edge, so no cracks open.
+     * A cell a road runs through, in 4 x 4 pieces of 2 m (each a quarter-tile of the same tile) that
+     * follow the road's shaped bed closely, so the road polygons lie on them and pass the ground's
+     * depth test. Nothing is left out under the road (a gap there would open wherever the road's
+     * polygons and the asphalt test disagree). On an edge shared with an uncut neighbour the pieces
+     * keep its straight edge, so no cracks open.
      */
     private void fineCell(GeoBuilder gb, float ax, float az, int tex, boolean[] fine, int i, int j,
                           float h00, float h10, float h11, float h01) {
@@ -527,9 +529,6 @@ public final class City extends World implements java.io.Serializable {
         for (int pj = 0; pj < 4; pj++)
             for (int pi = 0; pi < 4; pi++) {
                 float px0 = ax + pi * 2f, pz0 = az + pj * 2f, px1 = px0 + 2f, pz1 = pz0 + 2f;
-                if (roads.onAsphalt(px0 + 1f, pz0 + 1f, -0.05f, -1) && roads.onAsphalt(px0, pz0, -0.05f, -1)
-                        && roads.onAsphalt(px1, pz0, -0.05f, -1) && roads.onAsphalt(px0, pz1, -0.05f, -1)
-                        && roads.onAsphalt(px1, pz1, -0.05f, -1)) continue;       // wholly under the road
                 int o = pj * 5 + pi;
                 gb.groundCell(px0, pz0, px1, pz1, hv[o], hv[o + 1], hv[o + 6], hv[o + 5],
                         pi / 4f, pj / 4f, (pi + 1) / 4f, (pj + 1) / 4f, tex, L_GROUND);
