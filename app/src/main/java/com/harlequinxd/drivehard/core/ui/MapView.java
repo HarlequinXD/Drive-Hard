@@ -418,6 +418,18 @@ public final class MapView {
         ring(nX, nY, 5, 0xFF0A0C10, 255);
         text("N", nX - 2, nY - 3, 1, 0xFFFFFFFF);
         arrow(cx, cy, (float) Math.PI, 5f, false);
+        // the mission target: a blinking blip, pinned to the rim when it is out of range
+        if (g.missions.hasTarget) {
+            float ax = g.missions.targetX - px, az = g.missions.targetZ - pz;
+            float bx = (ax * rx + az * rz) * s, by = -(ax * fx + az * fz) * s;
+            float bl = (float) Math.hypot(bx, by);
+            boolean rim = bl > r - 4;
+            if (rim) { bx *= (r - 4) / bl; by *= (r - 4) / bl; }
+            int mx = Math.round(cx + bx), my = Math.round(cy + by);
+            boolean on = ((int) (g.time * 4f) & 1) == 0 || !rim;
+            disc(mx, my, rim ? 3 : 4, 0xFF0A0C10, 255);
+            if (on) disc(mx, my, rim ? 2 : 3, 0xFFFFC040, 255);
+        }
     }
 
     // ------------------------------------------------------------------ HUD text

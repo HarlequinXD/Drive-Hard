@@ -28,6 +28,9 @@ import com.harlequinxd.drivehard.core.render.SoftRenderer;
 import com.harlequinxd.drivehard.core.map.MapData;
 import com.harlequinxd.drivehard.core.ui.LoadScreen;
 import com.harlequinxd.drivehard.core.ui.MapView;
+import com.harlequinxd.drivehard.core.ui.MainMenu;
+import com.harlequinxd.drivehard.core.GameAudio;
+import com.harlequinxd.drivehard.core.Settings;
 
 /**
  * Android front end. The game renders at a low resolution matched to the screen's shape (so
@@ -122,7 +125,7 @@ public final class DriveHardActivity extends Activity {
                         | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
     }
 
-    private enum Screen { GAME, MAP, PAUSE }
+    private enum Screen { MENU, GAME, MAP, PAUSE }
 
     private final class GameView extends View implements Runnable, GLSurfaceView.Renderer {
         private static final int RES_H = 240, MAX_W = 520;
@@ -139,8 +142,11 @@ public final class DriveHardActivity extends Activity {
         private volatile Game game;
         private volatile String error = "";
         private Thread loop;
-        private volatile Screen screen = Screen.GAME;
+        private volatile Screen screen = Screen.MENU;
         private volatile MapData.Label pendingTravel;
+        private volatile MainMenu mainMenu;
+        private Settings settings;
+        private volatile AndroidAudio audio;
         private volatile boolean quit;
         private float density = 1f;
 
@@ -177,6 +183,8 @@ public final class DriveHardActivity extends Activity {
 
         void resume() {
             paused = false;
+            AndroidAudio a = audio;
+            if (a != null) a.resume();
             if (loop == null || !loop.isAlive()) {
                 running = true;
                 loop = new Thread(this, "drive-hard-android");
@@ -197,12 +205,16 @@ public final class DriveHardActivity extends Activity {
 
         void pause() {
             paused = true;
+            AndroidAudio a = audio;
+            if (a != null) a.pause();
             clearInput();
             if (game != null && screen == Screen.GAME) screen = Screen.PAUSE;
         }
 
         void close() {
             running = false;
+            AndroidAudio a = audio;
+            if (a != null) a.stop();
             if (pacer != null) pacer.interrupt();
             if (loop != null) {
                 loop.interrupt();
@@ -213,6 +225,13 @@ public final class DriveHardActivity extends Activity {
         /** Back: close the travel dialog, then the map or the menu; in game open the menu. */
         boolean back() {
             if (game == null || travelling) return true;
+            if (screen == Screen.MENU) {
+                MainMenu m = mainMenu;
+                if (m != null && m.onMainPage()) return false;       // leave the game
+                mapOps.add(new float[]{4});
+                return true;
+            }
+            if (screen == Screen.GAME && game.missions.modal()) { mapOps.add(new float[]{4}); return true; }
             if (screen == Screen.MAP) {
                 mapOps.add(new float[]{3});
                 return true;
@@ -247,6 +266,16 @@ public final class DriveHardActivity extends Activity {
                 postInvalidate();
                 g = new Game(Game.DEFAULT_SEED, loadScreen::set, true);
                 if (!gpu) g.setResolution(W, H);
+                settings = Settings.load(new java.io.File(getFilesDir(), "settings.txt"));
+                g.settings = settings;
+                settings.apply(g);
+                AndroidAudio a = new AndroidAudio(g.audio.mixer);
+                a.start();
+                if (paused) a.pause();
+                audio = a;
+                mainMenu = new MainMenu(g, settings, true);
+                mainMenu.open();
+                screen = Screen.MENU;
                 game = g;
                 long previous = System.nanoTime();
                 while (running) {
@@ -272,12 +301,8 @@ public final class DriveHardActivity extends Activity {
                         continue;
                     }
                     // the CPU renderer (no OpenGL ES 3, or the GPU set-up failed)
-                    if (!(g.renderer instanceof SoftRenderer)) g.setResolution(W, H);
-                    switch (screen) {
-                        case MAP: mapFrame(g); break;
-                        case PAUSE: pauseFrame(g); break;
-                        default: gameFrame(g, dt); break;
-                    }
+                    if (!(g.renderer instanceof SoftRenderer)) { g.setResolution(W, H); settings.apply(g); }
+                    frame(g, dt);
                     if (quit) { runOnUiThread(DriveHardActivity.this::finish); return; }
                     postInvalidateOnAnimation();
                     long wait = 33_333_333L - (System.nanoTime() - now);
@@ -296,7 +321,83 @@ public final class DriveHardActivity extends Activity {
             }
         }
 
+        /** One frame of whichever screen is up, and the sounds that go with it. */
+        private void frame(Game g, float dt) {
+            switch (screen) {
+                case MENU: menuFrame(g, dt); break;
+                case MAP: mapFrame(g); break;
+                case PAUSE: pauseFrame(g); break;
+                default: gameFrame(g, dt); break;
+            }
+            Screen now = screen;
+            g.audio.screen(now == Screen.MENU ? GameAudio.SCREEN_MENU : now == Screen.MAP ? GameAudio.SCREEN_MAP
+                    : now == Screen.PAUSE ? GameAudio.SCREEN_PAUSE : g.missions.modal() ? GameAudio.SCREEN_MENU : GameAudio.SCREEN_GAME,
+                    now == Screen.GAME && g.missions.modal() ? g.missions.choice : -1);
+        }
+
+        private void menuFrame(Game g, float dt) {
+            MainMenu m = mainMenu;
+            float[] op;
+            while ((op = mapOps.poll()) != null) {
+                if ((int) op[0] == 2) m.tap(op[1], op[2]);
+                else if ((int) op[0] == 4) m.back();
+            }
+            switch (m.poll()) {
+                case MainMenu.CRUISE:
+                    g.missions.abandon();
+                    leaveMenu(g);
+                    return;
+                case MainMenu.MISSION:
+                    g.missions.abandon();
+                    leaveMenu(g);
+                    g.missions.brief(m.mission);
+                    return;
+                case MainMenu.QUIT:
+                    quit = true;
+                    return;
+                default: break;
+            }
+            g.attract(dt);
+            g.render();
+            sceneToFrame(g);
+            m.draw(fb, W, H, dt);
+            publish();
+        }
+
+        private void leaveMenu(Game g) {
+            g.endAttract();
+            g.audio.music(false);
+            clearInput();
+            hintTime = 8f;
+            screen = Screen.GAME;
+        }
+
+        private void openMenu(Game g, boolean story) {
+            g.missions.abandon();
+            mapOps.clear();
+            if (story) mainMenu.openStory(); else mainMenu.open();
+            screen = Screen.MENU;
+        }
+
+        /** A mission briefing or result is up: the world waits, taps work its buttons. */
+        private void missionScreen(Game g) {
+            float[] op;
+            while ((op = mapOps.poll()) != null) {
+                if ((int) op[0] == 2) g.missions.tap(op[1], op[2]);
+                else if ((int) op[0] == 4) g.missions.back();
+            }
+            if (g.missions.request) { g.missions.request = false; openMenu(g, true); return; }
+            g.render();
+            sceneToFrame(g);
+            int r = minimapRadius();
+            mapView.drawMinimap(fb, W, H, W - r - 8, r + 8, r, g);
+            mapView.drawHud(fb, W, H, g, 34, 6);
+            g.missions.draw(fb, W, H);
+            publish();
+        }
+
         private void gameFrame(Game g, float dt) {
+            if (g.missions.modal()) { missionScreen(g); return; }
             if (openMapRequest) {
                 openMapRequest = false;
                 mapOps.clear();
@@ -326,6 +427,7 @@ public final class DriveHardActivity extends Activity {
             int r = minimapRadius();
             mapView.drawMinimap(fb, W, H, W - r - 8, r + 8, r, g);
             mapView.drawHud(fb, W, H, g, 34, 6);
+            g.missions.draw(fb, W, H);
             mapView.drawHints(fb, W, H, g.driving() ? "STEER WITH THE STICK  -  GAS, BRAKE AND HANDBRAKE ON THE RIGHT"
                     : "LEFT STICK WALK  -  DRAG RIGHT SIDE TO LOOK  -  TAP THE MAP TO TRAVEL", Math.min(1f, hintTime));
             publish();
@@ -361,7 +463,7 @@ public final class DriveHardActivity extends Activity {
             publish();
         }
 
-        private static final String[] MENU = {"RESUME", "MAP AND FAST TRAVEL", "QUIT"};
+        private static final String[] MENU = {"RESUME", "MAP AND FAST TRAVEL", "MAIN MENU", "QUIT"};
 
         private void pauseFrame(Game g) {
             float[] op;
@@ -372,7 +474,8 @@ public final class DriveHardActivity extends Activity {
                     if (op[1] >= b[0] && op[1] < b[2] && op[2] >= b[1] && op[2] < b[3]) {
                         if (i == 0) screen = Screen.GAME;
                         if (i == 1) { mapOps.clear(); mapView.open(g); screen = Screen.MAP; }
-                        if (i == 2) quit = true;
+                        if (i == 2) openMenu(g, false);
+                        if (i == 3) quit = true;
                         return;
                     }
                 }
@@ -446,16 +549,12 @@ public final class DriveHardActivity extends Activity {
                     lastGlFrame = 0;
                     return;
                 }
-                if (g.renderer != glRenderer) g.useRenderer(glRenderer);
+                if (g.renderer != glRenderer) { g.useRenderer(glRenderer); settings.apply(g); }
                 long now = System.nanoTime();
                 float dt = lastGlFrame == 0 ? 1 / 30f : Math.min(0.05f, (now - lastGlFrame) / 1_000_000_000f);
                 lastGlFrame = now;
                 if (paused) return;
-                switch (screen) {
-                    case MAP: mapFrame(g); break;
-                    case PAUSE: pauseFrame(g); break;
-                    default: gameFrame(g, dt); break;
-                }
+                frame(g, dt);
             } catch (Throwable e) {
                 // no usable GPU path on this phone: carry on with the CPU renderer
                 android.util.Log.e("DriveHard", "GPU renderer failed, using the CPU renderer", e);
@@ -502,7 +601,7 @@ public final class DriveHardActivity extends Activity {
                     paint.setTypeface(Typeface.DEFAULT_BOLD);
                     canvas.drawText(error, 24 * density, 40 * density, paint);
                 }
-                if (game != null && !travelling && screen == Screen.GAME) drawControls(canvas);
+                if (game != null && !travelling && screen == Screen.GAME && !game.missions.modal()) drawControls(canvas);
                 return;
             }
             canvas.drawColor(Color.BLACK);
@@ -522,7 +621,8 @@ public final class DriveHardActivity extends Activity {
                 return;
             }
             synchronized (frame) { canvas.drawBitmap(frame, null, dst, pixels); }
-            if (screen == Screen.GAME) drawControls(canvas);
+            Game gm = game;
+            if (screen == Screen.GAME && gm != null && !gm.missions.modal()) drawControls(canvas);
         }
 
         // control layout in screen pixels
@@ -664,7 +764,8 @@ public final class DriveHardActivity extends Activity {
 
         @Override public boolean onTouchEvent(MotionEvent e) {
             if (game == null || travelling) return true;
-            if (screen != Screen.GAME) return menuTouch(e);
+            Game gm = game;
+            if (screen != Screen.GAME || (gm != null && gm.missions.modal())) return menuTouch(e);
             int action = e.getActionMasked();
             int index = e.getActionIndex();
             int id = e.getPointerId(index);
@@ -769,7 +870,7 @@ public final class DriveHardActivity extends Activity {
         private boolean menuTouch(MotionEvent e) {
             int action = e.getActionMasked();
             float[] p = toFrame(e.getX(e.getActionIndex()), e.getY(e.getActionIndex()));
-            if (screen == Screen.PAUSE) {
+            if (screen == Screen.PAUSE || screen == Screen.MENU || screen == Screen.GAME) {
                 if (action == MotionEvent.ACTION_UP) {
                     performClick();
                     mapOps.add(new float[]{2, p[0], p[1]});

@@ -104,6 +104,23 @@ public abstract class Renderer {
         tanBot = (H - hy) / focal;
     }
 
+    /**
+     * Projects a world point onto the screen: out = {x, y, depth}. Returns false when it is
+     * behind the camera (out still holds the direction, flipped, for edge arrows).
+     */
+    public boolean project(float x, float y, float z, float[] out) {
+        float dx = x - ex, dy = y - ey, dz = z - ez;
+        float d = dx * fx + dz * fz, side = dx * rx + dz * rz;
+        if (d < 0.1f) {
+            out[0] = cx + Math.signum(side) * W; out[1] = hy; out[2] = d;
+            return false;
+        }
+        out[0] = cx + focal * side / d;
+        out[1] = hy - focal * dy / d;
+        out[2] = d;
+        return true;
+    }
+
     /** Screen row of the horizon. */
     public float horizon() { return hy; }
     public float focal() { return focal; }

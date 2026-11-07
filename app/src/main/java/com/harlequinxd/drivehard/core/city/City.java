@@ -492,6 +492,13 @@ public final class City extends World implements java.io.Serializable {
             }
     }
 
+    /** What a foot lands on, for footstep sounds: 0 hard (roads, pavements, rock), 1 grass, 2 sand. */
+    public int footing(float x, float z) {
+        if (urban(x, z) || roads.onAsphalt(x, z, 0.4f, -1)) return 0;
+        int t = cornerType(x, z);
+        return t == TerrainTiles.ROCK ? 0 : t == TerrainTiles.SAND ? 2 : 1;
+    }
+
     /** Natural ground type at a grid corner: rock on steep slopes, sand on beaches, hill grass up high. */
     private int cornerType(float x, float z) {
         float h = terrain.height(x, z);

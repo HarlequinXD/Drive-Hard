@@ -4,6 +4,9 @@ import com.harlequinxd.drivehard.core.Game;
 import com.harlequinxd.drivehard.core.map.MapData;
 import com.harlequinxd.drivehard.core.ui.LoadScreen;
 import com.harlequinxd.drivehard.core.ui.MapView;
+import com.harlequinxd.drivehard.core.ui.MainMenu;
+import com.harlequinxd.drivehard.core.GameAudio;
+import com.harlequinxd.drivehard.core.Settings;
 
 import java.awt.*;
 import java.awt.event.*;
@@ -22,6 +25,8 @@ import javax.swing.*;
  * handbrake (held, while driving), mouse (click
  * the window to capture it) or right stick for the camera, Space / A jump, E / F / Y get in or
  * out, M / Tab / View for the map, Esc / Start for the pause menu, F11 fullscreen.
+ * Main menu: arrows / WASD / D-pad to move, left and right to change options, Enter / A to
+ * pick, Esc / B to go back; it opens first, and from the pause menu.
  * Map: drag / WASD / stick to pan, wheel / + - / triggers to zoom, Q E / LB RB to step through
  * places, click / Enter / A to pick a place and travel, Esc / B to go back.
  * The loading and fast-travel screens, the minimap, the HUD and the map are all drawn by the
@@ -29,7 +34,7 @@ import javax.swing.*;
  */
 public final class DesktopMain extends JPanel implements KeyListener, Runnable {
     private static final int W = 480, H = 320;
-    private enum Screen { GAME, MAP, PAUSE }
+    private enum Screen { MENU, GAME, MAP, PAUSE }
 
     private final Set<Integer> keys = ConcurrentHashMap.newKeySet();
     private final ConcurrentLinkedQueue<Integer> taps = new ConcurrentLinkedQueue<>();
@@ -63,7 +68,10 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
     private final Cursor blankCursor = Toolkit.getDefaultToolkit().createCustomCursor(
             new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB), new Point(0, 0), "none");
 
-    private static final String[] MENU = {"RESUME", "MAP", "FULLSCREEN", "NEW ISLAND", "QUIT TO DESKTOP"};
+    private static final String[] MENU = {"RESUME", "MAP", "FULLSCREEN", "NEW ISLAND", "MAIN MENU", "QUIT TO DESKTOP"};
+    private MainMenu mainMenu;
+    private Settings settings;
+    private DesktopAudio audio;
 
     private DesktopMain() {
         setBackground(Color.BLACK);
@@ -74,6 +82,7 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
         addMouseWheelListener(e -> wheel.addAndGet(e.getWheelRotation()));
         addMouseListener(new MouseAdapter() {
             @Override public void mousePressed(MouseEvent e) {
+                if (screen == Screen.GAME && game != null && game.missions.modal()) return;
                 requestFocusInWindow();
                 lastMouseX = e.getX(); lastMouseY = e.getY();
                 if (screen == Screen.GAME && game != null && !travelling) { capture(true); return; }
@@ -81,7 +90,7 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
             }
             @Override public void mouseReleased(MouseEvent e) { dragging = false; }
             @Override public void mouseClicked(MouseEvent e) {
-                if (screen != Screen.GAME && SwingUtilities.isLeftMouseButton(e) && e.getClickCount() >= 1)
+                if ((screen != Screen.GAME || (game != null && game.missions.modal())) && SwingUtilities.isLeftMouseButton(e) && e.getClickCount() >= 1)
                     clicks.add(new float[]{toInternalX(e.getX()), toInternalY(e.getY())});
             }
         });
@@ -193,9 +202,17 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
                 newIsland = false;
                 Game g = new Game(seed, loadScreen::set);
                 g.setResolution(W, H);
+                if (settings == null) settings = Settings.load(new java.io.File(com.harlequinxd.drivehard.core.data.WorldCache.root, "settings.txt"));
+                g.settings = settings;
+                settings.apply(g);
+                audio = new DesktopAudio(g.audio.mixer);
+                audio.start();
+                mainMenu = new MainMenu(g, settings, false);
+                mainMenu.open();
                 game = g;
-                screen = Screen.GAME;
+                screen = Screen.MENU;
                 play(g);
+                audio.stop();
                 if (newIsland) {
                     game = null;
                     g.dispose();
@@ -230,10 +247,15 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
             padPrev = buttons;
             if (tapped(KeyEvent.VK_F11)) SwingUtilities.invokeLater(this::toggleFullscreen);
             switch (screen) {
+                case MENU: menuFrame(g, dt, connected, pressed); break;
                 case MAP: mapFrame(g, dt, connected, pressed); break;
                 case PAUSE: pauseFrame(g, connected, pressed); break;
                 default: gameFrame(g, dt, connected, pressed); break;
             }
+            Screen now = screen;
+            g.audio.screen(now == Screen.MENU ? GameAudio.SCREEN_MENU : now == Screen.MAP ? GameAudio.SCREEN_MAP
+                    : now == Screen.PAUSE ? GameAudio.SCREEN_PAUSE : g.missions.modal() ? GameAudio.SCREEN_MENU : GameAudio.SCREEN_GAME,
+                    now == Screen.PAUSE ? menuIndex : now == Screen.GAME && g.missions.modal() ? g.missions.choice : -1);
             repaint();
             frames++;
             if (start - stat > 1_000_000_000L) { fps = frames * 1_000_000_000f / (start - stat); frames = 0; stat = start; }
@@ -243,7 +265,97 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
         }
     }
 
+    // ------------------------------------------------------------------ the main menu
+
+    private float stickRepeat;
+    private boolean stickHeld;
+
+    private void menuFrame(Game g, float dt, boolean connected, int pressed) {
+        capture(false);
+        MainMenu m = mainMenu;
+        // the stick steps through the items like the D-pad, with a repeat when held
+        float sy = connected ? pad.ly() : 0f, sx = connected ? pad.lx() : 0f;
+        int stick = Math.abs(sy) > 0.6f ? (sy > 0 ? -1 : 1) * 2 : Math.abs(sx) > 0.6f ? (sx > 0 ? 1 : -1) : 0;
+        if (stick == 0) { stickRepeat = 0f; stickHeld = false; }
+        else {
+            stickRepeat -= dt;
+            if (stickRepeat <= 0f) {
+                stickRepeat = stickHeld ? 0.12f : 0.35f;
+                stickHeld = true;
+                if (stick == -2) m.up(); else if (stick == 2) m.down(); else if (stick == 1) m.right(); else m.left();
+            }
+        }
+        if (tapped(KeyEvent.VK_W) || tapped(KeyEvent.VK_UP) || (pressed & XboxInput.DPAD_UP) != 0) m.up();
+        if (tapped(KeyEvent.VK_S) || tapped(KeyEvent.VK_DOWN) || (pressed & XboxInput.DPAD_DOWN) != 0) m.down();
+        if (tapped(KeyEvent.VK_A) || tapped(KeyEvent.VK_LEFT) || (pressed & XboxInput.DPAD_LEFT) != 0) m.left();
+        if (tapped(KeyEvent.VK_D) || tapped(KeyEvent.VK_RIGHT) || (pressed & XboxInput.DPAD_RIGHT) != 0) m.right();
+        if (tapped(KeyEvent.VK_ENTER) || tapped(KeyEvent.VK_SPACE) || (pressed & (XboxInput.A | XboxInput.START)) != 0) m.select();
+        if (tapped(KeyEvent.VK_ESCAPE) || tapped(KeyEvent.VK_BACK_SPACE) || (pressed & XboxInput.B) != 0) m.back();
+        float[] c;
+        while ((c = clicks.poll()) != null) m.tap(c[0], c[1]);
+        switch (m.poll()) {
+            case MainMenu.CRUISE:
+                g.missions.abandon();
+                leaveMenu(g);
+                return;
+            case MainMenu.MISSION:
+                g.missions.abandon();
+                leaveMenu(g);
+                g.missions.brief(m.mission);
+                return;
+            case MainMenu.QUIT:
+                running = false;
+                SwingUtilities.invokeLater(() -> window.dispose());
+                System.exit(0);
+                return;
+            default: break;
+        }
+        g.attract(dt);
+        g.render();
+        synchronized (image) {
+            System.arraycopy(g.renderer.fb, 0, pixels, 0, pixels.length);
+            m.draw(pixels, W, H, dt);
+            imageReady = true;
+        }
+    }
+
+    private void leaveMenu(Game g) {
+        g.endAttract();
+        g.audio.music(false);
+        screen = Screen.GAME;
+        keys.clear();
+        hintTime = 9f;
+    }
+
+    private void openMenu(Game g, boolean story) {
+        capture(false);
+        g.missions.abandon();
+        if (story) mainMenu.openStory(); else mainMenu.open();
+        screen = Screen.MENU;
+        clicks.clear();
+    }
+
+    /** A briefing or result screen is up: the game waits, the keys work its buttons. */
+    private void missionScreen(Game g, boolean connected, int pressed) {
+        if (tapped(KeyEvent.VK_A) || tapped(KeyEvent.VK_LEFT) || (pressed & XboxInput.DPAD_LEFT) != 0) g.missions.nav(-1);
+        if (tapped(KeyEvent.VK_D) || tapped(KeyEvent.VK_RIGHT) || (pressed & XboxInput.DPAD_RIGHT) != 0) g.missions.nav(1);
+        if (tapped(KeyEvent.VK_ENTER) || tapped(KeyEvent.VK_SPACE) || (pressed & XboxInput.A) != 0) g.missions.select();
+        else if (tapped(KeyEvent.VK_ESCAPE) || (pressed & XboxInput.B) != 0) g.missions.back();
+        float[] c;
+        while ((c = clicks.poll()) != null) g.missions.tap(c[0], c[1]);
+        if (g.missions.request) { g.missions.request = false; openMenu(g, true); return; }
+        g.render();
+        synchronized (image) {
+            System.arraycopy(g.renderer.fb, 0, pixels, 0, pixels.length);
+            mapView.drawMinimap(pixels, W, H, W - 50, 50, 42, g);
+            mapView.drawHud(pixels, W, H, g, 6, 6);
+            g.missions.draw(pixels, W, H);
+            imageReady = true;
+        }
+    }
+
     private void gameFrame(Game g, float dt, boolean connected, int pressed) {
+        if (g.missions.modal()) { capture(false); missionScreen(g, connected, pressed); return; }
         if (tapped(KeyEvent.VK_ESCAPE) || (pressed & XboxInput.START) != 0) {
             capture(false);
             screen = Screen.PAUSE;
@@ -274,6 +386,7 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
             System.arraycopy(g.renderer.fb, 0, pixels, 0, pixels.length);
             mapView.drawMinimap(pixels, W, H, W - 50, 50, 42, g);
             mapView.drawHud(pixels, W, H, g, 6, 6);
+            g.missions.draw(pixels, W, H);
             mapView.drawHints(pixels, W, H, connected
                     ? "LS MOVE  RS CAMERA  RT GAS  LT BRAKE  A JUMP  Y CAR  VIEW MAP  START MENU"
                     : (captured ? "WASD MOVE  MOUSE CAMERA  SPACE JUMP  E CAR  M MAP  ESC MENU"
@@ -355,7 +468,8 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
         if (choose == 1) { openMap(g); return; }
         if (choose == 2) SwingUtilities.invokeLater(this::toggleFullscreen);
         if (choose == 3) { newIsland = true; return; }
-        if (choose == 4) { running = false; SwingUtilities.invokeLater(() -> window.dispose()); System.exit(0); }
+        if (choose == 4) { openMenu(g, false); return; }
+        if (choose == 5) { running = false; SwingUtilities.invokeLater(() -> window.dispose()); System.exit(0); }
         g.render();
         synchronized (image) {
             System.arraycopy(g.renderer.fb, 0, pixels, 0, pixels.length);

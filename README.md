@@ -8,6 +8,14 @@ The first desktop launch picks a random seed and generates an island about 128 k
 
 The load screen shows the title, what is being generated and a progress bar; fast travel shows the same screen while the destination streets are built. The minimap, HUD, island map, fast-travel dialog and pause menu are drawn by the shared core (`core/ui/`), so the desktop and Android builds look the same.
 
+## Main menu, story mode and sound
+
+The game opens on a main menu over a live, slowly circling view of the island, with its own theme (a funk tune sequenced in real time): **CRUISE** (free roam), **STORY MODE**, **OPTIONS** (music and effects volume, GBA / PS1 / exact texture mapping, PS1 ordering table or depth buffer) and **QUIT**. The pause menu has **MAIN MENU** to get back to it. Options and story progress are kept in `settings.txt` in the game data folder.
+
+Story mode is chapter one, *New in Town*: six jobs for Vince (get some wheels, a rush delivery, a checkpoint race, fragile cargo, tailing a car without being spotted, and a getaway with a crash limit). Each has a briefing, a 3-2-1 countdown, an objective and timer at the top of the screen, a light beam over the target with an edge arrow when it is off screen, a blip on the minimap, and a passed / failed screen with best times. A mission unlocks when the one before it is passed. Places are picked on the road network around the player, so the missions work on any island.
+
+All sound is synthesized when the game starts (no sample files) and mixed at 22 kHz with a PS1-style reverb: engines with a simulated gearbox and exhaust pops, tyre squeal, road and gravel roar, wind, impacts and the horn; footsteps that change on pavement, grass, sand and in water, swimming strokes and splashes; surf, birds, crickets, city hum, rain, thunder and the engines of passing traffic, panned around the camera; and the menu and mission sounds.
+
 ## Game data (world cache)
 
 Like Minecraft's region files, the generated world is saved in a `GameData` folder (beside the game on Windows, in the app's private storage on Android):

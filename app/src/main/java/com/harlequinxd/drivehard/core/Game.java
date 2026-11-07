@@ -125,6 +125,10 @@ public final class Game {
     public Renderer renderer;
     private final float[] move = new float[2];
     public float time;
+    /** This frame's pedals and steering (for the engine sound). */
+    public float inGas, inBrake, inSteer;
+    /** Sound: effects, ambience, engines and the theme. */
+    public final GameAudio audio;
     /** Time of day, season and weather. */
     public final Environment env;
     private float rotateTimer;
@@ -154,6 +158,8 @@ public final class Game {
     public Game(long seed, Progress progress, boolean lowMemory) {
         this.lowMemory = lowMemory;
         env = new Environment(seed);
+        audio = new GameAudio(this);
+        missions = new Missions(this);
         // the character and prop sprites bake on another core while the island is generated
         final SpriteSheet[] baked = new SpriteSheet[5];
         Thread baker = new Thread(() -> {
@@ -342,8 +348,25 @@ public final class Game {
     /** As above, with the handbrake held (driving: locks the rear wheels). */
     public void update(float dt, float stickX, float stickY, float dYaw, float dPitch, boolean jump,
                        float steer, float gas, float reverse, boolean carButton, boolean handbrake) {
-        time += dt;
+        if (missions.frozen()) {
+            // the countdown: engine running, handbrake on, nobody moves yet
+            stickX = stickY = steer = gas = reverse = 0f;
+            jump = carButton = false;
+            handbrake = true;
+        }
+        inGas = gas; inBrake = reverse; inSteer = steer;
         if (vehicle != null) vehicle.handbrake = handbrake && mode == Mode.DRIVING;
+        worldTick(dt);
+        cam.orbit(dYaw, dPitch);
+        if (dYaw != 0f || dPitch != 0f) camIdle = 0f; else camIdle += dt;
+        playerTick(dt, stickX, stickY, jump, steer, gas, reverse, carButton);
+        missions.update(dt);
+        audio.update(dt);
+    }
+
+    /** The world carries on: time, weather, streaming, traffic and pedestrians. */
+    private void worldTick(float dt) {
+        time += dt;
         env.update(dt);
         cache.update();
         updatePlace(dt);
@@ -376,9 +399,9 @@ public final class Game {
         trafficObstacles.clear();
         trafficObstacles.addAll(parked);
         if (vehicle != null) trafficObstacles.add(vehicle);
-        cam.orbit(dYaw, dPitch);
-        if (dYaw != 0f || dPitch != 0f) camIdle = 0f; else camIdle += dt;
+    }
 
+    private void playerTick(float dt, float stickX, float stickY, boolean jump, float steer, float gas, float reverse, boolean carButton) {
         if (carButton) {
             if (mode == Mode.ON_FOOT) tryEnter();
             else if (mode == Mode.DRIVING) exitVehicle();
@@ -433,6 +456,100 @@ public final class Game {
         } else { camSurge = camSway = 0f; }
         cam.update(fx, fy, fz, dt);
         cameraCollision();
+    }
+
+    // ------------------------------------------------------------------ front end
+
+    /** Story missions (briefings, objectives, results). */
+    public final Missions missions;
+    /** The options and story progress (set by the platform; may be null in tools). */
+    public Settings settings;
+    private float attractYaw = Float.NaN;
+
+    /**
+     * The main menu's backdrop: the world goes on (traffic, weather, time of day) while the camera
+     * circles slowly, high above wherever the player is.
+     */
+    public void attract(float dt) {
+        inGas = inBrake = inSteer = 0f;
+        if (vehicle != null) vehicle.handbrake = false;
+        worldTick(dt);
+        if (Float.isNaN(attractYaw)) attractYaw = cam.yaw;
+        attractYaw += dt * 0.05f;
+        if (mode == Mode.DRIVING && vehicle != null) vehicle.update(dt, 0f, 0f, 1f, city, null);
+        float fx = mapX(), fz = mapZ(), fy = driving() && vehicle != null ? vehicle.y : player.y;
+        cam.yaw = attractYaw;
+        cam.pitch += ((float) Math.toRadians(24) - cam.pitch) * Math.min(1f, dt * 1.5f);
+        cam.distance += (20f - cam.distance) * Math.min(1f, dt * 1.5f);
+        cam.targetHeight += (2.6f - cam.targetHeight) * Math.min(1f, dt * 1.5f);
+        cam.update(fx, fy, fz, dt);
+        cameraCollision();
+        audio.update(dt);
+    }
+
+    /** Leaves the menu backdrop: the chase camera takes over again from where it is. */
+    public void endAttract() { attractYaw = Float.NaN; camIdle = 1f; }
+
+    /** The nearest ordinary street to (x, z): out = {x, z, yaw} in a lane (car) or on the kerb. */
+    boolean streetSpot(float x, float z, boolean lane, float[] out) {
+        float[] hit = new float[3], q = new float[5];
+        boolean onRoad = false;
+        for (float reach = 60f; reach <= 960f && !onRoad; reach *= 2f) onRoad = city.roads.nearestDrivable(x, z, reach, hit);
+        if (!onRoad) return false;
+        com.harlequinxd.drivehard.core.road.RoadEdge e = city.roads.edges.get((int) hit[0]);
+        float s = hit[1];
+        float lo = Math.min(e.len * 0.5f, e.clearA + 10f), hi = Math.max(e.len * 0.5f, e.len - e.clearB - 10f);
+        s = Math.max(lo, Math.min(hi, s));
+        if (lane) {
+            e.lanePoint(s, 1, e.laneOffset(e.oneWay ? 0 : e.cls.lanes - 1), q);
+            out[0] = q[0]; out[1] = q[1];
+        } else {
+            e.point(s, q);
+            float off = e.cls.halfWidth() + (e.cls.city ? City.SIDEWALK * 0.5f : 1.2f);
+            out[0] = q[0] + q[4] * off; out[1] = q[1] - q[3] * off;
+        }
+        out[2] = (float) Math.atan2(q[3], q[4]);
+        return true;
+    }
+
+    /**
+     * Puts the player at a mission's start: in a car (the one they are driving, or a fresh one)
+     * stopped in a lane, or on foot on the kerb. Far moves build the streets there first.
+     */
+    void placeForMission(float x, float z, float yaw, boolean inCar) {
+        if (Math.hypot(x - mapX(), z - mapZ()) > 150f) {
+            traffic.cars.clear();
+            pedestrians.peds.clear();
+            city.chunks.loadAllNow(x, z, null);
+        }
+        float y = city.surface(x, z) + 0.05f;
+        if (inCar) {
+            if (vehicle == null || !driving()) {
+                if (vehicle != null) parked.add(vehicle);
+                int style = pickReady(carEntries, rnd);
+                if (style < 0) style = rnd.nextInt(Cars.STYLES);
+                vehicle = new Vehicle(style, x, z, yaw, 0f);
+            }
+            vehicle.x = x; vehicle.z = z; vehicle.yaw = yaw; vehicle.y = y;
+            vehicle.vx = vehicle.vz = 0f;
+            vehicle.setSpeed(0f);
+            vehicle.parkingBrake = false;
+            mode = Mode.DRIVING;
+            player.x = x; player.z = z; player.y = y;
+        } else {
+            if (vehicle != null && driving()) { vehicle.parkingBrake = true; parked.add(vehicle); }
+            vehicle = null;
+            mode = Mode.ON_FOOT;
+            player.x = x; player.z = z; player.y = y;
+            player.vx = player.vy = player.vz = 0f;
+            player.facing = yaw;
+            player.onGround = true;
+        }
+        while (parked.size() > MAX_PARKED) parked.remove(0);
+        cam.yaw = yaw + (float) Math.PI;
+        cam.pitch = (float) Math.toRadians(16);
+        camIdle = 1f;
+        placeTimer = 0f;
     }
 
     /** Chase camera while driving: pulls back, raises the target, and swings behind the car when not dragged. */

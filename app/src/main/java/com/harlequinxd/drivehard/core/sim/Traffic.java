@@ -65,6 +65,8 @@ public final class Traffic {
     public float spawnMin = 55f, spawnMax = 150f, despawn = 185f;
     /** Player-driven and parked cars that traffic must queue behind. */
     public List<Vehicle> obstacles;
+    /** A car a mission is following: only ever removed when it is really far away. */
+    public Car keep;
     /** Statistics: junction movements made, and entries into a city junction on red (should stay 0). */
     public int turnsTotal, redEntries;
 
@@ -111,7 +113,7 @@ public final class Traffic {
             Car c = cars.get(i);
             float dx = c.x - px, dz = c.z - pz, d2 = dx * dx + dz * dz;
             // far away, or out of view and more than the area needs: gone
-            if (d2 > despawn * despawn || (cars.size() > want && d2 > spawnMin * spawnMin && !inView(c))) cars.remove(i);
+            if (d2 > despawn * despawn || (c != keep && cars.size() > want && d2 > spawnMin * spawnMin && !inView(c))) cars.remove(i);
         }
         if (cars.size() < want) spawn(px, pz);
         for (int i = 0; i < cars.size(); i++) {

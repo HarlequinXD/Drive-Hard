@@ -47,6 +47,9 @@ public final class Vehicle {
     public float slipFront, slipRear;
     /** Seconds since the last hard impact (for a little camera shake / HUD). */
     public float sinceCrash = 99f;
+    /** Every impact over a light bump counts up here, with its closing speed (m/s), for sounds. */
+    public int impacts;
+    public float impact;
 
     private final float mass, inertia, wheelbase, a, b, cgH, mu, power, drag, top;
     private final int drive;
@@ -242,7 +245,9 @@ public final class Vehicle {
             z = Math.max(world.minZ + 2f, Math.min(world.maxZ - 2f, z));
             if (world.blocked(x, z)) {
                 x = ox; z = oz;
-                if (Math.hypot(vx, vz) > 6f) sinceCrash = 0f;
+                float hs = (float) Math.hypot(vx, vz);
+                if (hs > 6f) sinceCrash = 0f;
+                if (hs > 1.2f) { impacts++; impact = hs; }
                 vx *= -0.15f; vz *= -0.15f; spin *= 0.3f;
                 break;
             }
@@ -306,6 +311,7 @@ public final class Vehicle {
         vz += jt * tz / mass;
         spin += (ox * tz - oz * tx) * jt / inertia;
         if (-vn > 6f) sinceCrash = 0f;
+        if (-vn > 1.2f) { impacts++; impact = -vn; }
     }
 
     /** Circle vs axis-aligned box: writes push-out (x, z, length). */
