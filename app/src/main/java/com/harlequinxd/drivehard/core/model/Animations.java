@@ -81,6 +81,28 @@ public final class Animations {
         }
     }
 
+    /** The walk and run cycles at a phase (0..1, the same footfalls in both), for blending. */
+    public static Pose walkPose(float p) { return walk(p); }
+
+    public static Pose runPose(float p) { return run(p); }
+
+    /** a toward b by t (0..1), joint by joint. */
+    public static Pose blend(Pose a, Pose b, float t) {
+        if (t <= 0f) return a;
+        if (t >= 1f) return b;
+        Pose o = new Pose();
+        for (int i = 0; i < BONES; i++) {
+            o.rx[i] = a.rx[i] + (b.rx[i] - a.rx[i]) * t;
+            o.ry[i] = a.ry[i] + (b.ry[i] - a.ry[i]) * t;
+            o.rz[i] = a.rz[i] + (b.rz[i] - a.rz[i]) * t;
+        }
+        o.rootX = a.rootX + (b.rootX - a.rootX) * t;
+        o.rootY = a.rootY + (b.rootY - a.rootY) * t;
+        o.rootZ = a.rootZ + (b.rootZ - a.rootZ) * t;
+        o.grounded = t < 0.5f ? a.grounded : b.grounded;
+        return o;
+    }
+
     private static float pos(float v) { return v > 0 ? v : 0; }
 
     private static void arms(Pose o, float rxL, float rxR, float out, float elbowL, float elbowR) {

@@ -287,6 +287,12 @@ public final class GameAudio {
         // into the water
         if (p.splashImpact < -1f) at(p.splashImpact < -5f ? bank.splashBig : bank.landWater, p.x, p.z, 0.9f, 8f, vary(0.1f));
         else if (p.swimming && !lastSwim && !wasWet) at(bank.splashSmall, p.x, p.z, 0.6f, 6f, vary(0.1f));
+        // running into things, and skidding to turn
+        if (p.bumpImpact > 0f) at(bank.bodyHit[p.bumpImpact > 4.5f ? 1 : 0], p.x, p.z, Math.min(1f, 0.35f + p.bumpImpact * 0.1f), 6f, vary(0.12f));
+        if (p.skidStart && !p.swimming) {
+            int f = g.city.footing(p.x, p.z);
+            at(f == 0 ? pick(bank.stepHard) : f == 1 ? pick(bank.stepGrass) : pick(bank.stepSand), p.x, p.z, 0.8f, 6f, 0.7f);
+        }
         // jumping and landing
         if (lastGround && !p.onGround && p.vy > 3f && !p.swimming) at(bank.jump, p.x, p.z, 0.45f, 6f, vary(0.1f));
         if (!lastGround && p.onGround && lastVy < -4.5f) at(wet ? pick(bank.stepWater) : bank.land, p.x, p.z, Math.min(1f, -lastVy / 12f), 6f, vary(0.1f));

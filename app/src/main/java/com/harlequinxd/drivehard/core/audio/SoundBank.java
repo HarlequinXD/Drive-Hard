@@ -14,6 +14,8 @@ public final class SoundBank {
     public final short[] jump, land, landWater;
     // swimming
     public final short[][] stroke = new short[3][];
+    /** Running into something on foot: a body thump. */
+    public final short[][] bodyHit = new short[2][];
     public final short[] splashBig, splashSmall;
     // the car
     public final short[] doorOpen, doorClose, starter, handbrake, gearClunk, horn, hornShort;
@@ -39,6 +41,8 @@ public final class SoundBank {
         }
         jump = whoosh(0.18f, 900f, 2600f, 0.5f, 11);
         land = thud(0.16f, 90f, 0.8f, 12);
+        bodyHit[0] = thud(0.14f, 70f, 0.9f, 41);
+        bodyHit[1] = thud(0.2f, 55f, 1f, 42);
         landWater = splash(0.4f, 0.8f, 13);
         splashBig = splash(0.85f, 1f, 14);
         splashSmall = splash(0.25f, 0.45f, 15);

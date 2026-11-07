@@ -865,7 +865,7 @@ public final class Game {
         if (p.waterDepth < 0.15f && !p.swimming)
             r.groundQuad(lib.shadow, p.x, gy + 0.02f, p.z, 0.38f * (1f - air * 0.4f), SoftRenderer.MODE_SHADOW, SoftRenderer.L_SHADOW);
         // the sprite puppet on her skeleton; in water only what is above the surface is drawn
-        Pose pose = Animations.poseAt(p.anim, p.animPhase(), p.animFrame);
+        Pose pose = p.pose();
         float clip = p.swimming ? p.y : (p.waterDepth > 0.02f && p.y < 0f ? 0f : -1e9f);
         // while hopping in, draw her just in front of the car so she reads as climbing in
         puppet.draw(r, p.x, p.y, p.z, p.facing, pose, clip, mode == Mode.ENTERING ? -1.6f : -0.8f);
