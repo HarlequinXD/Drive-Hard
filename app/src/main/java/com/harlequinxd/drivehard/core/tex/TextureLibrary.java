@@ -34,8 +34,6 @@ public final class TextureLibrary implements java.io.Serializable {
     public final int laneStreet, laneAvInner, laneAvOuter, mouthStreet, mouthAvenue, mouthCountry, mouthHighway, mouthLane;
     public final int laneCountry, laneHwInner, laneHwOuter, laneHwMedian, laneFwInner, laneFwOuter, laneRamp, laneTown, walkStrip, mouthTown;
     public final int blockWall;
-    /** The ground's tile set (terrain cells, transitions, asphalt). */
-    public final TerrainTiles tiles;
     public final List<String> shopNames = new ArrayList<>();
     public static final String[] STATIONS = {"MINATO-CHUO", "SAKURAGAOKA", "HIGASHI-HAMA"};
 
@@ -118,46 +116,37 @@ public final class TextureLibrary implements java.io.Serializable {
         vinyl = add(FarmTextures.vinyl(seed));
         gravel = add(FarmTextures.gravel(seed));
         guardrail = add(FarmTextures.guardrail(seed));
-        // the ground's 128-texel, 8 m tiles; lanes and junction mouths are cut from the same asphalt
-        int terrainFrom = list.size();
-        tiles = new TerrainTiles(this, seed);
-        int terrainTo = list.size();
-        Texture asp = list.get(tiles.asphalt);
-        float tm = TerrainTiles.METRES;
-        laneCountry = add(FarmTextures.lane(asp, tm, 3.0f, FarmTextures.LINE_DASH5, FarmTextures.LINE_SOLID));
-        laneHwInner = add(FarmTextures.lane(asp, tm, 3.25f, FarmTextures.LINE_NONE, FarmTextures.LINE_DASH5));
-        laneHwOuter = add(FarmTextures.lane(asp, tm, 3.25f, FarmTextures.LINE_NONE, FarmTextures.LINE_SOLID));
-        laneHwMedian = add(FarmTextures.lane(asp, tm, 0.6f, FarmTextures.LINE_DOUBLE_YELLOW, FarmTextures.LINE_NONE));
-        laneFwInner = add(FarmTextures.lane(asp, tm, 3.5f, FarmTextures.LINE_YELLOW, FarmTextures.LINE_DASH8));
-        laneFwOuter = add(FarmTextures.lane(asp, tm, 3.5f, FarmTextures.LINE_NONE, FarmTextures.LINE_THICK));
-        laneStreet = add(FarmTextures.lane(asp, tm, 3.5f, FarmTextures.LINE_NONE, FarmTextures.LINE_SOLID));
-        laneAvInner = add(FarmTextures.lane(asp, tm, 3.5f, FarmTextures.LINE_YELLOW, FarmTextures.LINE_DASH5));
-        laneAvOuter = add(FarmTextures.lane(asp, tm, 3.5f, FarmTextures.LINE_NONE, FarmTextures.LINE_SOLID));
-        mouthStreet = add(FarmTextures.mouth(asp, tm, 13f, 5f, 3.75f, true, true));
-        mouthAvenue = add(FarmTextures.mouth(asp, tm, 22f, 5f, 8.3f, true, true));
-        mouthCountry = add(FarmTextures.mouth(asp, tm, 7.8f, 3f, 3.1f, false, true));
-        mouthHighway = add(FarmTextures.mouth(asp, tm, 16.6f, 3f, 6.8f, false, true));
-        mouthLane = add(FarmTextures.mouth(asp, tm, 4.4f, 3f, 2.0f, false, true));
-        laneRamp = add(FarmTextures.lane(asp, tm, 3.75f, FarmTextures.LINE_SOLID, FarmTextures.LINE_SOLID));
-        laneTown = add(FarmTextures.lane(asp, tm, 2.75f, FarmTextures.LINE_NONE, FarmTextures.LINE_SOLID));
+        int lanesFrom = list.size();
+        Texture asp = list.get(asphalt);
+        laneCountry = add(FarmTextures.lane(asp, 3.0f, FarmTextures.LINE_DASH5, FarmTextures.LINE_SOLID));
+        laneHwInner = add(FarmTextures.lane(asp, 3.25f, FarmTextures.LINE_NONE, FarmTextures.LINE_DASH5));
+        laneHwOuter = add(FarmTextures.lane(asp, 3.25f, FarmTextures.LINE_NONE, FarmTextures.LINE_SOLID));
+        laneHwMedian = add(FarmTextures.lane(asp, 0.6f, FarmTextures.LINE_DOUBLE_YELLOW, FarmTextures.LINE_NONE));
+        laneFwInner = add(FarmTextures.lane(asp, 3.5f, FarmTextures.LINE_YELLOW, FarmTextures.LINE_DASH8));
+        laneFwOuter = add(FarmTextures.lane(asp, 3.5f, FarmTextures.LINE_NONE, FarmTextures.LINE_THICK));
+        laneStreet = add(FarmTextures.lane(asp, 3.5f, FarmTextures.LINE_NONE, FarmTextures.LINE_SOLID));
+        laneAvInner = add(FarmTextures.lane(asp, 3.5f, FarmTextures.LINE_YELLOW, FarmTextures.LINE_DASH5));
+        laneAvOuter = add(FarmTextures.lane(asp, 3.5f, FarmTextures.LINE_NONE, FarmTextures.LINE_SOLID));
+        mouthStreet = add(FarmTextures.mouth(asp, 13f, 5f, 3.75f, true, true));
+        mouthAvenue = add(FarmTextures.mouth(asp, 22f, 5f, 8.3f, true, true));
+        mouthCountry = add(FarmTextures.mouth(asp, 7.8f, 3f, 3.1f, false, true));
+        mouthHighway = add(FarmTextures.mouth(asp, 16.6f, 3f, 6.8f, false, true));
+        mouthLane = add(FarmTextures.mouth(asp, 4.4f, 3f, 2.0f, false, true));
+        laneRamp = add(FarmTextures.lane(asp, 3.75f, FarmTextures.LINE_SOLID, FarmTextures.LINE_SOLID));
+        laneTown = add(FarmTextures.lane(asp, 2.75f, FarmTextures.LINE_NONE, FarmTextures.LINE_SOLID));
         walkStrip = add(FarmTextures.walkStrip(asp, 1.75f));
-        mouthTown = add(FarmTextures.mouth(asp, tm, 9f, 3f, 2.75f, false, true));
+        mouthTown = add(FarmTextures.mouth(asp, 9f, 3f, 2.75f, false, true));
         int lanesTo = list.size();
         houseTextures((int) seed);
         houseKits(seed, lowMemory);
         // the pixel-art finish: baked relief light and dithered palettes on everything
         java.util.Set<Integer> done = new java.util.HashSet<>();
         done.add(shadow);
-        List<Texture> ground = new ArrayList<>(), roads = new ArrayList<>();
-        for (int i = terrainFrom; i < terrainTo; i++) {
-            if (i == tiles.asphalt) continue;
-            ground.add(list.get(i));
-            done.add(i);
-        }
-        roads.add(list.get(tiles.asphalt));
-        done.add(tiles.asphalt);
-        for (int i = terrainTo; i < lanesTo; i++) { roads.add(list.get(i)); done.add(i); }
-        PixelArt.stylizeGroup(ground, (int) seed);
+        // lane and junction textures are cut from the asphalt and meet it: one shared palette
+        List<Texture> roads = new ArrayList<>();
+        roads.add(list.get(asphalt));
+        done.add(asphalt);
+        for (int i = lanesFrom; i < lanesTo; i++) { roads.add(list.get(i)); done.add(i); }
         PixelArt.stylizeGroup(roads, (int) seed + 1);
         PixelArt.stylizeAll(list, done);
     }

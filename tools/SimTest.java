@@ -395,6 +395,7 @@ public class SimTest {
         h = h * 31 + c.boxes.size() * 7 + c.spriteCount;
         for (int i = 0; i < c.spriteCount * com.harlequinxd.drivehard.core.city.Chunk.SPRITE_STRIDE; i++) h = h * 31 + Float.floatToIntBits(c.sprites[i]);
         if (c.ground != null) {
+            for (short[] m : c.ground.mips) for (short v : m) h = h * 31 + v;
             for (float v : c.ground.h) h = h * 31 + Float.floatToIntBits(v);
             if (c.ground.water != null) for (byte v : c.ground.water) h = h * 31 + v;
         }

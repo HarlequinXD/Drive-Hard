@@ -24,13 +24,11 @@ public final class MainMenu extends Paint {
             "SOUND, PICTURE AND POLYGONS.",
             "SEE YOU ON THE ROAD.",
     };
-    private static final String[] OPT_ITEMS = {"MUSIC", "EFFECTS", "TEXTURES", "POLYGONS", "BACK"};
-    private static final String[] TEX_NAMES = {"GBA WARP", "PS1 WARP", "PERSPECTIVE"};
+    private static final String[] OPT_ITEMS = {"MUSIC", "EFFECTS", "POLYGONS", "BACK"};
     private static final String[] OPT_HELP = {
             "VOLUME OF THE THEME.",
             "VOLUME OF CARS, FOOTSTEPS, WEATHER AND MENUS.",
-            "GBA: EDGE-WALKED AFFINE. PS1: TRIANGLE AFFINE. PERSPECTIVE: EXACT.",
-            "PS1 ORDERING TABLE, OR A DEPTH BUFFER (PHONE GPU).",
+            "DEPTH BUFFER: NOTHING SHOWS THROUGH. PS1 SORT: THE ORIGINAL ORDERING TABLE.",
             "",
     };
 
@@ -111,8 +109,7 @@ public final class MainMenu extends Paint {
         switch (index) {
             case 0: settings.music = Math.max(0, Math.min(10, settings.music + d)); break;
             case 1: settings.effects = Math.max(0, Math.min(10, settings.effects + d)); break;
-            case 2: settings.textures = (settings.textures + d + 3) % 3; break;
-            case 3: settings.psxSort = !settings.psxSort; break;
+            case 2: settings.psxSort = !settings.psxSort; break;
             default: return;
         }
         settings.apply(g);
@@ -342,7 +339,7 @@ public final class MainMenu extends Paint {
             int a = (int) (256 * in);
             text(OPT_ITEMS[i], x0 + 6 - off, y, 1, on ? 0xFFFFFFFF : 0xFFC9D1D5, a, false, on ? 0xFF000000 : 0);
             boxes.add(new int[]{0, y - 5, vx - 4, y + 12, i});
-            if (i >= 4) continue;
+            if (i >= 3) continue;
             int vw = rowW - (vx - x0) - 14;
             valueBoxes.add(new int[]{vx - 4, y - 5, vx + vw + 8, y + 12, i});
             text("<", vx - off, y, 1, on ? 0xFFFFFFFF : GREY, a, false, 0);
@@ -356,7 +353,7 @@ public final class MainMenu extends Paint {
                     rect(sx, y + 7 - segH, ex, y + 7, k < v ? (on ? 0xFFFFFFFF : GOLD) : 0xFF2A3238, a);
                 }
             } else {
-                String v = i == 2 ? TEX_NAMES[settings.textures] : settings.psxSort ? "PS1 SORT" : "DEPTH BUFFER";
+                String v = settings.psxSort ? "PS1 SORT" : "DEPTH BUFFER";
                 text(v, bx + (bw - textW(v, 1)) / 2, y, 1, on ? 0xFFFFFFFF : GOLD, a, false, on ? 0xFF000000 : 0);
             }
         }

@@ -57,12 +57,13 @@ final class GlShaders {
             + "uniform usampler2D uInfo;\n"
             + "out vec2 vUv;\n"
             + "out vec2 vUvW;\n"                         // uv * w: screen-linear uv after / vW
+            + "out vec3 vB;\n"                           // corner barycentrics * w
             + "out float vW;\n"
             + "uniform int uCorners;\n"                   // 1: polygon corners in uCornerTex (the ordering table)
             + "uniform float uNear;\n"
             + "uniform highp sampler2D uCornerTex;\n"
-            // the polygon's outline on screen, clipped to the near plane: up to 5 corners (x, y pixels, u, v)
-            + "flat out vec4 vP0, vP1, vP2, vP3, vP4;\n"
+            + "flat out vec4 vO0, vO1;\n"                // the polygon's outline on screen (pixels), clipped
+            + "flat out vec2 vO2;\n"                     // to the near plane: up to 5 corners
             + "flat out int vON;\n"
             + "vec2 toPixel(vec3 p) { float z; vec4 c = project(p, 1.0, z); return (c.xy / c.w * 0.5 + 0.5) * uRes; }\n"
             + "float viewZ(vec3 p) { vec3 d = p - uEye; return d.x * uBasis.z + d.z * uBasis.w; }\n"
@@ -84,29 +85,30 @@ final class GlShaders {
             + "  float vz;\n"
             + "  gl_Position = project(p, aLit.z * 4.0, vz);\n"
             + "  vDepth = vz;\n"
+            // polygons are 4 vertices each, (0 1 2) (0 2 3): corner 3 takes corner 1's slot, so each
+            // triangle sees three distinct barycentric corners
             + "  int k = gl_VertexID & 3;\n"
+            + "  vec3 bc = k == 0 ? vec3(1.0, 0.0, 0.0) : (k == 2 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0));\n"
             + "  vW = gl_Position.w;\n"
+            + "  vB = bc * vW;\n"
             + "  vUvW = vUv * vW;\n"
             // the provoking corners (2 and 3) carry the whole polygon's outline to the fragments
-            + "  vON = 0; vP0 = vP1 = vP2 = vP3 = vP4 = vec4(0.0);\n"
+            + "  vON = 0; vO0 = vec4(0.0); vO1 = vec4(0.0); vO2 = vec2(0.0);\n"
             + "  if (uCorners != 0 && k >= 2) {\n"
             + "    int pi = gl_VertexID >> 2;\n"
-            + "    ivec2 t = ivec2((pi & 255) * 5, pi >> 8);\n"
+            + "    ivec2 t = ivec2((pi & 255) * 3, pi >> 8);\n"
             + "    vec4 a = texelFetch(uCornerTex, t, 0), b = texelFetch(uCornerTex, t + ivec2(1, 0), 0), c = texelFetch(uCornerTex, t + ivec2(2, 0), 0);\n"
-            + "    vec4 d = texelFetch(uCornerTex, t + ivec2(3, 0), 0), e = texelFetch(uCornerTex, t + ivec2(4, 0), 0);\n"
-            + "    vec3 P[4] = vec3[4](a.xyz + uOffset, vec3(a.w, b.xy) + uOffset, vec3(b.zw, c.x) + uOffset, c.yzw + uOffset);\n"
-            + "    vec2 sc = vec2((aTex.y & 8u) != 0u ? uScroll : 0.0, 0.0);\n"
-            + "    vec2 T[4] = vec2[4](d.xy + sc, d.zw + sc, e.xy + sc, e.zw + sc);\n"
-            + "    vec4 S[5]; int n = 0;\n"
+            + "    vec3 P[4] = vec3[4](a.xyz, vec3(a.w, b.xy), vec3(b.zw, c.x), c.yzw);\n"
+            + "    vec2 S[5]; int n = 0;\n"
             + "    for (int i = 0; i < 4; i++) {\n"
-            + "      int j = (i + 1) & 3;\n"
-            + "      float za = viewZ(P[i]), zb = viewZ(P[j]);\n"
+            + "      vec3 A = P[i], B = P[(i + 1) & 3];\n"
+            + "      float za = viewZ(A), zb = viewZ(B);\n"
             + "      bool ia = za >= uNear, ib = zb >= uNear;\n"
-            + "      if (ia && n < 5) S[n++] = vec4(toPixel(P[i]), T[i]);\n"
-            + "      if (ia != ib && n < 5) { float f = (uNear - za) / (zb - za); S[n++] = vec4(toPixel(mix(P[i], P[j], f)), mix(T[i], T[j], f)); }\n"
+            + "      if (ia && n < 5) S[n++] = toPixel(A);\n"
+            + "      if (ia != ib && n < 5) S[n++] = toPixel(mix(A, B, (uNear - za) / (zb - za)));\n"
             + "    }\n"
             + "    for (int i = n; i < 5; i++) S[i] = S[0];\n"
-            + "    vP0 = S[0]; vP1 = S[1]; vP2 = S[2]; vP3 = S[3]; vP4 = S[4]; vON = n;\n"
+            + "    vO0 = vec4(S[0], S[1]); vO1 = vec4(S[2], S[3]); vO2 = S[4]; vON = n;\n"
             + "  }\n"
             + "}\n";
 
@@ -125,10 +127,12 @@ final class GlShaders {
             + "uniform int uTexMap;\n"
             + "uniform int uCorners;\n"
             + "uniform vec2 uRes;\n"
-            + "flat in vec4 vP0, vP1, vP2, vP3, vP4;\n"
+            + "flat in vec4 vO0, vO1;\n"
+            + "flat in vec2 vO2;\n"
             + "flat in int vON;\n"                    // 0 perspective, 1 GBA scanline, 2 PS1 affine
             + "in vec2 vUv;\n"
             + "in vec2 vUvW;\n"
+            + "in vec3 vB;\n"
             + "in float vW;\n"
             + "in vec2 vLit;\n"
             + "in float vDepth;\n"
@@ -138,26 +142,40 @@ final class GlShaders {
             + "out vec4 outColor;\n"
             // GBA: this row's span of the triangle runs between the two edges it crosses; the texture
             // is exact there (uv/w and 1/w are linear on screen) and stepped linearly in between
-            // GBA: no divides. The polygon is walked whole: u, v step linearly down its edges (on screen)
-            // and linearly across each row between them, so it warps as one piece, floors included
             + "vec2 mapUv() {\n"
             + "  if (uTexMap == 0) return vUv;\n"
-            + "  if (uTexMap == 2 || uCorners == 0 || vON < 3) return vUvW / vW;\n"
-            + "  vec4 S[5] = vec4[5](vP0, vP1, vP2, vP3, vP4);\n"
-            + "  float y = gl_FragCoord.y, xl = 1e9, xr = -1e9;\n"
-            + "  vec2 tl = vec2(0.0), tr = vec2(0.0);\n"
-            + "  for (int i = 0; i < 5; i++) {\n"
-            + "    if (i >= vON) break;\n"
-            + "    vec4 A = S[i], B = S[(i + 1) % vON];\n"
-            + "    if ((A.y <= y && B.y > y) || (B.y <= y && A.y > y)) {\n"
-            + "      float f = (y - A.y) / (B.y - A.y);\n"
-            + "      vec4 C = mix(A, B, f);\n"
-            + "      if (C.x < xl) { xl = C.x; tl = C.zw; }\n"
-            + "      if (C.x > xr) { xr = C.x; tr = C.zw; }\n"
+            + "  if (uTexMap == 2) return vUvW / vW;\n"
+            + "  vec3 q = vec3(vUv, 1.0) / vW, dq = dFdx(q);\n"
+            + "  float x = gl_FragCoord.x, lo = -1e6, hi = 1e6;\n"
+            + "  bool found = false;\n"
+            + "  if (uCorners != 0 && vON >= 3) {\n"
+            // the whole polygon's span on this row: where the row crosses its outline
+            + "    vec2 S[5] = vec2[5](vO0.xy, vO0.zw, vO1.xy, vO1.zw, vO2);\n"
+            + "    float y = gl_FragCoord.y, xl = 1e9, xr = -1e9;\n"
+            + "    for (int i = 0; i < 5; i++) {\n"
+            + "      if (i >= vON) break;\n"
+            + "      vec2 A = S[i], B = S[(i + 1) % vON];\n"
+            + "      if ((A.y <= y && B.y > y) || (B.y <= y && A.y > y)) {\n"
+            + "        float cx = A.x + (y - A.y) * (B.x - A.x) / (B.y - A.y);\n"
+            + "        xl = min(xl, cx); xr = max(xr, cx);\n"
+            + "      }\n"
+            + "    }\n"
+            + "    if (xr > xl) { lo = xl - x; hi = xr - x; found = true; }\n"
+            + "  }\n"
+            + "  if (!found) {\n"
+            // otherwise this triangle's span, from where its barycentrics reach zero along the row
+            + "    vec3 b = vB / vW, db = dFdx(b);\n"
+            + "    for (int i = 0; i < 3; i++) {\n"
+            + "      if (db[i] > 1e-7) lo = max(lo, -b[i] / db[i]);\n"
+            + "      else if (db[i] < -1e-7) hi = min(hi, -b[i] / db[i]);\n"
             + "    }\n"
             + "  }\n"
-            + "  if (xr - xl < 0.01) return vUvW / vW;\n"
-            + "  return mix(tl, tr, (gl_FragCoord.x - xl) / (xr - xl));\n"
+            // polygons were clipped to the screen's sides, so a span is exact where it leaves the screen
+            + "  lo = max(lo, -x); hi = min(hi, uRes.x - x);\n"
+            + "  if (hi - lo < 0.01) return vUv;\n"
+            + "  vec3 qa = q + dq * lo, qb = q + dq * hi;\n"
+            + "  if (qa.z <= 0.0 || qb.z <= 0.0) return vUv;\n"
+            + "  return mix(qa.xy / qa.z, qb.xy / qb.z, clamp(-lo / (hi - lo), 0.0, 1.0));\n"
             + "}\n"
             + "void main() {\n"
             + "  if ((vFlags & 4u) != 0u && vDist > uDetail) discard;\n"
@@ -188,19 +206,17 @@ final class GlShaders {
             + "out vec3 vWorld;\n"
             + "out float vDepth;\n"
             + "out vec3 vColor;\n"
-            + "uniform float uGroundS;\n"
             + "void main() {\n"
             + "  vWorld = aPos;\n"
             + "  vColor = aColor.rgb;\n"
             + "  float vz;\n"
-            // the ground's depth is written ~6% farther: things standing on it always show
-            + "  gl_Position = project(aPos, uGroundS, vz);\n"
+            // the ground's depth is written 6% farther: things standing on it always show
+            + "  gl_Position = project(aPos, 0.94, vz);\n"
             + "  vDepth = vz;\n"
             + "}\n";
 
     static final String GROUND_FS = HEAD + DITHER
-            + "uniform sampler2D uMap;\n"           // the sand tile under the shallows (repeating)
-            + "uniform float uSandM;\n"            // metres per sand tile
+            + "uniform sampler2D uMap;\n"           // the tile's painted colours (with mips)
             + "uniform sampler2D uWater;\n"         // sea-floor / sand height, 65 x 65 (linear)
             + "uniform sampler2D uWaves;\n"         // this frame's wave field: brightness / 2, highlight
             + "uniform sampler2D uAlong;\n"         // along-shore phase, 64 x 64
@@ -303,14 +319,9 @@ final class GlShaders {
             + "    c = floor(vColor * 255.0 / 8.0);\n"
             + "    c = c * 8.0 + floor(c / 4.0);\n"
             + "  } else {\n"
-            // dry land belongs to the terrain's polygons
-            + "    float lx = clamp(vWorld.x - uTile.x, 0.0, 64.0), lz = clamp(vWorld.z - uTile.y, 0.0, 64.0);\n"
-            + "    if (uHasWater == 0 || 0.8 - texture(uWater, vec2((lx + 0.5) / 65.0, (lz + 0.5) / 65.0)).r * 255.0 * 0.05 > 0.5) discard;\n"
             + "    if (dr > uMip.x * 2.0) mip = clamp(ceil(log2(dr / uMip.x)) - 1.0, 0.0, uMip.y - 1.0);\n"
-            + "    ivec2 ts = textureSize(uMap, 0);\n"
-            + "    float st = exp2(min(mip, 3.0));\n"
-            + "    ivec2 ti = ivec2(mod(floor(vWorld.xz / uSandM * vec2(ts) / st) * st, vec2(ts)));\n"
-            + "    vec3 m = texelFetch(uMap, ti, 0).bgr;\n"
+            + "    vec2 uv = clamp((vWorld.xz - uTile) / 64.0, 0.0, 0.99999);\n"
+            + "    vec3 m = textureLod(uMap, uv, mip).rgb;\n"
             // the 15-bit colour as 8-bit, as the CPU renderer expands it
             + "    vec3 q5 = floor(vec3(m.r * 31.0, m.g * 63.0, m.b * 31.0) + 0.5);\n"
             + "    q5.g = floor(q5.g / 2.0);\n"

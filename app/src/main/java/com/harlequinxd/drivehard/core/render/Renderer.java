@@ -19,17 +19,16 @@ public abstract class Renderer {
     public static final int TEX_PERSPECTIVE = 0;
     /**
      * Texture mapping the way the GBA's software 3D engines did it (V-Rally 3, Stuntman, Asterix &amp;
-     * Obelix XXL, Driv3r). The ARM7 has no divide instruction, so nothing is divided per pixel or
-     * per row: each polygon is walked whole, edge by edge, with u and v stepped linearly down its
-     * edges on screen and linearly across each row between them. Every polygon warps, roads and
-     * floors included, more the closer and bigger it is, but a quad bends as one piece: no seam
-     * along its diagonal as on the PS1, which splits it into two triangles.
+     * Obelix XXL, Driv3r): each scanline of a polygon is exact at its two ends, where the rasteriser
+     * already divides once per edge, and stepped linearly across. Floors and roads under the level
+     * camera come out true, since each row is one depth, while walls and slopes bow and swim
+     * sideways, more the closer they are.
      */
     public static final int TEX_GBA = 1;
     /** Texture mapping like the PS1: linear across the whole triangle on screen (warps on diagonals). */
     public static final int TEX_PS1 = 2;
     /** How textures sit on polygons: {@link #TEX_GBA}, {@link #TEX_PS1} or {@link #TEX_PERSPECTIVE}. */
-    public int texMap = TEX_GBA;
+    public int texMap = TEX_PERSPECTIVE;
 
     public final int W, H;
     /** The finished frame (CPU renderer); null when the frame lives on the GPU. */

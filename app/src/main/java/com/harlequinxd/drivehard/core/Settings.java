@@ -12,10 +12,11 @@ import java.util.Properties;
 public final class Settings {
     /** Volumes 0..10. */
     public int music = 7, effects = 8;
-    /** Texture mapping: 0 GBA warp, 1 PS1 warp, 2 exact. */
-    public int textures = 0;
-    /** Polygon sorting on the GPU: true PS1 ordering table, false depth buffer. */
-    public boolean psxSort = true;
+    /**
+     * Polygon sorting: false (the default) a depth buffer on top of the ordering table, so fences,
+     * walls and signs never show through what is in front of them; true pure PS1 ordering table.
+     */
+    public boolean psxSort = false;
     /** Story: missions passed (bit per mission) and best times in seconds (0 = none). */
     public int passed;
     public final float[] best = new float[16];
@@ -31,8 +32,7 @@ public final class Settings {
             p.load(in);
             s.music = clamp(Integer.parseInt(p.getProperty("music", "7")), 0, 10);
             s.effects = clamp(Integer.parseInt(p.getProperty("effects", "8")), 0, 10);
-            s.textures = clamp(Integer.parseInt(p.getProperty("textures", "0")), 0, 2);
-            s.psxSort = Boolean.parseBoolean(p.getProperty("psxSort", "true"));
+            s.psxSort = !Boolean.parseBoolean(p.getProperty("depthBuffer", "true"));
             s.passed = Integer.parseInt(p.getProperty("passed", "0"));
             for (int i = 0; i < s.best.length; i++) s.best[i] = Float.parseFloat(p.getProperty("best" + i, "0"));
         } catch (Exception ignored) {
@@ -46,8 +46,7 @@ public final class Settings {
         Properties p = new Properties();
         p.setProperty("music", Integer.toString(music));
         p.setProperty("effects", Integer.toString(effects));
-        p.setProperty("textures", Integer.toString(textures));
-        p.setProperty("psxSort", Boolean.toString(psxSort));
+        p.setProperty("depthBuffer", Boolean.toString(!psxSort));
         p.setProperty("passed", Integer.toString(passed));
         for (int i = 0; i < best.length; i++) if (best[i] > 0f) p.setProperty("best" + i, Float.toString(best[i]));
         try {
@@ -64,8 +63,10 @@ public final class Settings {
         g.audio.mixer.sfx = effects / 10f;
         Renderer r = g.renderer;
         if (r != null) {
-            r.texMap = textures == 0 ? Renderer.TEX_GBA : textures == 1 ? Renderer.TEX_PS1 : Renderer.TEX_PERSPECTIVE;
+            r.texMap = Renderer.TEX_PERSPECTIVE;                 // textures sit exactly on every polygon
             if (r instanceof GlRenderer) ((GlRenderer) r).psxSort = psxSort;
+            if (r instanceof com.harlequinxd.drivehard.core.render.SoftRenderer)
+                ((com.harlequinxd.drivehard.core.render.SoftRenderer) r).depthBuffer = !psxSort;
         }
     }
 

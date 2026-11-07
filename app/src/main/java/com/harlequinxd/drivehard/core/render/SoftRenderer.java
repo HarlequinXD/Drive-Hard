@@ -5,15 +5,15 @@ import com.harlequinxd.drivehard.core.Environment;
 import java.util.Arrays;
 
 /**
- * Software renderer: the animated sea as a Mode 7 pass ({@link #drawGround()}), whole polygons
- * with GBA / PS1 / perspective texturing, and sprites drawn as scaled rectangle blits.
+ * Software renderer: a Mode 7 ground map ({@link #drawGround()}), whole polygons with
+ * perspective-correct texturing, and sprites drawn as scaled rectangle blits.
  *
  * <ul>
- * <li>The sea is rendered first, then polygons and sprites are drawn far-to-near through a
- *   PlayStation-style ordering table grouped by layer and depth (no Z-buffer between them).</li>
- * <li>The sea and the ground layer's polygons (the tiled terrain) write a per-pixel occlusion
- *   depth that everything above them only tests: hills hide the houses, trees and cars behind
- *   them.</li>
+ * <li>The ground is rendered as the background, and polygons and sprites are drawn far-to-near
+ *   through a PlayStation-style ordering table grouped by layer and depth (no Z-buffer between
+ *   polygons).</li>
+ * <li>The ground writes a per-pixel occlusion depth that polygons and sprites only test: hills
+ *   hide the houses, trees and cars behind them.</li>
  * <li>Colour is reduced to 15-bit with 4x4 ordered dither; fog by view depth.</li>
  * </ul>
  */
@@ -37,10 +37,8 @@ public final class SoftRenderer extends Renderer {
     private final float[] P = new float[MAX_PRIMS * 3 * VA];
     private int primCount;
     /** Each triangle's whole polygon on screen (x, y per corner), for GBA scanline texture spans. */
-    private final float[] outline = new float[MAX_PRIMS * 8];      // x, y, u, v per corner
+    private final float[] outline = new float[MAX_PRIMS * 4];
     private final int[] pOut = new int[MAX_PRIMS], pOutN = new int[MAX_PRIMS];
-    /** Primitives of the ground layer (terrain tiles): they write the occlusion depth. */
-    private final boolean[] pGround = new boolean[MAX_PRIMS];
     private int outlineLen;
 
     private static final int[] BAYER = {0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5};
@@ -48,7 +46,20 @@ public final class SoftRenderer extends Renderer {
     public SoftRenderer(int w, int h) {
         super(w, h, new int[w * h]);
         groundZ = new float[w * h];
+        objZ = new float[w * h];
     }
+
+    /**
+     * A depth buffer (1/z) for objects and sprites on top of the ordering table: polygons are still
+     * drawn far to near, but a pixel that something nearer has already covered is not drawn over,
+     * so thin and interpenetrating things (fences, walls, signs, cars against walls) come out right.
+     * Off: pure PS1 ordering-table sorting.
+     */
+    public boolean depthBuffer = true;
+    private final float[] objZ;
+    /** A pixel counts as behind only when clearly so: decals laid on a surface still draw. */
+    private static final float Z_SLACK = 1.004f;
+    private final byte[] player = new byte[MAX_PRIMS];
 
     // ------------------------------------------------------------------ frame
 
@@ -116,12 +127,6 @@ public final class SoftRenderer extends Renderer {
     private final float[] groundZ;
     /** Small tolerance on the ground test (things touching the ground). */
     private static final float GROUND_SLACK = 1.004f;
-    /**
-     * Dry land in the sea pass: the polygons draw it. Its rows are marked, and whatever is still
-     * marked after the polygons (where the 8 m grid the pass marches stands above the true ground,
-     * by a ridge or a cutting) is sky or farther ground seen past the real surface: sky is filled in.
-     */
-    private static final int GAP = 0x00000000;
     private final float[] mipD = new float[Ground.MIPS];
     private Ground.Tile[] snap = new Ground.Tile[0];
     private int snapX, snapZ, snapN;
@@ -159,10 +164,10 @@ public final class SoftRenderer extends Renderer {
      * the flat parts, so the map looks like a proper Mode 7 plane, and hills rise and hide).
      */
     @Override public void drawGround() {
+        Arrays.fill(objZ, 0f);
         if (ground == null) { Arrays.fill(groundZ, 0f); return; }
         updateWater();
         for (int k = 0; k < Ground.MIPS; k++) mipD[k] = Ground.TEXEL * focal * (1 << k) * 1.4f;
-        // pixels the sea pass leaves alone: the polygons cover them
         // snapshot of the tiles in view range: per-pixel lookups index an array, no shared map
         int reach = (int) Math.ceil(far / Ground.TILE) + 1;
         snapN = reach * 2 + 1;
@@ -209,17 +214,16 @@ public final class SoftRenderer extends Renderer {
     }
 
     private int groundColor(TileCache tc, float x, float z, int k) {
-        int c;
-        if (!tc.at(this, x, z)) c = ground.color(x, z);
-        else {
-            // the sand under the shallows: the ground's own sand tile, so the beach runs on beneath the sea
-            Texture t = textures[ground.sandTexture()];
-            int st = 1 << Math.min(k, 3);
-            int px = ((int) Math.floor(x * (t.w / Ground.SAND_M)) & t.wMask) & ~(st - 1);
-            int pz = ((int) Math.floor(z * (t.h / Ground.SAND_M)) & t.hMask) & ~(st - 1);
-            c = t.px[(pz << t.wShift) | px];
+        if (!tc.at(this, x, z)) {
+            int c = ground.color(x, z);
+            return ((c >> 19) & 31) << 10 | ((c >> 11) & 31) << 5 | ((c >> 3) & 31);
         }
-        return ((c >> 19) & 31) << 10 | ((c >> 11) & 31) << 5 | ((c >> 3) & 31);
+        int n = Ground.RES >> k;
+        float sc = n / Ground.TILE;
+        int px = (int) ((x - tc.x0) * sc), pz = (int) ((z - tc.z0) * sc);
+        if (px >= n) px = n - 1; else if (px < 0) px = 0;
+        if (pz >= n) pz = n - 1; else if (pz < 0) pz = 0;
+        return tc.t.mips[k][(((pz >> 3) * (n >> 3) + (px >> 3)) << 6) | ((pz & 7) << 3) | (px & 7)];
     }
 
     /** Season (dry grass turns straw coloured) and scene light applied to the 15-bit ground colours. */
@@ -582,17 +586,9 @@ public final class SoftRenderer extends Renderer {
             float dr = 1f / izc;
             float px = ex + dx * dr, pz = ez + dz * dr;
             int k = base + y;
-            boolean loaded = tc.at(this, px, pz);
-            if (loaded && Float.isNaN(tc.t.waterAt(px - tc.x0, pz - tc.z0))) {
-                // dry land: the terrain's polygons draw it
-                cf[k] = GAP;
-                colZ[k] = 0f;
-                continue;
-            }
-            // the sea's depth is written a hair nearer than the terrain tiles', so it wins where both lie
-            colZ[k] = izc * (loaded ? 0.95f : 0.94f);
+            colZ[k] = izc * 0.94f;
             int c = groundLut[groundColor(tc, px, pz, mip)];
-            if (loaded) c = water(tc, px, pz, dr, c, mip, x, y);
+            if (tc.t != null && tc.t.water != null) c = water(tc, px, pz, dr, c, mip, x, y);
             if (dr <= fs) cf[k] = c;
             else {
                 int fv = (int) Math.min(256f, (dr - fs) * fogK * 256f);
@@ -837,30 +833,14 @@ public final class SoftRenderer extends Renderer {
         }
         orderCount = n;
         statPrims = n;
-        if (pool == null) drawBand(0, H);
-        else {
-            try {
-                pool.invokeAll(bands);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
+        if (pool == null) {
+            drawBand(0, H);
+            return;
         }
-        fillGaps();
-    }
-
-    /** Sky where the sea pass marked dry land that no polygon covered (see {@link #GAP}). */
-    private void fillGaps() {
-        int[] out = fb;
-        int[] sk = sky;
-        for (int y = 0; y < H; y++) {
-            int row = y * W;
-            for (int x = 0; x < W; x++) {
-                if (out[row + x] != GAP) continue;
-                if (env == null) { out[row + x] = sk[y * 4 + (x & 3)]; continue; }
-                float xs = (x + 0.5f - cx) / focal;
-                float dx = fx + rx * xs, dz = fz + rz * xs;
-                out[row + x] = skyPixel(x, y, dx, dz, dx * dx + dz * dz, (float) Math.atan2(dx, dz));
-            }
+        try {
+            pool.invokeAll(bands);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -1086,13 +1066,10 @@ public final class SoftRenderer extends Renderer {
         if (bucket >= BUCKETS) bucket = BUCKETS - 1;
         int hb = layer * BUCKETS + bucket;
         int os = -1;
-        if (outlineLen + n * 4 <= outline.length) {
+        if (outlineLen + n * 2 <= outline.length) {
             os = outlineLen;
-            for (int k = 0; k < n; k++) {
-                outline[os + k * 4] = scr[k * VA]; outline[os + k * 4 + 1] = scr[k * VA + 1];
-                outline[os + k * 4 + 2] = scr[k * VA + 2]; outline[os + k * 4 + 3] = scr[k * VA + 3];
-            }
-            outlineLen += n * 4;
+            for (int k = 0; k < n; k++) { outline[os + k * 2] = scr[k * VA]; outline[os + k * 2 + 1] = scr[k * VA + 1]; }
+            outlineLen += n * 2;
         }
         for (int k = 1; k < n - 1; k++) {
             if (primCount >= MAX_PRIMS) return;
@@ -1104,9 +1081,9 @@ public final class SoftRenderer extends Renderer {
             pdepth[p] = orderDepth;
             ptex[p] = texId;
             pmode[p] = mode;
+            player[p] = (byte) layer;
             pOut[p] = os;
             pOutN[p] = n;
-            pGround[p] = layer == L_GROUND;
             next[p] = head[hb];
             head[hb] = p;
         }
@@ -1165,7 +1142,9 @@ public final class SoftRenderer extends Renderer {
         float invA = dy1 > 0f ? 1f / dy1 : 0f, invB = (y2 - y1) > 0f ? 1f / (y2 - y1) : 0f;
         int mode = pmode[p];
         boolean shadow = mode == MODE_SHADOW, alpha = mode == MODE_ALPHA, blend = mode == MODE_BLEND;
-        boolean ground = pGround[p];
+        boolean zt = depthBuffer && player[p] >= L_OBJECT && !shadow;
+        boolean zw = zt && !blend;
+        float[] oz = objZ;
         // opaque spans overlap their right neighbour by a pixel: seals T-junction hairline cracks
         int seal = mode == MODE_OPAQUE ? 1 : 0;
         int fr = fogR, fg = fogG, fbb = fogB;
@@ -1192,36 +1171,39 @@ public final class SoftRenderer extends Renderer {
             int db = (y & 3) << 2;
             float iz = IZ > 1e-6f ? IZ : 1e-6f;
             float uA = Q / iz, vA = R / iz;
-            // GBA: the whole polygon walked edge by edge with no divide: u, v step linearly down its
-            // edges (on screen) and linearly across each row between them, so a quad warps as one
-            // piece, floors and roads included, with no seam along its diagonal
+            // GBA: the whole polygon's span on this row (clipped to the screen), exact at both ends
             boolean gspan = false;
             float gU = 0f, gV = 0f, gdU = 0f, gdV = 0f;
             if (tm == TEX_GBA && pOut[p] >= 0) {
                 int os = pOut[p], on = pOutN[p];
-                float pl = Float.MAX_VALUE, pr = -Float.MAX_VALUE, ul = 0f, vl = 0f, ur = 0f, vr = 0f;
+                float pl = Float.MAX_VALUE, pr = -Float.MAX_VALUE;
                 for (int e = 0; e < on; e++) {
-                    int ea = os + e * 4, eb = os + (e + 1 == on ? 0 : e + 1) * 4;
-                    float ax = outline[ea], ay = outline[ea + 1], bx = outline[eb], by = outline[eb + 1];
+                    float ax = outline[os + e * 2], ay = outline[os + e * 2 + 1];
+                    int e2 = e + 1 == on ? 0 : e + 1;
+                    float bx = outline[os + e2 * 2], by = outline[os + e2 * 2 + 1];
                     if ((ay <= yc && by > yc) || (by <= yc && ay > yc)) {
-                        float ft = (yc - ay) / (by - ay);
-                        float cxr = ax + (bx - ax) * ft;
-                        float cu = outline[ea + 2] + (outline[eb + 2] - outline[ea + 2]) * ft - ub;
-                        float cv = outline[ea + 3] + (outline[eb + 3] - outline[ea + 3]) * ft - vb;
-                        if (cxr < pl) { pl = cxr; ul = cu; vl = cv; }
-                        if (cxr > pr) { pr = cxr; ur = cu; vr = cv; }
+                        float cxr = ax + (yc - ay) * (bx - ax) / (by - ay);
+                        if (cxr < pl) pl = cxr;
+                        if (cxr > pr) pr = cxr;
                     }
                 }
+                if (pl < 0f) pl = 0f;
+                if (pr > width) pr = width;
                 if (pr - pl > 0.01f) {
-                    gdU = (ur - ul) / (pr - pl);
-                    gdV = (vr - vl) / (pr - pl);
-                    gU = ul + gdU * (xs + 0.5f - pl);
-                    gV = vl + gdV * (xs + 0.5f - pl);
-                    gspan = true;
+                    float zl = z0i + dzdx * (pl - x0) + dzdy * oy, zr = z0i + dzdx * (pr - x0) + dzdy * oy;
+                    if (zl > 1e-6f && zr > 1e-6f) {
+                        float ul = (q0 + dqdx * (pl - x0) + dqdy * oy) / zl, vl = (r0 + drdx * (pl - x0) + drdy * oy) / zl;
+                        float ur = (q0 + dqdx * (pr - x0) + dqdy * oy) / zr, vr = (r0 + drdx * (pr - x0) + drdy * oy) / zr;
+                        gdU = (ur - ul) / (pr - pl);
+                        gdV = (vr - vl) / (pr - pl);
+                        gU = ul + gdU * (xs + 0.5f - pl);
+                        gV = vl + gdV * (xs + 0.5f - pl);
+                        gspan = true;
+                    }
                 }
             }
-            // perspective: exact every 16 pixels, linear in between. GBA: linear down the polygon's
-            // edges and across its rows. PS1: linear across the triangle.
+            // perspective: exact every 16 pixels, linear in between. GBA: exact at the span's two ends
+            // only, linear across the whole row. PS1: linear across the triangle.
             for (int x = xs; x < xe; ) {
                 int n = tm == TEX_PERSPECTIVE ? (xe - x < 16 ? xe - x : 16) : xe - x;
                 float IZn = IZ + dzdx * n, Qn = Q + dqdx * n, Rn = R + drdx * n;
@@ -1248,12 +1230,8 @@ public final class SoftRenderer extends Renderer {
                 }
                 for (int e = x + n; x < e; x++, U += dU, V += dV, L += dL, F += dF, AL += dA, IZ += dzdx) {
                     int k = row + x;
-                    if (ground) {
-                        // terrain tiles: a depth buffer among themselves and with the sea
-                        float zt = IZ * 0.94f;
-                        if (zt <= zb[k]) continue;
-                        zb[k] = zt;
-                    } else if (IZ * GROUND_SLACK < zb[k]) continue;   // behind the ground (a hill)
+                    if (IZ * GROUND_SLACK < zb[k]) continue;          // behind the ground (a hill)
+                    if (zt && IZ * Z_SLACK < oz[k]) continue;        // behind something already drawn
                     if (shadow) {
                         int ty = V >> 16;
                         ty = ty < 0 ? 0 : (ty > hmax ? hmax : ty);
@@ -1280,6 +1258,7 @@ public final class SoftRenderer extends Renderer {
                     if (lv < 0) lv = 0;
                     if (fv < 0) fv = 0; else if (fv > 256) fv = 256;
                     out[row + x] = shade(c, lv, fv, fr, fg, fbb, BAYER[db | (x & 3)] >> 1);
+                    if (zw && IZ > oz[k]) oz[k] = IZ;
                 }
                 Q = Qn;
                 R = Rn;
@@ -1380,6 +1359,9 @@ public final class SoftRenderer extends Renderer {
         float u0 = A[o + 4], v0 = A[o + 5], u1 = A[o + 6], v1 = A[o + 7];
         int fv = (int) (A[o + 8] * 256f);
         float test = A[o + 9] * GROUND_SLACK;            // 1/depth of the sprite
+        float sz = A[o + 9];
+        boolean zs = depthBuffer;
+        float[] oz = objZ;
         float[] zb = groundZ;
         int lv = (int) (A[o + 10] * 256f);
         int ya = Math.max(bandY0, (int) Math.ceil(sy0 - 0.5f)), yb = Math.min(bandY1, (int) Math.ceil(sy1 - 0.5f));
@@ -1400,9 +1382,11 @@ public final class SoftRenderer extends Renderer {
             int U = U0;
             for (int x = xa; x < xb; x++, U += dU) {
                 if (test < zb[row + x]) continue;             // behind a hill
+                if (zs && sz * Z_SLACK < oz[row + x]) continue;    // behind a nearer polygon
                 int c = tp[trow | ((U >> 16) & wm)];
                 if ((c >>> 24) < 128) continue;
                 out[row + x] = shade(c, lv, fv, fr, fg, fbb, BAYER[db | (x & 3)] >> 1);
+                if (zs && sz > oz[row + x]) oz[row + x] = sz;
             }
         }
     }

@@ -130,20 +130,19 @@ public final class FarmTextures {
 
     public static final int LINE_NONE = 0, LINE_SOLID = 1, LINE_DASH5 = 2, LINE_DASH8 = 3, LINE_YELLOW = 4, LINE_DOUBLE_YELLOW = 5, LINE_THICK = 6;
     /** Lane textures repeat every 20 m along the road. */
-    /** Metres of road one lane tile covers (128 texels): the ground's tile length. */
-    public static final float LANE_PERIOD = 8f;
+    public static final float LANE_PERIOD = 20f;
 
     /**
      * A lane of asphalt (u across the lane, v along 20 m) with painted lines on its edges.
      * {@code laneW} is the lane width in metres, used to match the asphalt grain scale.
      */
-    public static Texture lane(Texture asphalt, float tileM, float laneW, int left, int right) {
-        int w = 128, h = 128;
+    public static Texture lane(Texture asphalt, float laneW, int left, int right) {
+        int w = 64, h = 256;
         Img m = new Img(w, h);
         for (int y = 0; y < h; y++)
             for (int x = 0; x < w; x++) {
-                int sx = (int) (x * laneW / w / tileM * asphalt.w) & (asphalt.w - 1);
-                int sy = (int) (y * LANE_PERIOD / h / tileM * asphalt.h) & (asphalt.h - 1);
+                int sx = (int) (x * laneW / w / 2f * asphalt.w) & (asphalt.w - 1);
+                int sy = (int) (y * LANE_PERIOD / h / 2f * asphalt.h) & (asphalt.h - 1);
                 m.px[y * w + x] = asphalt.px[sy * asphalt.w + sx];
             }
         int lw = Math.max(2, Math.round(0.15f / laneW * w)), tw = Math.max(3, Math.round(0.2f / laneW * w));
@@ -175,23 +174,39 @@ public final class FarmTextures {
      * is 20 m along): pale concrete pavers with joints every 2 m, a few darker replaced slabs,
      * and a slightly darker gutter strip against the road.
      */
+    /**
+     * The walking strip of a town road (路側帯), the Japanese way: no raised pavement, the asphalt
+     * beside the lane line painted green, worn paler where feet and tyres scuff it, with a gutter of
+     * concrete at the edge.
+     */
     public static Texture walkStrip(Texture asphalt, float width) {
         int w = 32, h = 64;
         Img m = new Img(w, h);
         java.util.Random r = new java.util.Random(77);
-        int base = rgb(188, 184, 176);
-        m.fill(base);
-        m.grain(0, 0, w, h, 0.05f, 0.06f, 991);
-        for (int y = 0; y < h; y += 6) {
-            if (r.nextInt(6) == 0) m.shade(3, y + 1, w, Math.min(h, y + 6), 0.9f + r.nextFloat() * 0.06f);
-            m.shade(3, y, w, y + 1, 0.78f);                       // joint
-            m.shade(3, y + 1, w, Math.min(h, y + 2), 1.04f);      // lit slab edge
-        }
-        m.shade(17, 0, 18, h, 0.84f);                             // centre joint along the path
-        // gutter: a strip of darker concrete next to the carriageway
+        int green = rgb(64, 138, 86);
         for (int y = 0; y < h; y++)
-            for (int x = 0; x < 3; x++) m.set(x, y, mix(m.get(x, y), rgb(120, 118, 114), x == 2 ? 0.4f : 0.6f));
-        m.shade(w - 1, 0, w, h, 0.8f);                            // kerb edge
+            for (int x = 0; x < w; x++) {
+                int a = asphalt.px[(y % asphalt.h) * asphalt.w + (x * 3) % asphalt.w];
+                // the paint takes the asphalt's grain: lighter stones show through
+                int g = mix(green, a, 0.28f);
+                m.set(x, y, g);
+            }
+        // scuffed patches where the paint has worn thin
+        for (int k = 0; k < 9; k++) {
+            int cx = 3 + r.nextInt(w - 8), cy = r.nextInt(h), rw = 2 + r.nextInt(5), rh = 3 + r.nextInt(8);
+            for (int y = cy - rh; y <= cy + rh; y++)
+                for (int x = cx - rw; x <= cx + rw; x++) {
+                    float d = ((x - cx) * (x - cx)) / (float) (rw * rw) + ((y - cy) * (y - cy)) / (float) (rh * rh);
+                    if (d < 1f && r.nextInt(3) != 0) {
+                        int yy = (y % h + h) % h, xx = Math.max(0, Math.min(w - 1, x));
+                        m.set(xx, yy, mix(m.get(xx, yy), asphalt.px[(yy % asphalt.h) * asphalt.w + xx], 0.45f));
+                    }
+                }
+        }
+        // the concrete gutter at the edge of the road
+        for (int y = 0; y < h; y++)
+            for (int x = w - 4; x < w; x++) m.set(x, y, mix(rgb(150, 146, 138), rgb(110, 106, 100), (x - (w - 4)) / 3f));
+        for (int y = 0; y < h; y += 16) m.shade(w - 4, y, w, y + 1, 0.75f);
         return m.texture();
     }
 
@@ -202,8 +217,8 @@ public final class FarmTextures {
             float s = y * LANE_PERIOD / m.h;
             boolean on;
             switch (style) {
-                case LINE_DASH5: on = s < 4f; break;           // 4 m dash, 4 m gap
-                case LINE_DASH8: on = s < 5.5f; break;         // long freeway dash
+                case LINE_DASH5: on = (s % 10f) < 5f; break;
+                case LINE_DASH8: on = s < 8f; break;
                 default: on = true; break;
             }
             if (!on) continue;
@@ -221,13 +236,13 @@ public final class FarmTextures {
      * @param arriving  width of the arriving half that gets the stop line (metres from the centre)
      * @param zebra     paint a pedestrian crossing (city streets)
      */
-    public static Texture mouth(Texture asphalt, float tileM, float width, float length, float arriving, boolean zebra, boolean stop) {
+    public static Texture mouth(Texture asphalt, float width, float length, float arriving, boolean zebra, boolean stop) {
         int w = 128, h = 64;
         Img m = new Img(w, h);
         for (int y = 0; y < h; y++)
             for (int x = 0; x < w; x++) {
-                int sx = (int) (x * width / w / tileM * asphalt.w) & (asphalt.w - 1);
-                int sy = (int) (y * length / h / tileM * asphalt.h) & (asphalt.h - 1);
+                int sx = (int) (x * width / w / 2f * asphalt.w) & (asphalt.w - 1);
+                int sy = (int) (y * length / h / 2f * asphalt.h) & (asphalt.h - 1);
                 m.px[y * w + x] = asphalt.px[sy * asphalt.w + sx];
             }
         int white = rgb(236, 236, 228);
