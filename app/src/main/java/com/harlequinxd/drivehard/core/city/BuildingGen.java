@@ -100,7 +100,10 @@ final class BuildingGen {
         Terrain t = city.terrain;
         float c = City.CURB;
         float h00 = t.height(x0, z0) + c, h10 = t.height(x1, z0) + c, h01 = t.height(x0, z1) + c, h11 = t.height(x1, z1) + c;
-        float base = Math.max(Math.max(h00, h10), Math.max(h01, h11));
+        // on a slope: set into the hillside rather than perched on its highest corner (flat
+        // ground, as in the city, is unchanged)
+        float hi = Math.max(Math.max(h00, h10), Math.max(h01, h11)), mean = (h00 + h10 + h01 + h11) * 0.25f;
+        float base = Math.min(hi, mean + 0.15f);
         footMin = Math.min(Math.min(h00, h10), Math.min(h01, h11)) - c - 0.3f;
         sb = new SectorBuilder(ch.sectors);
         sb.world();
@@ -502,12 +505,15 @@ final class BuildingGen {
         gb.end();
     }
 
-    /** Base height for a lot: its highest corner (the house stands on a low plinth). */
+    /** Base height for a lot: about its middle height (the house stands on a low plinth, set into a slope). */
     private float foundationLot(float x0, float z0, float x1, float z1) {
         Terrain t = city.terrain;
-        float base = Math.max(Math.max(t.height(x0, z0), t.height(x1, z0)), Math.max(t.height(x0, z1), t.height(x1, z1)));
-        footMin = Math.min(Math.min(t.height(x0, z0), t.height(x1, z0)), Math.min(t.height(x0, z1), t.height(x1, z1))) - 0.3f;
-        return base + 0.15f;
+        float h00 = t.height(x0, z0), h10 = t.height(x1, z0), h01 = t.height(x0, z1), h11 = t.height(x1, z1);
+        float hm = t.height((x0 + x1) * 0.5f, (z0 + z1) * 0.5f);
+        float hi = Math.max(Math.max(h00, h10), Math.max(h01, h11));
+        float mean = (h00 + h10 + h01 + h11 + hm * 2f) / 6f;
+        footMin = Math.min(Math.min(h00, h10), Math.min(h01, h11)) - 0.3f;
+        return Math.min(hi, mean + 0.4f) + 0.15f;
     }
 
     /** Timber barn / tool shed with a corrugated metal roof: plank walls, big sliding plank doors. */

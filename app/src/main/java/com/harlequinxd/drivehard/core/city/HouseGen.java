@@ -346,6 +346,18 @@ final class HouseGen {
         float[] lay = layout(d, W, D, lot);
         float u0 = lay[0], v0 = lay[1], u1 = lay[2], v1 = lay[3];
         float w = u1 - u0, dep = v1 - v0;
+        if (lot) {
+            // on a lot the house stands at the middle height of its own footprint: on a slope it
+            // is set into the hillside at the back instead of perched on stilts at the front
+            float sum = 0f, hi = -Float.MAX_VALUE;
+            for (int k = 0; k < 9; k++) {
+                float fu = u0 + (u1 - u0) * (k % 3) * 0.5f, fv = v0 + (v1 - v0) * (k / 3) * 0.5f;
+                float hgt = gb.h(wx(fu, fv), wz(fu, fv));
+                sum += hgt;
+                hi = Math.max(hi, hgt);
+            }
+            base = Math.min(hi, sum / 9f) + 0.1f;
+        }
         float floor0 = base + PLINTH;
         // one closed shape from a house kit: walls straight up from the plinth into the roof,
         // everything on them painted into the kit's texture
@@ -357,7 +369,10 @@ final class HouseGen {
         extras(d, main, base, lot, W, D, lay, westNeighbor);
         float ax = Math.min(wx(u0, v0), wx(u1, v1)), bx = Math.max(wx(u0, v0), wx(u1, v1));
         float az = Math.min(wz(u0, v0), wz(u1, v1)), bz = Math.max(wz(u0, v0), wz(u1, v1));
-        ch.boxes.add(new Box(ax, base - 1.5f, az, bx, base + kit.eave() + kit.rise, bz));
+        // the collider reaches down to the lowest ground round the house (a slope falls away
+        // under the downhill side), so she can't walk under it there
+        float low = Math.min(Math.min(gb.h(ax, az), gb.h(bx, az)), Math.min(gb.h(ax, bz), gb.h(bx, bz)));
+        ch.boxes.add(new Box(ax, Math.min(base, low) - 1.5f, az, bx, base + kit.eave() + kit.rise, bz));
     }
 
     /**
@@ -1014,6 +1029,8 @@ final class HouseGen {
             for (int k = 0; k < 4; k++) {
                 float pu = (k & 1) == 0 ? c0 + 0.1f : c1 - 0.2f, pv = (k & 2) == 0 ? v0 + 0.2f : v1 - 0.3f;
                 boxLocal(pu, pv, pu + 0.1f, pv + 0.1f, base - 0.3f, base + 2.3f, post, post);
+                float qx = Math.min(wx(pu, pv), wx(pu + 0.1f, pv + 0.1f)), qz = Math.min(wz(pu, pv), wz(pu + 0.1f, pv + 0.1f));
+                ch.boxes.add(new Box(qx - 0.03f, base - 1.3f, qz - 0.03f, qx + 0.13f, base + 2.3f, qz + 0.13f));
             }
             boxLocal(c0, v0, c1, v1, base + 2.3f, base + 2.42f, lib.vinyl, lib.vinyl);
         }
@@ -1068,6 +1085,11 @@ final class HouseGen {
             float s0 = len * t0 / scale, s1 = len * t1 / scale;
             float[] uv = {s0, (hgt + 0.15f) / scale, s1, (hgt + 0.15f) / scale, s1, 0f, s0, 0f};
             gb.quad(p, uv, l, tex, L_OBJECT, Geo.FLAG_NO_SUBDIV, 0f, true);
+            // and solid: a thin collider along the segment (lots are quarter-turned, so walls run
+            // along x or z)
+            float t = tex == lib.hedge ? 0.3f : 0.1f;
+            ch.boxes.add(new Box(Math.min(px, qx) - t, Math.min(g0, g1) - 1f, Math.min(pz, qz) - t,
+                    Math.max(px, qx) + t, Math.max(g0, g1) + hgt + 0.15f, Math.max(pz, qz) + t));
         }
     }
 

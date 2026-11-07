@@ -159,6 +159,15 @@ final class TownGen {
                 float t = s / len, x = q[0] + (q[2] - q[0]) * t, z = q[1] + (q[3] - q[1]) * t, y = city.terrain.height(x, z);
                 gb.box(x - 0.04f, y - 0.2f, z - 0.04f, x + 0.04f, y + 1.8f, z + 0.04f, lib.pole, lib.pole, 1f, 1f, L_OBJECT, 0f, Geo.FLAG_DETAIL);
             }
+            // the mesh between the posts is solid, in 4 m pieces that follow the ground
+            for (float s = 0; s < len; s += 4f) {
+                float e0 = Math.min(len, s + 4f);
+                float ax = q[0] + (q[2] - q[0]) * s / len, az = q[1] + (q[3] - q[1]) * s / len;
+                float bx = q[0] + (q[2] - q[0]) * e0 / len, bz = q[1] + (q[3] - q[1]) * e0 / len;
+                float ya = city.terrain.height(ax, az), yb = city.terrain.height(bx, bz);
+                ch.boxes.add(new Box(Math.min(ax, bx) - 0.06f, Math.min(ya, yb) - 1f, Math.min(az, bz) - 0.06f,
+                        Math.max(ax, bx) + 0.06f, Math.max(ya, yb) + 1.8f, Math.max(az, bz) + 0.06f));
+            }
         }
         gb.end();
     }

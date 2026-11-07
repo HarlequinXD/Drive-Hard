@@ -635,7 +635,7 @@ public final class Countryside implements java.io.Serializable {
             float h = terrain.natural(x, z);
             lo = Math.min(lo, h); hi = Math.max(hi, h);
         }
-        return hi - lo < 4f;
+        return hi - lo < 3f;
     }
 
     // ------------------------------------------------------------------ building
