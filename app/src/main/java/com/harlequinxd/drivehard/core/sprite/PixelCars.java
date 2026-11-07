@@ -527,6 +527,12 @@ public final class PixelCars {
     // ---------------------------------------------------------------- the canvas
 
     private final int[] px = new int[FW * FH];
+    // the lighting buffer: each panel pixel's car-space surface normal and position (from the
+    // plane of the polygon that drew it); details drawn over a panel keep the panel's
+    private final float[] gN = new float[FW * FH * 3], gP = new float[FW * FH * 3];
+    private final boolean[] gHas = new boolean[FW * FH];
+    private boolean usePlane;
+    private float pnU, pnV, pnY, pd;
 
     private void fill(float[] xs, float[] ys, int n, int c) {
         if (n < 3) return;
@@ -545,7 +551,11 @@ public final class PixelCars {
             Arrays.sort(xi, 0, k);
             for (int q = 0; q + 1 < k; q += 2) {
                 int xa = Math.max(0, (int) Math.ceil(xi[q] - 0.5f)), xb = Math.min(FW - 1, (int) Math.floor(xi[q + 1] - 0.5f));
-                for (int x = xa; x <= xb; x++) px[y * FW + x] = c;
+                for (int x = xa; x <= xb; x++) {
+                    int i = y * FW + x;
+                    px[i] = c;
+                    gHas[i] = usePlane && surfacePoint(x + 0.5f, yc, i);
+                }
             }
         }
     }
@@ -560,6 +570,24 @@ public final class PixelCars {
             if (e2 >= dy) { err += dy; ax += sx; }
             if (e2 <= dx) { err += dx; ay += sy; }
         }
+    }
+
+    /**
+     * The car-space point on the current plane under screen pixel (sx, sy): the view is an
+     * orthographic projection, so it is the screen point pushed along the view direction until it
+     * meets the plane.
+     */
+    private boolean surfacePoint(float sx, float sy, int i) {
+        float X = (sx - FW / 2f) / PPM, Y = (GROUND - sy) / PPM;
+        // screen right, screen up and the view direction (toward the camera) in car space
+        float bu = fx * X + (-fz * SINP) * Y, bv = lx * X + (-lz * SINP) * Y, by = COSP * Y;
+        float du = fz * COSP, dv = lz * COSP, dy = SINP;
+        float nd = pnU * du + pnV * dv + pnY * dy;
+        if (Math.abs(nd) < 0.05f) return false;
+        float t = (pd - (pnU * bu + pnV * bv + pnY * by)) / nd;
+        gP[i * 3] = bu + du * t; gP[i * 3 + 1] = bv + dv * t; gP[i * 3 + 2] = by + dy * t;
+        gN[i * 3] = pnU; gN[i * 3 + 1] = pnV; gN[i * 3 + 2] = pnY;
+        return true;
     }
 
     private void plot(int x, int y, int c) {
@@ -616,7 +644,27 @@ public final class PixelCars {
             project(p[i * 3], p[i * 3 + 1], p[i * 3 + 2]);
             qx[i] = sp[0]; qy[i] = sp[1];
         }
+        // the polygon's plane (Newell's normal), for the lighting buffer
+        float nu = 0, nv = 0, ny = 0, cu = 0, cv = 0, cy = 0;
+        for (int i = 0; i < n; i++) {
+            int j = (i + 1) % n;
+            float u0 = p[i * 3], v0 = p[i * 3 + 1], y0 = p[i * 3 + 2], u1 = p[j * 3], v1 = p[j * 3 + 1], y1 = p[j * 3 + 2];
+            nu += (v0 - v1) * (y0 + y1);
+            nv += (y0 - y1) * (u0 + u1);
+            ny += (u0 - u1) * (v0 + v1);
+            cu += u0; cv += v0; cy += y0;
+        }
+        float l = (float) Math.sqrt(nu * nu + nv * nv + ny * ny);
+        usePlane = l > 1e-6f;
+        if (usePlane) {
+            pnU = nu / l; pnV = nv / l; pnY = ny / l;
+            // outward: away from the car's middle (the body is roughly convex)
+            float mu = cu / n, mv = cv / n, my = cy / n - m.belt * 0.6f;
+            if (pnU * mu + pnV * mv + pnY * my < 0f) { pnU = -pnU; pnV = -pnV; pnY = -pnY; }
+            pd = pnU * cu / n + pnV * cv / n + pnY * cy / n;
+        }
         fill(qx, qy, n, c);
+        usePlane = false;
     }
 
     private void line3(float u0, float v0, float y0, float u1, float v1, float y1, int c) {
@@ -643,6 +691,7 @@ public final class PixelCars {
      */
     public int[] draw(Model model, int paintIndex, int angle) {
         Arrays.fill(px, 0);
+        Arrays.fill(gHas, false);
         m = model;
         paint = ramp(model.paints[paintIndex % model.paints.length]);
         double a = angle * Math.PI / 8;
@@ -677,6 +726,7 @@ public final class PixelCars {
         extras(upper, hw);
         sortDraw(upper);
         if (cabinRestore != null) { paint = cabinRestore; cabinRestore = null; }
+        bake(hw);
         mirrors(hw);
         outline();
         return px.clone();
@@ -1508,6 +1558,116 @@ public final class PixelCars {
             for (int dy = -2; dy <= 0; dy++)
                 for (int dx = -1; dx <= 1; dx++) plot(x + dx, yy + dy, dy == -2 ? paint[0] : base);
         }
+    }
+
+    // ---------------------------------------------------------------- baked lighting
+
+    /** 4x4 Bayer matrix: the ordered dither between ramp steps. */
+    private static final float[] BAYER = {0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5};
+
+    /** Seven-step ramps (index 3 is the colour itself) per colour, built as they are met. */
+    private static final java.util.concurrent.ConcurrentHashMap<Integer, int[]> RAMPS = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static int[] ramp7(int c) {
+        return RAMPS.computeIfAbsent(c, k -> {
+            int r = (k >> 16) & 255, g = (k >> 8) & 255, b = k & 255;
+            return new int[]{
+                    shade(r, g, b, 0.56f), shade(r, g, b, 0.7f), shade(r, g, b, 0.85f),
+                    0xFF000000 | (k & 0xFFFFFF),
+                    mix(r, g, b, 255, 246, 230, 0.14f), mix(r, g, b, 255, 248, 236, 0.3f), mix(r, g, b, 255, 252, 244, 0.55f)};
+        });
+    }
+
+    private static boolean isGlass(int c) { return c == G1 || c == G2 || c == G3 || c == G4; }
+
+    /** Lamps, number plates and their surrounds keep their colours (they glow or are printed). */
+    private static boolean unlit(int c) {
+        return c == Y1 || c == Y2 || c == O1 || c == L1 || c == L2 || c == L3 || c == P1 || c == P2;
+    }
+
+    /**
+     * Bakes light into the flat-shaded drawing. Each panel pixel gets a normal bent by the
+     * panel's curvature (sides roll in at the top and under at the sills, the bonnet and roof
+     * crown, the ends wrap round), and from it: the change in diffuse light, a specular glint,
+     * the sky above and the dark horizon line reflected in the paint, the windows' sky gradient,
+     * occlusion in the wheel arches and under the sills, and a rim of sky light along the top
+     * silhouette. The result is snapped to a seven-step ramp of the pixel's own colour through a
+     * Bayer dither, so it stays pixel art.
+     */
+    private void bake(float hw) {
+        // the light (from the upper left, in front, as the flat shading) and the view, in car space
+        float rxu = fx, rxv = lx, zu = fz, zv = lz;
+        float Lu = -0.5f * rxu + 0.45f * zu, Lv = -0.5f * rxv + 0.45f * zv, Ly = 0.75f;
+        float ll = (float) Math.sqrt(Lu * Lu + Lv * Lv + Ly * Ly);
+        Lu /= ll; Lv /= ll; Ly /= ll;
+        float Vu = fz * COSP, Vv = lz * COSP, Vy = SINP;
+        float sill = Float.MAX_VALUE, roofTop = m.belt;
+        for (int i = 1; i < m.lower.length; i += 2) sill = Math.min(sill, m.lower[i]);
+        for (int i = 1; i < m.cabin.length; i += 2) roofTop = Math.max(roofTop, m.cabin[i]);
+        float halfL = m.len / 2;
+        int[] out = px.clone();
+        for (int y = 0; y < FH; y++)
+            for (int x = 0; x < FW; x++) {
+                int i = y * FW + x, c = px[i];
+                if (c == 0 || !gHas[i] || unlit(c)) continue;
+                float nu = gN[i * 3], nv = gN[i * 3 + 1], ny = gN[i * 3 + 2];
+                float pu = gP[i * 3], pv = gP[i * 3 + 1], py = gP[i * 3 + 2];
+                boolean glass = isGlass(c);
+                float lowT = Math.max(0f, Math.min(1f, (py - sill) / Math.max(0.1f, m.belt - sill)));
+                float delta = 0f;
+                // the panel's curvature
+                float bu = nu, bv = nv, by = ny;
+                if (Math.abs(nv) > 0.6f) {                         // a side
+                    float t = py < m.belt ? lowT : Math.min(1f, (py - m.belt) / Math.max(0.1f, roofTop - m.belt));
+                    by += py < m.belt ? 0.9f * (t - 0.55f) : 0.5f * t;
+                    bu += 0.35f * pu / halfL;
+                } else if (ny > 0.55f) {                            // bonnet, roof, boot lid
+                    bu += 0.5f * pu / halfL;
+                    bv += 0.65f * pv / Math.max(0.3f, hw);
+                } else {                                            // the ends and the screens
+                    bv += 0.55f * pv / Math.max(0.3f, hw);
+                    by += 0.4f * (lowT - 0.5f);
+                }
+                float bl = (float) Math.sqrt(bu * bu + bv * bv + by * by);
+                bu /= bl; bv /= bl; by /= bl;
+                float d0 = nu * Lu + nv * Lv + ny * Ly, d1 = bu * Lu + bv * Lv + by * Ly;
+                delta += (d1 - d0) * 2.3f;
+                // the glint: the light reflected toward the eye
+                float rd = 2f * d1;
+                float Ru = rd * bu - Lu, Rv = rd * bv - Lv, Ry = rd * by - Ly;
+                float spec = Math.max(0f, Ru * Vu + Rv * Vv + Ry * Vy);
+                spec = (float) Math.pow(spec, 30);
+                delta += spec * (glass ? 3.2f : 2.6f);
+                if (glass) {
+                    // sky reflected in the glass: bright at the top, dark at the bottom
+                    float tg = Math.max(0f, Math.min(1f, (py - m.belt) / Math.max(0.1f, roofTop - m.belt)));
+                    delta += ny > 0.3f ? 0.35f : 1.1f * (tg - 0.45f);
+                } else if (Math.abs(nv) > 0.6f && py < m.belt) {
+                    // paint on the sides: the sky above the horizon line, the ground below it
+                    if (lowT > 0.56f) delta += 0.7f * (lowT - 0.56f) / 0.44f;
+                    else if (lowT > 0.42f) delta -= 0.8f;
+                    else delta -= 0.25f;
+                }
+                // occlusion: in the wheel arches and along the sills
+                if (py < m.belt) {
+                    for (float au : new float[]{m.axleF, m.axleR}) {
+                        float d = (float) Math.hypot(pu - au, py - m.wheelR);
+                        float k = 1f - (d - m.wheelR * 1.02f) / (m.wheelR * 0.42f);
+                        if (k > 0f) delta -= 1.5f * Math.min(1f, k);
+                    }
+                    float s = 1f - (py - sill) / 0.14f;
+                    if (s > 0f) delta -= 1.2f * Math.min(1f, s);
+                }
+                // rim light along the top of the silhouette
+                if (y > 0 && px[i - FW] == 0) delta += 1.1f;
+                boolean dark = c == K1 || c == K2 || c == K3;
+                if (dark) delta *= 0.6f;
+                float dither = (BAYER[(y & 3) * 4 + (x & 3)] + 0.5f) / 16f - 0.5f;
+                int step = (int) Math.floor(delta + 0.5f + dither * 0.8f);
+                step = Math.max(-3, Math.min(3, step));
+                if (step != 0) out[i] = ramp7(c)[3 + step];
+            }
+        System.arraycopy(out, 0, px, 0, px.length);
     }
 
     // ---------------------------------------------------------------- outline
