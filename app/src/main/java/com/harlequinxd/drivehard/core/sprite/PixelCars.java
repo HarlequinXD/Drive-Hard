@@ -532,6 +532,9 @@ public final class PixelCars {
     private final float[] gN = new float[FW * FH * 3], gP = new float[FW * FH * 3];
     private final boolean[] gHas = new boolean[FW * FH];
     private boolean usePlane;
+    /** Pixels of the pane being drawn: its reflections are kept inside it. */
+    private final boolean[] mask = new boolean[FW * FH];
+    private boolean recordMask, useMask;
     private float pnU, pnV, pnY, pd;
 
     private void fill(float[] xs, float[] ys, int n, int c) {
@@ -553,6 +556,8 @@ public final class PixelCars {
                 int xa = Math.max(0, (int) Math.ceil(xi[q] - 0.5f)), xb = Math.min(FW - 1, (int) Math.floor(xi[q + 1] - 0.5f));
                 for (int x = xa; x <= xb; x++) {
                     int i = y * FW + x;
+                    if (useMask && !mask[i]) continue;
+                    if (recordMask) mask[i] = true;
                     px[i] = c;
                     gHas[i] = usePlane && surfacePoint(x + 0.5f, yc, i);
                 }
@@ -591,7 +596,7 @@ public final class PixelCars {
     }
 
     private void plot(int x, int y, int c) {
-        if (x >= 0 && y >= 0 && x < FW && y < FH) px[y * FW + x] = c;
+        if (x >= 0 && y >= 0 && x < FW && y < FH && (!useMask || mask[y * FW + x])) px[y * FW + x] = c;
     }
 
     // ---------------------------------------------------------------- the view
@@ -1018,11 +1023,16 @@ public final class PixelCars {
                 poly(p, 4, darker(base));
                 // glass inside its frame: a dark band at the top, a sky band and a streak
                 float[] g = inset(p, 0.06f, 0.08f);
+                Arrays.fill(mask, false);
+                recordMask = true;
                 poly(g, 4, G3);
+                recordMask = false;
+                useMask = true;
                 rectOn(g, 0.0f, 1.0f, 0.78f, 1.0f, G4);
                 float[] b0 = at(g, 0.25f, 0.08f), b1 = at(g, 0.45f, 0.08f), b2 = at(g, 0.65f, 0.75f), b3 = at(g, 0.45f, 0.75f);
                 poly(new float[]{b0[0], b0[1], b0[2], b1[0], b1[1], b1[2], b2[0], b2[1], b2[2], b3[0], b3[1], b3[2]}, 4, G2);
                 lineOn(g, 0.5f, 0.1f, 0.7f, 0.72f, G1);
+                useMask = false;
                 lineOn(g, 0.0f, 0.0f, 1.0f, 0.0f, K2);
                 if (role == GLASS_F) {
                     lineOn(g, 0.22f, 0.06f, 0.44f, 0.12f, K1);
@@ -1144,8 +1154,12 @@ public final class PixelCars {
                 q[i * 3] = pane[i * 2]; q[i * 3 + 1] = near * (halfWidth(y, y0, y1, hw, hwRoof) + 0.004f); q[i * 3 + 2] = y;
                 minU = Math.min(minU, pane[i * 2]); maxU = Math.max(maxU, pane[i * 2]); maxY = Math.max(maxY, y);
             }
+            Arrays.fill(mask, false);
+            recordMask = true;
             poly(q, n, G3);
-            // sky band and a streak across the pane
+            recordMask = false;
+            useMask = true;
+            // sky band and a streak across the pane (kept inside it)
             float h = maxY - bottom, w = maxU - minU;
             float vv = near * (halfWidth(bottom + h * 0.5f, y0, y1, hw, hwRoof) + 0.006f);
             float[] band = {
@@ -1157,6 +1171,7 @@ public final class PixelCars {
             float[] bandC = clipPoly3(band, q);
             if (bandC != null) poly(bandC, bandC.length / 3, G2);
             line3(minU + w * 0.25f, vv, bottom + h * 0.1f, minU + w * 0.45f, vv, bottom + h * 0.85f, G1);
+            useMask = false;
             line3(minU, near * (hw + 0.004f), bottom, maxU, near * (hw + 0.004f), bottom, K2);
         }
     }
@@ -1578,6 +1593,35 @@ public final class PixelCars {
         });
     }
 
+    /**
+     * The environment map, as brightness in ramp steps, for a direction in car space: sky
+     * brightening toward the horizon haze, a skyline of buildings and trees cut against it
+     * (blocky, as seen in the paint of a car in a Japanese street), and the dark road below
+     * with a lighter band toward the horizon. Directions are taken relative to the camera, so
+     * the reflections slide over the bodywork as the car turns.
+     */
+    private float environment(float eu, float ev, float ey) {
+        // view space: across the screen and toward the camera
+        float ex = eu * fx + ev * lx, ez = eu * fz + ev * lz;
+        float len = (float) Math.sqrt(ex * ex + ez * ez + ey * ey);
+        if (len < 1e-5f) return 0f;
+        float h = ey / len;
+        double az = Math.atan2(ex, -ez);                       // 0 = behind the camera
+        if (h < 0f) {
+            float far = Math.max(0f, 1f + h * 4f);             // nearer the horizon: lighter road
+            return -1.1f + 0.6f * far;
+        }
+        // the skyline: blocks of different heights round the horizon
+        int seg = (int) Math.floor((az + Math.PI) / (Math.PI * 2) * 22);
+        int hsh = (seg * 73856093) ^ 0x5bd1e995;
+        hsh ^= hsh >>> 13; hsh *= 0x2c1b3c6d; hsh ^= hsh >>> 15;
+        float sky = 0.08f + ((hsh & 255) / 255f) * 0.42f;
+        if (((hsh >> 8) & 3) == 0) sky *= 0.4f;                // a gap between buildings
+        if (h < sky) return -0.7f + 0.3f * (h / Math.max(0.01f, sky));
+        // sky: the bright haze just above the skyline, deeper blue overhead
+        return 1.1f - 0.7f * Math.min(1f, (h - sky) * 2.2f);
+    }
+
     private static boolean isGlass(int c) { return c == G1 || c == G2 || c == G3 || c == G4; }
 
     /** Lamps, number plates and their surrounds keep their colours (they glow or are printed). */
@@ -1638,16 +1682,27 @@ public final class PixelCars {
                 float spec = Math.max(0f, Ru * Vu + Rv * Vv + Ry * Vy);
                 spec = (float) Math.pow(spec, 30);
                 delta += spec * (glass ? 3.2f : 2.6f);
+                // the world reflected in it (an environment map): the view bounced off the bent
+                // normal looks up into the sky, at the skyline, or down at the road
+                float nv0 = bu * Vu + bv * Vv + by * Vy;
+                float Eu = 2f * nv0 * bu - Vu, Ev = 2f * nv0 * bv - Vv, Ey = 2f * nv0 * by - Vy;
+                float env = environment(Eu, Ev, Ey);
+                float fres = 1f - Math.max(0f, nv0);
+                fres = 0.3f + 0.7f * fres * fres;                  // stronger at grazing angles
                 if (glass) {
-                    // sky reflected in the glass: bright at the top, dark at the bottom
-                    float tg = Math.max(0f, Math.min(1f, (py - m.belt) / Math.max(0.1f, roofTop - m.belt)));
-                    delta += ny > 0.3f ? 0.35f : 1.1f * (tg - 0.45f);
-                } else if (Math.abs(nv) > 0.6f && py < m.belt) {
-                    // paint on the sides: the sky above the horizon line, the ground below it
-                    if (lowT > 0.56f) delta += 0.7f * (lowT - 0.56f) / 0.44f;
-                    else if (lowT > 0.42f) delta -= 0.8f;
-                    else delta -= 0.25f;
+                    // glass is all reflection: pick its shade straight from the map
+                    int gi = env > 1.0f ? 0 : env > 0.25f ? 1 : env > -0.45f ? 2 : 3;
+                    float dither = (BAYER[(y & 3) * 4 + (x & 3)] + 0.5f) / 16f - 0.5f;
+                    float e = env + dither * 0.6f + spec * 3f;
+                    gi = e > 1.9f ? -1 : e > 1.15f ? 0 : e > 0.45f ? 1 : e > -0.5f ? 2 : 3;
+                    // keep the hand-drawn streak and band lighter than the pane around them
+                    if (c == G1) gi = Math.min(gi, 0);
+                    else if (c == G2) gi = Math.min(gi, 1);
+                    if (c == G4 && gi < 2) gi = 2;
+                    out[i] = gi < 0 ? C1 : new int[]{G1, G2, G3, G4}[gi];
+                    continue;
                 }
+                delta += env * 1.25f * fres;
                 // occlusion: in the wheel arches and along the sills
                 if (py < m.belt) {
                     for (float au : new float[]{m.axleF, m.axleR}) {
