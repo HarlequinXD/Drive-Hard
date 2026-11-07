@@ -14,6 +14,11 @@ public final class PropSprites {
 
     /** All variants of a plant species, one view each: plants look the same from every side. */
     public static SpriteSheet flora(com.harlequinxd.drivehard.core.model.Flora f) {
+        return PixelTrees.sheet(f);
+    }
+
+    /** The old modelled-and-rendered plants (kept for comparison tools). */
+    public static SpriteSheet floraModelled(com.harlequinxd.drivehard.core.model.Flora f) {
         List<List<Part>> v = new ArrayList<>();
         for (int i = 0; i < f.variants; i++) v.add(f.model(i));
         SpriteBaker b = baker(f.frameW, f.frameH, f.anchorX, f.anchorY, f.ppm);
