@@ -1,5 +1,7 @@
 package com.harlequinxd.drivehard.core.road;
 
+import com.harlequinxd.drivehard.core.tex.FarmTextures;
+
 import com.harlequinxd.drivehard.core.render.Sectors;
 
 import com.harlequinxd.drivehard.core.city.Chunk;
@@ -13,6 +15,7 @@ import java.util.Arrays;
 
 import static com.harlequinxd.drivehard.core.render.SoftRenderer.L_GROUND;
 import static com.harlequinxd.drivehard.core.render.SoftRenderer.L_OBJECT;
+import static com.harlequinxd.drivehard.core.render.SoftRenderer.L_RAISED;
 
 /**
  * Builds every visible road surface from the spline network, city streets included.
@@ -28,9 +31,8 @@ import static com.harlequinxd.drivehard.core.render.SoftRenderer.L_OBJECT;
  * roads sit cleanly in cuttings and on embankments. Bridges get decks, parapets and piers;
  * freeways get a median barrier and guardrails; country roads get utility poles and wires.
  *
- * City streets live in the ground layer (they are the city's ground). Rural roads share the
- * object layer with the terrain and sort by their farthest corner with a lead over the ground
- * they lie on, so hills still hide them.
+ * Road surfaces are polygons laid over the tiled terrain: lane strips one 8 m, 128-texel tile long, junction polygons and mouths, all in the raised ground
+ * layer, drawn after the terrain and tested against its depth, so hills still hide them.
  */
 public final class RoadMesh {
     // Paving never overlaps grass (verges and terrain are cut around it), so roads need no lead in the
@@ -56,7 +58,7 @@ public final class RoadMesh {
     public void generate(Chunk ch, GeoBuilder gb, int cx, int cz, float x0, float z0, float x1, float z1) {
         gb.begin(false);
         net.forEachPieceIn(x0, z0, x1, z1, (e, i) -> piece(ch, gb, e, i));
-        // junction surfaces, lanes and verges are painted into the ground map (GroundPainter)
+        for (RoadNode n : net.nodesInChunk(cx, cz)) junction(gb, n);
         gb.end();
     }
 
@@ -98,9 +100,14 @@ public final class RoadMesh {
         p[k * 3 + 2] = z;
     }
 
-    private int layer() { return city ? L_GROUND : L_OBJECT; }
-    private int sortFlags() { return city ? 0 : Geo.FLAG_SORT_FAR; }
-    private float bias(float rural) { return city ? 0f : rural; }
+    private int layer() { return L_RAISED; }
+    private int sortFlags() { return 0; }
+    private float bias(float rural) { return 0f; }
+    /** Metres per tile of the plain asphalt (the ground's 128-texel tiles). */
+    private static final float TILE_M = com.harlequinxd.drivehard.core.tex.TerrainTiles.METRES;
+    /** Largest road polygon edge: one ground tile (8 m). */
+    /** Junction surfaces are split into pieces no bigger than this, so they follow the ground. */
+    private static final float STEP = 24f;
 
     /** Flat strip between offsets o0..o1 from s a..b with world-ish uv (plain asphalt). */
     private void strip(GeoBuilder gb, float a, float b, float o0, float o1, float lift, int tex, float bias, int flags, float uScale, float vBase) {
@@ -108,10 +115,10 @@ public final class RoadMesh {
         at(a, o1, lift, 1);
         at(b, o1, lift, 2);
         at(b, o0, lift, 3);
-        uv[0] = o0 * uScale; uv[1] = (a - vBase) * 0.5f;
-        uv[2] = o1 * uScale; uv[3] = (a - vBase) * 0.5f;
-        uv[4] = o1 * uScale; uv[5] = (b - vBase) * 0.5f;
-        uv[6] = o0 * uScale; uv[7] = (b - vBase) * 0.5f;
+        uv[0] = o0 * uScale; uv[1] = (a - vBase) * uScale;
+        uv[2] = o1 * uScale; uv[3] = (a - vBase) * uScale;
+        uv[4] = o1 * uScale; uv[5] = (b - vBase) * uScale;
+        uv[6] = o0 * uScale; uv[7] = (b - vBase) * uScale;
         float lt = GeoBuilder.sunLight(0, 1, 0);
         l[0] = l[1] = l[2] = l[3] = lt;
         gb.quad(p, uv, l, tex, layer(), sortFlags() | flags, bias(bias), true);
@@ -123,7 +130,7 @@ public final class RoadMesh {
         at(a, ok, 0.04f, 1);
         at(b, ok, 0.04f, 2);
         at(b, oc, 0.04f, 3);
-        float va = (a - vBase) / 20f, vb = (b - vBase) / 20f;
+        float va = (a - vBase) / FarmTextures.LANE_PERIOD, vb = (b - vBase) / FarmTextures.LANE_PERIOD;
         uv[0] = 0f; uv[1] = va;
         uv[2] = 1f; uv[3] = va;
         uv[4] = 1f; uv[5] = vb;
@@ -201,7 +208,35 @@ public final class RoadMesh {
         boolean bridge = e.bridge[i];
         // ramp still merged with the freeway (the taper / gore): plain asphalt, no rails
         boolean gore = cls == RoadClass.RAMP && rampOverlap();
-        if (city) return;        // city streets are painted flat into the ground map
+        if (b - a > 0.05f && !bridge) {
+            // the road surface: lane strips along each piece of the spline, split around the two mouths
+            float vBase = (float) Math.floor(s0 / 64f) * 64f;
+            float laneBase = (float) Math.floor(s0 / 320f) * 320f;
+            float[][] bands = bands(cls);
+            float la = Math.max(a, trimA + ma), lb = Math.min(b, e.len - trimB - mb);
+            if (ma > 0f && a < e.clearA + ma) mouthStrip(gb, a, Math.min(b, e.clearA + ma), true, hw, cls);
+            if (mb > 0f && b > e.len - e.clearB - mb) mouthStrip(gb, Math.max(a, e.len - e.clearB - mb), b, false, hw, cls);
+            if (lb - la > 0.05f) {
+                // one strip per piece of the road's spline: the texture just runs along it
+                {
+                    float sa = la, sb = lb;
+                    for (float[] bd : bands) {
+                        int tex = gore ? -1 : (int) bd[2];
+                        if (bd[3] > 0f) {
+                            if (tex < 0) {
+                                strip(gb, sa, sb, -bd[1], bd[1], 0.04f, lib.tiles.asphalt, ROAD_BIAS, 0, 1f / TILE_M, vBase);
+                            } else laneStrip(gb, sa, sb, -bd[1], bd[1], tex, laneBase);
+                            continue;
+                        }
+                        for (int side = -1; side <= 1; side += 2) {
+                            float oc = bd[0] * side, ok = bd[1] * side;
+                            if (tex < 0) strip(gb, sa, sb, Math.min(oc, ok), Math.max(oc, ok), 0.04f, lib.tiles.asphalt, ROAD_BIAS, 0, 1f / TILE_M, vBase);
+                            else laneStrip(gb, sa, sb, oc, ok, tex, laneBase);
+                        }
+                    }
+                }
+            }
+        }
         if (b - a > 0.05f && bridge) {
             // The deck solids carry the road textures on their top faces; no road strip is overlaid.
             float vBase = (float) Math.floor(s0 / 64f) * 64f;
@@ -240,25 +275,34 @@ public final class RoadMesh {
         float m = net.mouth(e, n);
         boolean painted = n.kind == RoadNode.Kind.CITY || givesWay(n);
         int tex = painted ? mouthTex(cls) : -1;
-        if (tex < 0) {
-            strip(gb, a, b, -hw, hw, 0.04f, lib.asphalt, ROAD_BIAS, 0, 0.5f, (float) Math.floor(a / 64f) * 64f);
-            return;
-        }
+        // one piece across the road and along the mouth
+        int na = 1, nl = 1;
         float start = atA ? e.clearA : e.len - e.clearB;   // junction-side end of the mouth
-        at(a, -hw, 0.04f, 0);
-        at(a, hw, 0.04f, 1);
-        at(b, hw, 0.04f, 2);
-        at(b, -hw, 0.04f, 3);
-        // arriving traffic keeps left: at node b it's on the + side, at node a on the - side
-        float u0 = atA ? 1f : 0f, u1 = atA ? 0f : 1f;
-        float va = 1f - Math.abs(a - start) / m, vb = 1f - Math.abs(b - start) / m;
-        uv[0] = u0; uv[1] = va;
-        uv[2] = u1; uv[3] = va;
-        uv[4] = u1; uv[5] = vb;
-        uv[6] = u0; uv[7] = vb;
         float lt = GeoBuilder.sunLight(0, 1, 0);
-        l[0] = l[1] = l[2] = l[3] = lt;
-        gb.quad(p, uv, l, tex, layer(), sortFlags(), bias(ROAD_BIAS), true);
+        for (int j = 0; j < nl; j++) {
+            float sa = a + (b - a) * j / nl, sb = a + (b - a) * (j + 1) / nl;
+            for (int i = 0; i < na; i++) {
+                float o0 = -hw + 2f * hw * i / na, o1 = -hw + 2f * hw * (i + 1) / na;
+                if (tex < 0) {
+                    strip(gb, sa, sb, o0, o1, 0.04f, lib.tiles.asphalt, ROAD_BIAS, 0, 1f / TILE_M, (float) Math.floor(a / 64f) * 64f);
+                    continue;
+                }
+                at(sa, o0, 0.04f, 0);
+                at(sa, o1, 0.04f, 1);
+                at(sb, o1, 0.04f, 2);
+                at(sb, o0, 0.04f, 3);
+                // arriving traffic keeps left: at node b it's on the + side, at node a on the - side
+                float f0 = (o0 + hw) / (2f * hw), f1 = (o1 + hw) / (2f * hw);
+                float u0 = atA ? 1f - f0 : f0, u1 = atA ? 1f - f1 : f1;
+                float va = 1f - Math.abs(sa - start) / m, vb = 1f - Math.abs(sb - start) / m;
+                uv[0] = u0; uv[1] = va;
+                uv[2] = u1; uv[3] = va;
+                uv[4] = u1; uv[5] = vb;
+                uv[6] = u0; uv[7] = vb;
+                l[0] = l[1] = l[2] = l[3] = lt;
+                gb.quad(p, uv, l, tex, layer(), sortFlags(), bias(ROAD_BIAS), true);
+            }
+        }
     }
 
     /** True if traffic on this edge gives way at node n (a higher-priority road meets it). */
@@ -336,9 +380,9 @@ public final class RoadMesh {
         int m = ring.length / 3;
         float lift = 0.04f;
         float cy = cityNode ? terrain.height(n.x, n.z) : n.y + lift;
-        int lay = cityNode ? L_GROUND : L_OBJECT;
-        int flags = cityNode ? 0 : Geo.FLAG_SORT_FAR;
-        float bias = cityNode ? 0f : ROAD_BIAS;
+        int lay = L_RAISED;
+        int flags = 0;
+        float bias = 0f;
         float lt = GeoBuilder.sunLight(0, 1, 0);
         if (cityNode) {
             for (int q = 0; q < m; q++) {
@@ -388,7 +432,7 @@ public final class RoadMesh {
                 }
             }
         }
-        if (!cityNode) apron(gb, n);
+        // no grass apron: the tiled terrain runs up to the junction (cut away under it)
     }
 
     private static float cross(float[] r, int a, int b, int c) {
@@ -444,7 +488,7 @@ public final class RoadMesh {
     private void tri(GeoBuilder gb, float ax, float ay, float az, float bx, float by, float bz, float cx, float cy, float cz,
                      int lay, int flags, float bias, float lt, boolean cityNode) {
         float e1 = (float) Math.hypot(bx - ax, bz - az), e2 = (float) Math.hypot(cx - ax, cz - az), e3 = (float) Math.hypot(cx - bx, cz - bz);
-        int n = Math.max(1, (int) Math.ceil(Math.max(e1, Math.max(e2, e3)) / (cityNode ? 6f : 4f)));
+        int n = Math.max(1, (int) Math.ceil(Math.max(e1, Math.max(e2, e3)) / STEP));
         for (int i = 0; i < n; i++)
             for (int j = 0; j < n - i; j++) {
                 emitTri(gb, n, i, j, i + 1, j, i, j + 1, ax, ay, az, bx, by, bz, cx, cy, cz, lay, flags, bias, lt, cityNode);
@@ -463,11 +507,11 @@ public final class RoadMesh {
             p3[v * 3] = x;
             p3[v * 3 + 1] = cityNode ? terrain.height(x, z) : ay * fa + by * fb + cy * fc;
             p3[v * 3 + 2] = z;
-            uv3[v * 2] = x / 2f;
-            uv3[v * 2 + 1] = z / 2f;
+            uv3[v * 2] = x / TILE_M;
+            uv3[v * 2 + 1] = z / TILE_M;
             l3[v] = lt;
         }
-        gb.quad(p3, uv3, l3, lib.asphalt, lay, flags | Geo.FLAG_NO_SUBDIV, bias, true);
+        gb.quad(p3, uv3, l3, lib.tiles.asphalt, lay, flags | Geo.FLAG_NO_SUBDIV, bias, true);
     }
 
 
@@ -497,8 +541,8 @@ public final class RoadMesh {
             sl.topTex = laneTex;
             sl.us = Math.max(0.05f, ul);
             sl.clampU = true;
-            sl.vs = 20f;
-            sl.vOff = (a - laneBase) / 20f;
+            sl.vs = FarmTextures.LANE_PERIOD;
+            sl.vOff = (a - laneBase) / FarmTextures.LANE_PERIOD;
         } else {
             sl.topTex = lib.asphalt;
             sl.us = 2f; sl.vs = 2f;

@@ -2,7 +2,7 @@
 
 A PS1-inspired open-world driving and exploration game with a shared Java game engine and CPU software renderer.
 
-Procedural buildings, property walls, bridges and vending machines render as tiled, textured polygons, sorted far-to-near through a PS1-style ordering table; polygons never depth-test each other. The ray-marched ground keeps a ground-only depth buffer that polygons and sprites test (but never write), so hills hide the houses, trees and props behind them.
+The ground is polygons: one terrain cell per 8 m point of the height grid (just enough for the hills), with road surfaces laid over it in long strips that follow each road's curve, and footpaths, lots and buildings as whole faces (not cut into tiles). Polygons are sorted far-to-near through a PS1-style ordering table with a depth buffer on top (Options > Polygons can switch to pure PS1 sorting); the sea is an animated Mode 7 pass. Textures are always perspective-correct.
 
 The first desktop launch picks a random seed and generates an island about 128 km across; later launches return to the same island until **NEW ISLAND** is chosen in the pause menu (or the game is started with `--new-island`). The city is a compact downtown with named suburbs spread around it (countryside in between), surrounded by towns, villages, farmland and gravel or dirt farm tracks with farmsteads and country houses along them. Explicitly seeded games remain deterministic.
 

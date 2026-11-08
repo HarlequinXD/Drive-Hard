@@ -130,19 +130,20 @@ public final class FarmTextures {
 
     public static final int LINE_NONE = 0, LINE_SOLID = 1, LINE_DASH5 = 2, LINE_DASH8 = 3, LINE_YELLOW = 4, LINE_DOUBLE_YELLOW = 5, LINE_THICK = 6;
     /** Lane textures repeat every 20 m along the road. */
-    public static final float LANE_PERIOD = 20f;
+    /** Metres of road one lane tile covers (128 texels): the ground's tile length. */
+    public static final float LANE_PERIOD = 8f;
 
     /**
      * A lane of asphalt (u across the lane, v along 20 m) with painted lines on its edges.
      * {@code laneW} is the lane width in metres, used to match the asphalt grain scale.
      */
-    public static Texture lane(Texture asphalt, float laneW, int left, int right) {
-        int w = 64, h = 256;
+    public static Texture lane(Texture asphalt, float tileM, float laneW, int left, int right) {
+        int w = 128, h = 128;
         Img m = new Img(w, h);
         for (int y = 0; y < h; y++)
             for (int x = 0; x < w; x++) {
-                int sx = (int) (x * laneW / w / 2f * asphalt.w) & (asphalt.w - 1);
-                int sy = (int) (y * LANE_PERIOD / h / 2f * asphalt.h) & (asphalt.h - 1);
+                int sx = (int) (x * laneW / w / tileM * asphalt.w) & (asphalt.w - 1);
+                int sy = (int) (y * LANE_PERIOD / h / tileM * asphalt.h) & (asphalt.h - 1);
                 m.px[y * w + x] = asphalt.px[sy * asphalt.w + sx];
             }
         int lw = Math.max(2, Math.round(0.15f / laneW * w)), tw = Math.max(3, Math.round(0.2f / laneW * w));
@@ -169,11 +170,6 @@ public final class FarmTextures {
         return m.texture();
     }
 
-    /**
-     * Footpath at the edge of a town street (u 0 at the lane edge line to 1 at the kerb; one tile
-     * is 20 m along): pale concrete pavers with joints every 2 m, a few darker replaced slabs,
-     * and a slightly darker gutter strip against the road.
-     */
     /**
      * The walking strip of a town road (路側帯), the Japanese way: no raised pavement, the asphalt
      * beside the lane line painted green, worn paler where feet and tyres scuff it, with a gutter of
@@ -217,8 +213,8 @@ public final class FarmTextures {
             float s = y * LANE_PERIOD / m.h;
             boolean on;
             switch (style) {
-                case LINE_DASH5: on = (s % 10f) < 5f; break;
-                case LINE_DASH8: on = s < 8f; break;
+                case LINE_DASH5: on = s < 4f; break;           // 4 m dash, 4 m gap
+                case LINE_DASH8: on = s < 5.5f; break;         // long freeway dash
                 default: on = true; break;
             }
             if (!on) continue;
@@ -236,13 +232,13 @@ public final class FarmTextures {
      * @param arriving  width of the arriving half that gets the stop line (metres from the centre)
      * @param zebra     paint a pedestrian crossing (city streets)
      */
-    public static Texture mouth(Texture asphalt, float width, float length, float arriving, boolean zebra, boolean stop) {
+    public static Texture mouth(Texture asphalt, float tileM, float width, float length, float arriving, boolean zebra, boolean stop) {
         int w = 128, h = 64;
         Img m = new Img(w, h);
         for (int y = 0; y < h; y++)
             for (int x = 0; x < w; x++) {
-                int sx = (int) (x * width / w / 2f * asphalt.w) & (asphalt.w - 1);
-                int sy = (int) (y * length / h / 2f * asphalt.h) & (asphalt.h - 1);
+                int sx = (int) (x * width / w / tileM * asphalt.w) & (asphalt.w - 1);
+                int sy = (int) (y * length / h / tileM * asphalt.h) & (asphalt.h - 1);
                 m.px[y * w + x] = asphalt.px[sy * asphalt.w + sx];
             }
         int white = rgb(236, 236, 228);

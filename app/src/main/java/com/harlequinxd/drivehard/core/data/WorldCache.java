@@ -46,7 +46,7 @@ import java.util.zip.InflaterInputStream;
  */
 public final class WorldCache {
     /** Bump when the file layout changes. */
-    public static final int FORMAT = 5;
+    public static final int FORMAT = 6;
     private static final int CHUNK_MAGIC = 0x44484331; // "DHC1"
 
     /** The game data folder (set by the platform before the game starts); null turns the cache off. */
@@ -88,7 +88,7 @@ public final class WorldCache {
         if (r == null) return null;
         try {
             r.mkdirs();
-            String key = "world-" + Long.toHexString(seed) + "-" + Ground.RES + "-"
+            String key = "world-" + Long.toHexString(seed) + "-tiled-"
                     + Integer.toHexString((FORMAT + ":" + build).hashCode());
             File dir = new File(r, key);
             File[] old = r.listFiles();
@@ -292,9 +292,7 @@ public final class WorldCache {
         size += c.boxes.size() * 24 + c.spriteCount * Chunk.SPRITE_STRIDE * 4;
         Ground.Tile t = c.ground;
         if (t != null) {
-            size += 16;
-            for (short[] m : t.mips) size += 4 + m.length * 2;
-            size += t.h.length * 4 + (t.water != null ? t.water.length : 0);
+            size += 16 + t.h.length * 4 + (t.water != null ? t.water.length : 0);
         }
         ByteBuffer b = ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN);
         b.putInt(c.batches.size());
@@ -320,11 +318,7 @@ public final class WorldCache {
         b.putFloat(c.minX).putFloat(c.minZ).putFloat(c.maxX).putFloat(c.maxZ).putInt(c.polyCount);
         if (t == null) b.putInt(0);
         else {
-            b.putInt(t.mips.length);
-            for (short[] m : t.mips) {
-                b.putInt(m.length);
-                b.asShortBuffer().put(m); b.position(b.position() + m.length * 2);
-            }
+            b.putInt(1);
             b.putInt(t.h.length);
             b.asFloatBuffer().put(t.h); b.position(b.position() + t.h.length * 4);
             b.putInt(t.water == null ? -1 : t.water.length);
@@ -366,20 +360,13 @@ public final class WorldCache {
         c.spriteCount = sprites;
         c.minX = b.getFloat(); c.minZ = b.getFloat(); c.maxX = b.getFloat(); c.maxZ = b.getFloat();
         c.polyCount = b.getInt();
-        int mips = b.getInt();
-        if (mips > 0) {
-            if (mips != Ground.MIPS) throw new IOException("ground detail changed");
-            short[][] ms = new short[mips][];
-            for (int k = 0; k < mips; k++) {
-                ms[k] = new short[b.getInt()];
-                b.asShortBuffer().get(ms[k]); b.position(b.position() + ms[k].length * 2);
-            }
+        if (b.getInt() != 0) {
             float[] h = new float[b.getInt()];
             b.asFloatBuffer().get(h); b.position(b.position() + h.length * 4);
             int wl = b.getInt();
             byte[] water = null;
             if (wl >= 0) { water = new byte[wl]; b.get(water); }
-            c.ground = new Ground.Tile(cx, cz, ms, h, water);
+            c.ground = new Ground.Tile(cx, cz, h, water);
         }
         c.heights();
         return c;

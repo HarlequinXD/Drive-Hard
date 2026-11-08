@@ -18,6 +18,7 @@ public final class InterchangeShots {
         long seed = a.length > 2 ? Long.parseLong(a[2]) : Game.DEFAULT_SEED;
         Game g = new Game(seed, null, true);
         g.setResolution(432, 240);
+        g.renderer.texMap = Integer.getInteger("texmap", g.renderer.texMap);      // 0 exact, 1 GBA, 2 PS1
         g.env.hours = 11;
         g.traffic.target = 0;
         g.pedestrians.target = 0;

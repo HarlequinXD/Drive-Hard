@@ -9,6 +9,7 @@ import com.harlequinxd.drivehard.core.render.Texture;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
 import java.nio.ShortBuffer;
 import java.util.ArrayList;
@@ -91,6 +92,8 @@ public final class GlRenderer extends Renderer {
         atlasPages = 0;
         gpuBytes = 0;
         otVao = otVbo = cornerTex = 0;
+        sandTex = 0;
+        sandId = -1;
     }
 
     @Override public void dispose() {
@@ -421,6 +424,7 @@ public final class GlRenderer extends Renderer {
         Program p = groundProg;
         gl.uniform1f(p.loc("uRows"), H);
         gl.uniform2f(p.loc("uMip"), Ground.TEXEL * focal * 1.4f, Ground.MIPS);
+        gl.uniform1f(p.loc("uSandM"), Ground.SAND_M);
         gl.uniform4f(p.loc("uTintDry"), tR / 256f, tG / 256f, tB / 256f, dryness);
         gl.uniform3f(p.loc("uFog"), fogR, fogG, fogB);
         gl.uniform3f(p.loc("uFogRange"), fogStart, 1f / (fogEnd - fogStart), far);
@@ -446,17 +450,22 @@ public final class GlRenderer extends Renderer {
                 float nx = Math.max(x0, Math.min(ex, x0 + Ground.TILE)) - ex, nz = Math.max(z0, Math.min(ez, z0 + Ground.TILE)) - ez;
                 if (nx * nx + nz * nz > far * far * 1.1f) continue;
                 Ground.Tile t = ground.tile(cx, cz);
+                // loaded dry land is all polygons; the pass draws the sea, and flat colours where nothing is loaded yet
+                if (t != null && t.water == null) continue;
                 GTile g = t == null ? null : tiles.get(t);
                 if (t != null && g == null && budget > 0) { g = uploadTile(t); budget--; }
+                if (t != null && g == null) continue;
                 boolean flatTile = g == null;
                 if (flatTile) g = flatTile(cx, cz);
                 if (!boxVisible(x0, g.minY, z0, x0 + Ground.TILE, g.maxY, z0 + Ground.TILE)) continue;
                 g.lastUse = frame;
                 gl.uniform1i(p.loc("uFlat"), flatTile ? 1 : 0);
                 gl.uniform1i(p.loc("uHasWater"), !flatTile && g.water != 0 ? 1 : 0);
+                // the sea's depth a hair nearer than the terrain tiles' (it wins where both lie)
+                gl.uniform1f(p.loc("uGroundS"), flatTile ? 0.94f : 0.95f);
                 gl.uniform2f(p.loc("uTile"), x0, z0);
                 gl.activeTexture(Gl.TEXTURE0);
-                gl.bindTexture(Gl.TEXTURE_2D, flatTile ? 0 : g.tex);
+                gl.bindTexture(Gl.TEXTURE_2D, flatTile ? 0 : sandTexture());
                 gl.activeTexture(Gl.TEXTURE0 + 1);
                 gl.bindTexture(Gl.TEXTURE_2D, g.water);
                 gl.bindVertexArray(g.vao);
@@ -510,24 +519,6 @@ public final class GlRenderer extends Renderer {
                 pos[k] = x0 + i * 4f; pos[k + 1] = top + (bot - top) * fz2; pos[k + 2] = z0 + j * 4f;
             }
         GTile g = meshTile(pos, null);
-        // the painted map, every mip, as 16-bit colour
-        g.tex = newTexture(Gl.NEAREST_MIPMAP_NEAREST, Gl.CLAMP_TO_EDGE);
-        gl.texParameteri(Gl.TEXTURE_2D, Gl.TEXTURE_BASE_LEVEL, 0);
-        gl.texParameteri(Gl.TEXTURE_2D, Gl.TEXTURE_MAX_LEVEL, Ground.MIPS - 1);
-        for (int k = 0; k < Ground.MIPS; k++) {
-            int n = Ground.RES >> k;
-            short[] m = t.mips[k];
-            ShortBuffer sb = direct(n * n * 2).asShortBuffer();
-            for (int pz = 0; pz < n; pz++)
-                for (int px = 0; px < n; px++) {
-                    int v = m[Ground.Tile.index(px, pz, n)];
-                    int r = (v >> 10) & 31, gg = (v >> 5) & 31, b = v & 31;
-                    sb.put((short) ((r << 11) | (((gg << 1) | (gg >> 4)) << 5) | b));
-                }
-            sb.flip();
-            gl.texImage2D(Gl.TEXTURE_2D, k, Gl.RGB565, n, n, Gl.RGB, Gl.UNSIGNED_SHORT_5_6_5, sb);
-            g.bytes += (long) n * n * 2;
-        }
         if (t.water != null) {
             int n = Ground.WRES + 1;
             ByteBuffer wb = direct(n * n);
@@ -542,6 +533,22 @@ public final class GlRenderer extends Renderer {
         tiles.put(t, g);
         gpuBytes += g.bytes;
         return g;
+    }
+
+    private int sandTex, sandId = -1;
+
+    /** The ground's sand tile as a repeating texture, for the sea floor in the shallows. */
+    private int sandTexture() {
+        int id = ground.sandTexture();
+        if (sandTex != 0 && sandId == id) return sandTex;
+        Texture t = textures[id];
+        if (sandTex == 0) sandTex = newTexture(Gl.NEAREST, Gl.REPEAT);
+        gl.bindTexture(Gl.TEXTURE_2D, sandTex);
+        IntBuffer px = direct(t.w * t.h * 4).asIntBuffer();
+        px.put(t.px, 0, t.w * t.h).flip();
+        gl.texImage2D(Gl.TEXTURE_2D, 0, Gl.RGBA8, t.w, t.h, Gl.RGBA, Gl.UNSIGNED_BYTE, px);
+        sandId = id;
+        return sandTex;
     }
 
     private GTile flatTile(int cx, int cz) {
@@ -633,6 +640,8 @@ public final class GlRenderer extends Renderer {
 
     private static final class Batch {
         int vao, vbo, ibo, lastUse;
+        /** Each polygon's four corners (3 RGBA32F texels, 256 a row), for whole-polygon GBA spans. */
+        int corners;
         final int[] first = new int[LAYERS], count = new int[LAYERS];
         long bytes;
         int polys;
@@ -652,6 +661,7 @@ public final class GlRenderer extends Renderer {
     }
 
     private ByteBuffer uploadBuf = direct(1 << 16);
+    private float[] upCorners = new float[4096 * CF];
     private IntBuffer indexBuf = direct(1 << 16).asIntBuffer();
 
     private Batch upload(Geo g) {
@@ -690,12 +700,21 @@ public final class GlRenderer extends Renderer {
             if ((fl & Geo.FLAG_DETAIL) != 0) flags |= 4;
             if (t.scrollU != 0f) { flags |= 8; scrollRate = t.scrollU; }
             int nv = g.vertexCount(i);
+            if (upCorners.length < (b.polys + 1) * CF) upCorners = java.util.Arrays.copyOf(upCorners, Math.max(upCorners.length * 2, (b.polys + 1) * CF));
+            for (int c = 0; c < 4; c++) {
+                int cc = Math.min(c, nv - 1);
+                upCorners[b.polys * CF + c * 3] = g.pos[i * 12 + cc * 3];
+                upCorners[b.polys * CF + c * 3 + 1] = g.pos[i * 12 + cc * 3 + 1];
+                upCorners[b.polys * CF + c * 3 + 2] = g.pos[i * 12 + cc * 3 + 2];
+                upCorners[b.polys * CF + 12 + c * 2] = g.uv[i * 8 + cc * 2];
+                upCorners[b.polys * CF + 12 + c * 2 + 1] = g.uv[i * 8 + cc * 2 + 1];
+            }
             byte nx = (byte) Math.round(g.nrm[i * 3] * 127f), ny = (byte) Math.round(g.nrm[i * 3 + 1] * 127f), nz = (byte) Math.round(g.nrm[i * 3 + 2] * 127f);
             for (int c = 0; c < 4; c++) {
                 vb.putFloat(g.pos[i * 12 + c * 3]).putFloat(g.pos[i * 12 + c * 3 + 1]).putFloat(g.pos[i * 12 + c * 3 + 2]);
                 vb.putFloat(g.uv[i * 8 + c * 2]).putFloat(g.uv[i * 8 + c * 2 + 1]);
                 float cov = blend ? g.alpha[i * 4 + c] : 1f;
-                vb.putShort(unorm16(g.light[i * 4 + c] * 0.25f)).putShort(unorm16(cov)).putShort(unorm16(0.25f)).putShort((short) 0);
+                vb.putShort(unorm16(g.light[i * 4 + c] * 0.25f)).putShort(unorm16(cov)).putShort(unorm16(l == L_GROUND ? 0.235f : 0.25f)).putShort((short) 0);
                 vb.put(nx).put(ny).put(nz).put((byte) 0);
                 vb.putShort((short) id).putShort((short) flags);
             }
@@ -720,6 +739,16 @@ public final class GlRenderer extends Renderer {
         attributes();
         gl.bindVertexArray(0);
         b.bytes = vb.limit() + indices * 4L;
+        // the corners, for GBA scanline spans across whole polygons (clipped to the near plane)
+        int rows = Math.max(1, (b.polys + 255) >> 8);
+        FloatBuffer cb = direct(rows * 256 * CF * 4).asFloatBuffer();
+        cb.put(upCorners, 0, b.polys * CF);
+        cb.position(0);
+        gl.activeTexture(Gl.TEXTURE0 + 3);
+        b.corners = newTexture(Gl.NEAREST, Gl.CLAMP_TO_EDGE);
+        gl.texImage2D(Gl.TEXTURE_2D, 0, RGBA32F, 256 * 5, rows, Gl.RGBA, Gl.FLOAT, cb);
+        gl.activeTexture(Gl.TEXTURE0);
+        b.bytes += rows * 256L * CF * 4;
         gpuBytes += b.bytes;
         statUploads += b.polys;
         return b;
@@ -743,6 +772,7 @@ public final class GlRenderer extends Renderer {
     }
 
     private void freeBatch(Batch b) {
+        if (b.corners != 0) gl.deleteTexture(b.corners);
         gl.deleteVertexArray(b.vao);
         gl.deleteBuffer(b.vbo);
         gl.deleteBuffer(b.ibo);
@@ -955,9 +985,10 @@ public final class GlRenderer extends Renderer {
     private int runCount;
     private int otVbo, otVao;
     private ByteBuffer otBuf = direct(16384 * 4 * STRIDE);
-    /** Each ordered polygon's four corners (world), 3 RGBA32F texels each, 256 polygons a row. */
-    private float[] otCorners = new float[16384 * 12];
-    private ByteBuffer cornerBuf = direct(16384 * 12 * 4);
+    /** Each ordered polygon's four corners (world xyz, then uv), 5 RGBA32F texels each, 256 polygons a row. */
+    private float[] otCorners = new float[16384 * CF];
+    private ByteBuffer cornerBuf = direct(16384 * CF * 4);
+    private static final int CF = 20;
     private int cornerTex;
 
     private static int two(int lo, int hi) {
@@ -1060,12 +1091,14 @@ public final class GlRenderer extends Renderer {
                 int nv = g.vertexCount(i);
                 int nrm = four(Math.round(g.nrm[i * 3] * 127f), Math.round(g.nrm[i * 3 + 1] * 127f), Math.round(g.nrm[i * 3 + 2] * 127f), 0);
                 int texFlags = two(id, flags);
-                if (otCorners.length < (w + 1) * 12) otCorners = java.util.Arrays.copyOf(otCorners, otCorners.length * 2);
+                if (otCorners.length < (w + 1) * CF) otCorners = java.util.Arrays.copyOf(otCorners, otCorners.length * 2);
                 for (int c = 0; c < 4; c++) {
                     int cc = Math.min(c, nv - 1);
-                    otCorners[w * 12 + c * 3] = g.pos[i * 12 + cc * 3] + d.ox;
-                    otCorners[w * 12 + c * 3 + 1] = g.pos[i * 12 + cc * 3 + 1] + d.oy;
-                    otCorners[w * 12 + c * 3 + 2] = g.pos[i * 12 + cc * 3 + 2] + d.oz;
+                    otCorners[w * CF + c * 3] = g.pos[i * 12 + cc * 3] + d.ox;
+                    otCorners[w * CF + c * 3 + 1] = g.pos[i * 12 + cc * 3 + 1] + d.oy;
+                    otCorners[w * CF + c * 3 + 2] = g.pos[i * 12 + cc * 3 + 2] + d.oz;
+                    otCorners[w * CF + 12 + c * 2] = g.uv[i * 8 + cc * 2];
+                    otCorners[w * CF + 12 + c * 2 + 1] = g.uv[i * 8 + cc * 2 + 1];
                 }
                 for (int c = 0; c < 4; c++) {
                     int cc = Math.min(c, nv - 1), o = base + c * VI;
@@ -1086,8 +1119,9 @@ public final class GlRenderer extends Renderer {
                 int flags = dynFlags[q];
                 shadow = (flags & 32) != 0;
                 int texFlags = two(id, flags);
-                if (otCorners.length < (w + 1) * 12) otCorners = java.util.Arrays.copyOf(otCorners, otCorners.length * 2);
-                System.arraycopy(dynPos, q * 12, otCorners, w * 12, 12);
+                if (otCorners.length < (w + 1) * CF) otCorners = java.util.Arrays.copyOf(otCorners, otCorners.length * 2);
+                System.arraycopy(dynPos, q * 12, otCorners, w * CF, 12);
+                System.arraycopy(dynUv, q * 8, otCorners, w * CF + 12, 8);
                 for (int c = 0; c < 4; c++) {
                     int o = base + c * VI;
                     s[o] = Float.floatToRawIntBits(dynPos[q * 12 + c * 3]);
@@ -1129,15 +1163,15 @@ public final class GlRenderer extends Renderer {
         }
         // the corners, for whole-polygon scanline spans (GBA texture mapping)
         int rows = Math.max(1, (w + 255) >> 8);
-        int floats = rows * 256 * 12;
+        int floats = rows * 256 * CF;
         if (cornerBuf.capacity() < floats * 4) cornerBuf = direct(floats * 4 + (floats << 1));
         cornerBuf.clear();
-        cornerBuf.asFloatBuffer().put(otCorners, 0, w * 12);
+        cornerBuf.asFloatBuffer().put(otCorners, 0, w * CF);
         cornerBuf.limit(floats * 4);
         gl.activeTexture(Gl.TEXTURE0 + 3);
         if (cornerTex == 0) cornerTex = newTexture(Gl.NEAREST, Gl.CLAMP_TO_EDGE);
         gl.bindTexture(Gl.TEXTURE_2D, cornerTex);
-        gl.texImage2D(Gl.TEXTURE_2D, 0, RGBA32F, 768, rows, Gl.RGBA, Gl.FLOAT, cornerBuf);
+        gl.texImage2D(Gl.TEXTURE_2D, 0, RGBA32F, 256 * 5, rows, Gl.RGBA, Gl.FLOAT, cornerBuf);
         gl.activeTexture(Gl.TEXTURE0);
         quadIndices(w);
         gl.bindVertexArray(otVao);
@@ -1222,17 +1256,23 @@ public final class GlRenderer extends Renderer {
                 drawOrderingTable(p);
                 continue;
             }
-            gl.depthMask(layer == L_OBJECT);
+            // the terrain tiles are the ground: a depth buffer among themselves, and what everything above tests
+            gl.depthMask(layer == L_OBJECT || layer == L_GROUND);
             gl.uniform1i(p.loc("uSingle"), 0);
+            gl.uniform1i(p.loc("uCorners"), 1);
+            gl.activeTexture(Gl.TEXTURE0 + 3);
             for (Draw d : draws) {
                 Batch b = batches.get(d.g);
                 if (b == null || b.count[layer] == 0) continue;
                 gl.uniform3f(p.loc("uOffset"), d.ox, d.oy, d.oz);
+                gl.bindTexture(Gl.TEXTURE_2D, b.corners);
                 gl.bindVertexArray(b.vao);
                 gl.drawElements(Gl.TRIANGLES, b.count[layer], Gl.UNSIGNED_INT, b.first[layer] * 4);
                 statPrims += b.count[layer] / 3;
                 if (layer == L_OBJECT) statBatches++;
             }
+            gl.activeTexture(Gl.TEXTURE0);
+            gl.uniform1i(p.loc("uCorners"), 0);
             if (nDyn > 0) {
                 gl.uniform3f(p.loc("uOffset"), 0f, 0f, 0f);
                 dyn = drawDynamic(dyn, layer);

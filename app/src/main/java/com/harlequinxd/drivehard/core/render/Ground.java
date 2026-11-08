@@ -1,44 +1,29 @@
 package com.harlequinxd.drivehard.core.render;
 
 /**
- * The ground as a Mode 7 style map: the world is a flat, top-down painted picture cut into square
- * tiles, plus a height map. {@link SoftRenderer#drawGround()} projects it in perspective column by
- * column (a height-mapped Mode 7, as in voxel-space renderers), so hills rise out of the map and hide
- * what lies behind them. Only buildings, props, cars and people are real polygons, standing on it.
+ * The ground under the sea and along the coast. The ground itself is tiled polygons (128-texel
+ * tiles, one per 8 m cell, in the chunks' batches); what remains here per 64 m chunk is the sea's:
+ * the heights on the 8 m grid (the sea surface sits at sea level over them) and, on coasts, a 1 m
+ * map of the sea floor / sand that the renderers animate waves, swash and foam over. Beyond the
+ * loaded chunks the renderers fill the distance with flat colours ({@link Source#color}).
  */
 public final class Ground {
     /** Tile edge in metres, texels per tile edge at mip 0, height samples per tile edge (cells + 1). */
     public static final float TILE = 64f;
     public static final int HCELLS = 8;
     public static final float HCELL = TILE / HCELLS;
-    /** Painted texels per tile edge at mip 0 (1024 = 16 per metre; low-memory mode 512, 8 per metre). */
-    public static int RES = 1024;
-    public static float TEXEL = TILE / RES;
-
-    /**
-     * Low-memory mode (phones): ground painted at 8 texels per metre, a quarter of the memory per
-     * tile. Must be set before any ground is painted.
-     */
-    public static void lowMemory(boolean on) {
-        RES = on ? 512 : 1024;
-        TEXEL = TILE / RES;
-        MIPS = on ? 7 : 8;
-    }
-    /** Mip levels (the smallest is 8x8 texels). */
-    public static int MIPS = 8;
+    /** Metres per texel of the sea's sand (the ground tiles: 128 texels per 8 m), and its mip count. */
+    public static final float TEXEL = 8f / 128f;
+    public static final int MIPS = 6;
+    /** Metres covered by one sand tile. */
+    public static final float SAND_M = 8f;
     /** Cells per tile edge of the water map. */
     public static final int WRES = 64;
 
-    /** One painted tile: colour mips (lighting baked in) and its corner heights. */
+    /** One chunk's sea data: its corner heights and, on coasts, the water map. */
     public static final class Tile {
         public final int cx, cz;
-        /**
-         * mips[k] is (RES >> k)^2 texels in 15-bit RGB (the screen's colour depth, half the memory
-         * of ARGB), z down, stored in 8x8 blocks (see {@link #index}) so that walking the map in
-         * any direction stays in cache.
-         */
-        public final short[][] mips = new short[MIPS][];
-        /** (HCELLS+1)^2 heights at the 8 m grid points (shared with the neighbouring tiles). */
+        /** (HCELLS+1)^2 heights at the 8 m grid points (shared with the neighbouring tiles), never below the sea surface. */
         public final float[] h = new float[(HCELLS + 1) * (HCELLS + 1)];
         /**
          * Sea and beach, (WRES+1)^2 samples on the 1 m lattice (z down), or null on tiles with no coast: 0 is land
@@ -56,52 +41,28 @@ public final class Ground {
             return 1 + Math.min(254, Math.round((0.6f - h) * 20f));
         }
 
-        /** A tile read back from the game data cache. */
-        public Tile(int cx, int cz, short[][] mips, float[] h, byte[] water) {
+        public Tile(int cx, int cz, float[] h, byte[] water) {
             this.cx = cx;
             this.cz = cz;
-            System.arraycopy(mips, 0, this.mips, 0, Math.min(mips.length, this.mips.length));
             System.arraycopy(h, 0, this.h, 0, Math.min(h.length, this.h.length));
             this.water = water;
         }
 
-        public Tile(int cx, int cz, int[] base) {
-            this.cx = cx;
-            this.cz = cz;
-            int[] src = base;
-            mips[0] = pack(src);
-            for (int k = 1; k < MIPS; k++) {
-                int n = RES >> k, m = n << 1;
-                int[] dst = new int[n * n];
-                for (int y = 0; y < n; y++)
-                    for (int x = 0; x < n; x++) {
-                        int a = src[(y * 2) * m + x * 2], b = src[(y * 2) * m + x * 2 + 1];
-                        int c = src[(y * 2 + 1) * m + x * 2], d = src[(y * 2 + 1) * m + x * 2 + 1];
-                        int r = (((a >> 16) & 255) + ((b >> 16) & 255) + ((c >> 16) & 255) + ((d >> 16) & 255) + 2) >> 2;
-                        int g = (((a >> 8) & 255) + ((b >> 8) & 255) + ((c >> 8) & 255) + ((d >> 8) & 255) + 2) >> 2;
-                        int bl = ((a & 255) + (b & 255) + (c & 255) + (d & 255) + 2) >> 2;
-                        dst[y * n + x] = (r << 16) | (g << 8) | bl;
-                    }
-                mips[k] = pack(dst);
-                src = dst;
-            }
-        }
-
-        /** Position of texel (px, pz) in a mip of n x n texels. */
-        public static int index(int px, int pz, int n) {
-            return (((pz >> 3) * (n >> 3) + (px >> 3)) << 6) | ((pz & 7) << 3) | (px & 7);
-        }
-
-        private static short[] pack(int[] c) {
-            short[] out = new short[c.length];
-            int n = (int) Math.sqrt(c.length);
-            for (int i = 0; i < c.length; i++) {
-                int v = c[i];
-                int o = index(i % n, i / n, n);
-                int r = Math.min(31, (((v >> 16) & 255) + 4) >> 3), g = Math.min(31, (((v >> 8) & 255) + 4) >> 3), b = Math.min(31, ((v & 255) + 4) >> 3);
-                out[o] = (short) ((r << 10) | (g << 5) | b);
-            }
-            return out;
+        /** Water level code at local metres (lx, lz), bilinear on the 1 m map: the sand / sea-floor height, or NaN on dry land. */
+        public float waterAt(float lx, float lz) {
+            if (water == null) return Float.NaN;
+            int ix = (int) lx, iz = (int) lz;
+            if (ix < 0) ix = 0; else if (ix > WRES - 1) ix = WRES - 1;
+            if (iz < 0) iz = 0; else if (iz > WRES - 1) iz = WRES - 1;
+            float tx = lx - ix, tz = lz - iz;
+            int n = WRES + 1, o = iz * n + ix;
+            int a = water[o] & 255, b = water[o + 1] & 255, c = water[o + n] & 255, d = water[o + n + 1] & 255;
+            if ((a | b | c | d) == 0) return Float.NaN;
+            float ha = a == 0 ? 0.8f : waterHeight(a), hb = b == 0 ? 0.8f : waterHeight(b);
+            float hc = c == 0 ? 0.8f : waterHeight(c), hd = d == 0 ? 0.8f : waterHeight(d);
+            float top = ha + (hb - ha) * tx, bot = hc + (hd - hc) * tx;
+            float hh = top + (bot - top) * tz;
+            return hh > 0.5f ? Float.NaN : hh;
         }
     }
 
@@ -112,6 +73,8 @@ public final class Ground {
         float height(float x, float z);
         /** Flat colour where no tile is loaded. */
         int color(float x, float z);
+        /** Texture id of the sand tile (one tile per {@link #SAND_M} metres) the sea shows through its shallows. */
+        int sandTexture();
 
     }
 }
