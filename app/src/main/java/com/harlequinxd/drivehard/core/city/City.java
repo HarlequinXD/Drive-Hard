@@ -409,7 +409,7 @@ public final class City extends World implements java.io.Serializable {
                     grid[(j + 1) * 10 + (i + 1)] = surface(ax, az, ax + 8f, az + 8f);
                 }
             List<float[]> paint = new ArrayList<>();
-            countryside.yards(x0, z0, x1, z1, (a, b, c, d, t) -> paint.add(new float[]{a, b, c, d, t, 2f, 2f}));
+            countryside.yards(x0, z0, x1, z1, (a, b, c, d, t, f) -> paint.add(new float[]{a, b, c, d, t, 2f, 2f, f}));
             groundPaint(x0, z0, x1, z1, paint);
             new GroundPaint(this).paint(ch.ground, gb, grid, paint);
         }
@@ -563,7 +563,7 @@ public final class City extends World implements java.io.Serializable {
             }
         fieldMargins(gb, x0, z0, grid);
         // farm yards and konbini car parks, over the tiles
-        countryside.yards(x0, z0, x1, z1, (rx0, rz0, rx1, rz1, t) -> {
+        countryside.yards(x0, z0, x1, z1, (rx0, rz0, rx1, rz1, t, side) -> {
             float a0 = Math.max(rx0, x0), a1 = Math.min(rx1, x1), b0 = Math.max(rz0, z0), b1 = Math.min(rz1, z1);
             if (a1 - a0 > 0.05f && b1 - b0 > 0.05f) {
                 gb.floorAreaT(a0, b0, a1, b1, 0.03f, t, 2f, 2f, L_DECAL, 8f, 0, 0f);
@@ -1247,20 +1247,20 @@ public final class City extends World implements java.io.Serializable {
                 else if (roll < 0.84f) { type = BuildingGen.Type.APAATO; set = shopsSuburb; }
                 else if (roll < 0.9f) { type = BuildingGen.Type.SHOPHOUSE; set = shopsSuburb; }
                 else if (roll < 0.96f) { park(c, x0, z0, x1, z1, false); return; }
-                else { parking(c, x0, z0, x1, z1); return; }
+                else { parking(c, x0, z0, x1, z1, street); return; }
                 break;
             case SEASIDE:
                 if (roll < 0.4f) { type = BuildingGen.Type.WAREHOUSE; set = shopsSeaside; }
                 else if (roll < 0.62f) { type = BuildingGen.Type.SHOPHOUSE; set = shopsSeaside; }
                 else if (roll < 0.82f) { type = BuildingGen.Type.MANSION; set = shopsSeaside; }
-                else { parking(c, x0, z0, x1, z1); return; }
+                else { parking(c, x0, z0, x1, z1, street); return; }
                 break;
             default:
                 if (roll < 0.42f) { type = BuildingGen.Type.MANSION; set = shopsMixed; }
                 else if (roll < 0.67f) { type = BuildingGen.Type.SHOPHOUSE; set = shopsMixed; }
                 else if (roll < 0.73f) { type = BuildingGen.Type.KONBINI; set = shopsKonbini; }
                 else if (roll < 0.8f) { type = BuildingGen.Type.ZAKKYO; set = shopsMixed; }
-                else if (roll < 0.88f) { parking(c, x0, z0, x1, z1); return; }
+                else if (roll < 0.88f) { parking(c, x0, z0, x1, z1, street); return; }
                 else if (roll < 0.95f) { park(c, x0, z0, x1, z1, false); return; }
                 else { type = BuildingGen.Type.APAATO; set = shopsMixed; }
                 break;
@@ -1289,8 +1289,9 @@ public final class City extends World implements java.io.Serializable {
             float w = Math.min(x1 - x, 24f + c.rnd.nextInt(5) * 4f);
             if (x1 - (x + w) < 10f) w = x1 - x;
             float roll = c.rnd.nextFloat();
-            boolean parkingLot = zone == Zone.CENTRAL || zone == Zone.ENTERTAINMENT ? roll < 0.6f : roll < 0.25f;
-            if (parkingLot) c.gb.floorAreaT(x, z0, x + w, z1, CURB, lib.parking, 2.5f, 5f, L_RAISED, 8f, 0, 0f);
+            // (no car parks here: a courtyard has no way in for cars)
+            boolean pocketPlaza = (zone == Zone.CENTRAL || zone == Zone.ENTERTAINMENT) && roll < 0.4f;
+            if (pocketPlaza) c.gb.floorAreaT(x, z0, x + w, z1, CURB, lib.pavers, 2f, 2f, L_RAISED, 8f, 0, 0f);
             else {
                 // a back garden / green: lawn with a few trees
                 c.gb.floorAreaT(x, z0, x + w, z1, CURB, lib.grass, 2f, 2f, L_RAISED, 8f, 0, 0f);
@@ -1351,8 +1352,10 @@ public final class City extends World implements java.io.Serializable {
         propertyWall(c, ax, z - 0.08f, bx, z + 0.08f, 1.2f, lib.blockWall);
     }
 
-    private void parking(Ctx c, float x0, float z0, float x1, float z1) {
-        c.gb.floorAreaT(x0, z0, x1, z1, CURB, lib.parking, 2.5f, 5f, L_RAISED, 8f, 0, 0f);
+    /** A coin car park on a lot, laid out from the street it opens onto (north, south, west, east). */
+    private void parking(Ctx c, float x0, float z0, float x1, float z1, boolean[] street) {
+        int face = street[0] ? 0 : street[1] ? 1 : street[2] ? 2 : street[3] ? 3 : 0;
+        c.gb.parkingArea(x0, z0, x1, z1, CURB, lib.parking, face);
         lampAt(c.ch, x0 + 1.5f, (z0 + z1) * 0.5f, 0f);
     }
 

@@ -71,8 +71,13 @@ public final class Countryside implements java.io.Serializable {
         for (List<Site> list : sites.values()) {
             for (Site st : list) {
                 if (st.ground == null) continue;
-                float[] pk = new float[st.ground.size() * 5];
-                for (int i = 0; i < st.ground.size(); i++) System.arraycopy(st.ground.get(i), 0, pk, i * 5, 5);
+                // x0, z0, x1, z1, texture, side facing the street (car parks: where cars drive in; -1 none)
+                float[] pk = new float[st.ground.size() * 6];
+                for (int i = 0; i < st.ground.size(); i++) {
+                    float[] g = st.ground.get(i);
+                    System.arraycopy(g, 0, pk, i * 6, 5);
+                    pk[i * 6 + 5] = g.length > 5 ? g[5] : -1f;
+                }
                 st.groundPacked = pk;
                 st.ground = null;
             }
@@ -558,7 +563,9 @@ public final class Countryside implements java.io.Serializable {
             if (apartments && rnd.nextFloat() < 0.07f && w > 12f) {
                 st.kind = APAATO;
                 st.ground = new ArrayList<>();
-                st.ground.add(new float[]{lx0, z0, lx1, z1, lib.parking});
+                // a row of bays between the street and the building (set back 6 m), driven into from the street
+                float[] cp = local(st, 0f, 0f, w, 6f);
+                st.ground.add(new float[]{cp[0], cp[1], cp[2], cp[3], lib.parking, face});
             } else {
                 st.kind = LOT;
                 st.design = rnd.nextInt(HouseGen.SUBURB_DESIGNS);
@@ -615,9 +622,16 @@ public final class Countryside implements java.io.Serializable {
         st.x0 = x0; st.z0 = z0; st.x1 = x1; st.z1 = z1;
         st.kind = kind; st.face = face; st.seed = rnd.nextInt(); st.rx = Float.NaN;
         st.ground = new ArrayList<>();
-        st.ground.add(new float[]{x0, z0, x1, z1, groundTex});
-        if (kind == SCHOOL) st.ground.add(new float[]{x0, z0, x1, z0 + 15f, lib.concrete});
-        if (kind == SUPERMARKET) st.ground.add(new float[]{x0, z1 - 22f, x1, z1, lib.concrete});
+        float w = st.face < 2 ? x1 - x0 : z1 - z0, d = st.face < 2 ? z1 - z0 : x1 - x0;
+        if (groundTex == lib.parking || kind == TOWN_HALL) {
+            // the car park lies between the street and the building, open to the street; the building
+            // stands on a concrete apron behind it
+            float back = kind == SUPERMARKET ? 22f : kind == TOWN_KONBINI ? d - 7f : kind == TOWN_HALL ? d - 7f : 0f;
+            float[] cp = local(st, 0f, 0f, w, d - back), ap = local(st, 0f, d - back, w, d);
+            st.ground.add(new float[]{cp[0], cp[1], cp[2], cp[3], lib.parking, face});
+            if (back > 0f) st.ground.add(new float[]{ap[0], ap[1], ap[2], ap[3], lib.concrete});
+        } else st.ground.add(new float[]{x0, z0, x1, z1, groundTex});
+        if (kind == SCHOOL) st.ground.add(face == 0 ? new float[]{x0, z0, x1, z0 + 15f, lib.concrete} : new float[]{x0, z1 - 15f, x1, z1, lib.concrete});
         add(st);
         return true;
     }
@@ -790,7 +804,8 @@ public final class Countryside implements java.io.Serializable {
     /** Yards are painted into the ground map (see {@link #yards}), not built. */
     private void yard(GeoBuilder gb, float x0, float z0, float x1, float z1, int tex) { }
 
-    interface YardSink { void yard(float x0, float z0, float x1, float z1, int tex); }
+    /** A yard: its rectangle, texture, and (car parks) the side facing the street, 0 north 1 south 2 west 3 east, or -1. */
+    interface YardSink { void yard(float x0, float z0, float x1, float z1, int tex, int face); }
 
     /** Every gravel yard and car park overlapping the area, for the ground painter. */
     void yards(float ax0, float az0, float ax1, float az1, YardSink sink) {
@@ -803,8 +818,8 @@ public final class Countryside implements java.io.Serializable {
                 for (Site s : list) {
                     if (s.groundPacked != null) {
                         float[] g = s.groundPacked;
-                        for (int i = 0; i < g.length; i += 5)
-                            if (!(g[i + 2] < ax0 || g[i] > ax1 || g[i + 3] < az0 || g[i + 1] > az1)) sink.yard(g[i], g[i + 1], g[i + 2], g[i + 3], (int) g[i + 4]);
+                        for (int i = 0; i < g.length; i += 6)
+                            if (!(g[i + 2] < ax0 || g[i] > ax1 || g[i + 3] < az0 || g[i + 1] > az1)) sink.yard(g[i], g[i + 1], g[i + 2], g[i + 3], (int) g[i + 4], (int) g[i + 5]);
                         continue;
                     }
                     float[] r;
@@ -814,11 +829,15 @@ public final class Countryside implements java.io.Serializable {
                         r = local(s, w * 0.25f, 4f, w * 0.75f, 14f);
                         t = lib.gravel;
                     } else if (s.kind == KONBINI) {
-                        r = new float[]{s.x0 - 3f, s.z0 - 3f, s.x1 + 3f, s.z1 + 3f};
+                        // the convenience store's car park: a row of bays along its front
+                        r = s.face == 0 ? new float[]{s.x0 - 3f, s.z0 - 7f, s.x1 + 3f, s.z0}
+                                : s.face == 1 ? new float[]{s.x0 - 3f, s.z1, s.x1 + 3f, s.z1 + 7f}
+                                : s.face == 2 ? new float[]{s.x0 - 7f, s.z0 - 3f, s.x0, s.z1 + 3f}
+                                : new float[]{s.x1, s.z0 - 3f, s.x1 + 7f, s.z1 + 3f};
                         t = lib.parking;
                     } else continue;
                     if (r[2] < ax0 || r[0] > ax1 || r[3] < az0 || r[1] > az1) continue;
-                    sink.yard(r[0], r[1], r[2], r[3], t);
+                    sink.yard(r[0], r[1], r[2], r[3], t, t == lib.parking ? s.face : -1);
                 }
             }
     }

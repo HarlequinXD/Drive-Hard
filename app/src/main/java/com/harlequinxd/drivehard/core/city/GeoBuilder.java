@@ -314,6 +314,15 @@ public final class GeoBuilder {
      * (The layer, flags and bias asked for are from the painted-map days and no longer matter:
      * ground cover always lies in the decal layer, over the terrain tiles and under the roads.)
      */
+    /** A car park: painted like {@link #floorAreaT}, with the side its cars drive in from (0 north, 1 south, 2 west, 3 east). */
+    public void parkingArea(float ax, float az, float bx, float bz, float off, int tex, int face) {
+        if (paint != null) paint.add(new float[]{ax, az, bx, bz, tex, 2.5f, 5f, face});
+        java.util.List<float[]> keep = paint;
+        paint = null;
+        floorAreaT(ax, az, bx, bz, off, tex, 2.5f, 5f, SoftRenderer.L_DECAL, 8f, 0, 0f);
+        paint = keep;
+    }
+
     public void floorAreaT(float ax, float az, float bx, float bz, float off, int tex, float uScale, float vScale,
                            int layer, float cell, int flags, float bias) {
         if (paint != null) paint.add(new float[]{ax, az, bx, bz, tex, uScale, vScale});

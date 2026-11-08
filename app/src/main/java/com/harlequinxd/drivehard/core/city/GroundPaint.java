@@ -89,7 +89,7 @@ final class GroundPaint {
             for (int i = 0; i <= 8; i++) ct[j * 9 + i] = city.cornerType(x0 + i * 8f, z0 + j * 8f);
         // yards (their dirt fringe) near the chunk
         List<float[]> yards = new java.util.ArrayList<>();
-        city.countryside.yards(x0 - 2f, z0 - 2f, x0 + 66f, z0 + 66f, (a, b, c, d, tex) -> yards.add(new float[]{a, b, c, d}));
+        city.countryside.yards(x0 - 2f, z0 - 2f, x0 + 66f, z0 + 66f, (a, b, c, d, tex, f) -> yards.add(new float[]{a, b, c, d}));
         float[] w = new float[N * N * L];
         float[] one = new float[L];
         for (int sj = 0; sj < N; sj++)
@@ -216,7 +216,10 @@ final class GroundPaint {
             if (!park) for (int k = 1; k < n; k++) if (tex[k] == id && sc[k * 2] == r[5] && sc[k * 2 + 1] == r[6]) { m = k; break; }
             if (m < 0) {
                 if (n == Ground.Tile.MATS) m = n - 1;
-                else { m = n++; tex[m] = id; sc[m * 2] = r[5]; sc[m * 2 + 1] = r[6]; System.arraycopy(r, 0, rc, m * 4, 4); }
+                else {
+                    m = n++; tex[m] = id; sc[m * 2] = r[5]; sc[m * 2 + 1] = r[6]; System.arraycopy(r, 0, rc, m * 4, 4);
+                    if (park) sc[m * 2] = r.length > 7 ? r[7] : -1f;           // a car park keeps the side cars enter from
+                }
             }
             for (int j = j0; j <= j1; j++) java.util.Arrays.fill(mat, j * MN + i0, j * MN + i1 + 1, (byte) m);
             any = true;
