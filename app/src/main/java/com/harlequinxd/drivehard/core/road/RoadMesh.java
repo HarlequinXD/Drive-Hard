@@ -373,29 +373,36 @@ public final class RoadMesh {
      * The road's edges outside town: a shoulder of bare dirt right next to the tarmac, then the
      * dirt fraying out into the grass (a dithered fade), in pieces that follow the ground.
      */
+    /**
+     * The road's ragged edge: an alpha-clipped strip whose hand-painted texture runs from the
+     * tarmac's crumbling lip across a dirt-and-gravel shoulder to grass clumps, cut out against
+     * the terrain. The inner band lies on the road, the outer band drapes down to the ground.
+     * Pieces are at most one texture length long (alpha textures clamp v).
+     */
     private void shoulders(GeoBuilder gb, float s0, float s1, float hw) {
-        final float solid = 0.7f, frayed = 1.7f;
-        int nsub = Math.max(1, (int) Math.ceil((s1 - s0) / 8f));
+        final float in = 0.3f, A = FarmTextures.EDGE_ACROSS, L = FarmTextures.EDGE_ALONG;
+        final float uMid = 2f * in / A, uMax = 0.995f;
+        int nsub = Math.max(1, (int) Math.ceil((s1 - s0) / L));
         float lt = GeoBuilder.sunLight(0, 1, 0);
         for (int k = 0; k < nsub; k++) {
             float sa = s0 + (s1 - s0) * k / nsub, sb = s0 + (s1 - s0) * (k + 1) / nsub;
+            float vb = (sb - sa) / L;
             for (int side = -1; side <= 1; side += 2) {
                 for (int q = 0; q < 2; q++) {
-                    float o0 = (hw + (q == 0 ? -0.05f : solid)) * side, o1 = (hw + (q == 0 ? solid : solid + frayed)) * side;
-                    vergePoint(sa, o0, q == 0, 0);
-                    vergePoint(sa, o1, false, 1);
-                    vergePoint(sb, o1, false, 2);
-                    vergePoint(sb, o0, q == 0, 3);
+                    float o0 = (q == 0 ? hw - in : hw + in) * side, o1 = (q == 0 ? hw + in : hw - in + A) * side;
+                    float u0 = q == 0 ? 0f : uMid, u1 = q == 0 ? uMid : uMax;
+                    vergePoint(sa, o0, true, 0);
+                    vergePoint(sa, o1, q == 0, 1);
+                    vergePoint(sb, o1, q == 0, 2);
+                    vergePoint(sb, o0, true, 3);
+                    float[] uu = {u0, u1, u1, u0}, vv = {0f, 0f, vb, vb};
                     for (int c = 0; c < 4; c++) {
-                        p[c * 3 + 1] += 0.02f;
-                        uv[c * 2] = p[c * 3] / 2f; uv[c * 2 + 1] = p[c * 3 + 2] / 2f;
+                        boolean onRoad = c == 0 || c == 3 || q == 0;
+                        p[c * 3 + 1] += onRoad ? 0.07f : 0.04f;
+                        uv[c * 2] = uu[c]; uv[c * 2 + 1] = vv[c];
                         l[c] = lt;
                     }
-                    if (q == 0) gb.quad(p, uv, l, lib.dirt, L_DECAL, 0, 0f, true);
-                    else {
-                        fade[0] = 1f; fade[1] = 0f; fade[2] = 0f; fade[3] = 1f;
-                        gb.quadBlend(p, uv, l, fade, lib.dirt, L_DECAL, 0, -0.05f);
-                    }
+                    gb.quad(p, uv, l, lib.roadEdge, L_RAISED, Geo.FLAG_ALPHA | Geo.FLAG_NO_SUBDIV, -0.05f, true);
                 }
             }
         }

@@ -77,6 +77,105 @@ public final class FarmTextures {
         return m.texture();
     }
 
+    /** Distance along the road the road-edge texture covers (metres), and across it. */
+    public static final float EDGE_ALONG = 10f, EDGE_ACROSS = 2.6f;
+
+    /**
+     * The edge of a country road, hand painted: across the texture (u, 0 at the tarmac) the
+     * asphalt breaks up into a crumbled lip that casts a thin shadow, then a shoulder of packed
+     * dirt and gravel with lit pebbles and tyre-worn patches, grass clumps pushing in more and
+     * more, and finally a ragged alpha-clipped edge of tufts and dirt specks over the terrain.
+     * Tiles along v. Light from the upper left like everything else; the library's pixel-art
+     * finish then dithers it to its own palette.
+     */
+    public static Texture roadEdge(Texture asphalt, long seed) {
+        final int W = 64, H = 256;
+        int sd = (int) seed + 960;
+        int[] px = new int[W * H];
+        // hand-picked ramps, dark to light: dirt, grass
+        int[] dirt = {rgb(66, 52, 40), rgb(92, 74, 56), rgb(118, 96, 72), rgb(140, 116, 88), rgb(164, 140, 108), rgb(190, 170, 136)};
+        int[] grass = {rgb(30, 54, 30), rgb(44, 78, 36), rgb(64, 104, 44), rgb(90, 134, 54), rgb(124, 164, 72), rgb(164, 192, 98)};
+        float[] tarEnd = new float[H], dirtEnd = new float[H];
+        for (int y = 0; y < H; y++) {
+            tarEnd[y] = 6f + 4f * (Noise.value(0, y, W, H, 1, 20, sd) * 0.65f + Noise.value(0, y, W, H, 1, 64, sd + 1) * 0.35f);
+            dirtEnd[y] = 33f + 12f * (Noise.value(0, y, W, H, 1, 12, sd + 2) * 0.6f + Noise.value(0, y, W, H, 1, 40, sd + 3) * 0.4f);
+        }
+        for (int y = 0; y < H; y++)
+            for (int x = 0; x < W; x++) {
+                int i = y * W + x;
+                float te = tarEnd[y], de = dirtEnd[y];
+                if (x < te) {
+                    // tarmac, its lip crumbling: a few chips missing right at the edge
+                    int a = asphalt.px[(y % asphalt.h) * asphalt.w + (x * 2) % asphalt.w];
+                    boolean chip = x > te - 2.5f && Noise.rnd(x, y, sd + 4) > 0.55f;
+                    if (!chip) {
+                        px[i] = x > te - 1.5f ? mix(a, rgb(150, 150, 150), 0.25f) : a;     // worn, paler lip
+                        continue;
+                    }
+                }
+                if (x < de + 6f) {
+                    // the shoulder: packed dirt and gravel, patchy, darker in the tyre ruts
+                    float n = Noise.fbm(x, y, W, H, sd + 5);
+                    float k = 1.6f + n * 2.6f;
+                    if (x >= te && x < te + 1.5f) k -= 1.6f;                         // the tarmac's shadow
+                    float rut = Math.abs(x - 14f - 3f * Noise.value(0, y, W, H, 1, 8, sd + 6));
+                    if (rut < 2.5f) k -= 0.7f * (1f - rut / 2.5f);
+                    // past the dirt's edge only specks remain, thinning out (alpha-clipped)
+                    if (x >= de) {
+                        float keep = 1f - (x - de) / 6f;
+                        if (Noise.rnd(x, y, sd + 7) > keep * 0.55f) continue;
+                    }
+                    px[i] = dirt[Math.max(0, Math.min(5, Math.round(k)))];
+                }
+            }
+        // pebbles on the shoulder: lit from the upper left
+        java.util.Random r = new java.util.Random(sd);
+        for (int k = 0; k < 180; k++) {
+            int x = 2 + r.nextInt(W - 4), y = r.nextInt(H);
+            if (x < tarEnd[y] + 1 || x > dirtEnd[y] - 1) continue;
+            int s = r.nextInt(3) == 0 ? 2 : 1;
+            int base = r.nextBoolean() ? rgb(158, 152, 140) : rgb(132, 120, 104);
+            for (int dy = 0; dy < s; dy++)
+                for (int dx = 0; dx < s; dx++) put(px, W, H, x + dx, y + dy, base);
+            put(px, W, H, x, y, mix(base, rgb(236, 232, 220), 0.5f));            // highlight
+            put(px, W, H, x + s, y + s, dirt[0]);                                 // shadow
+            put(px, W, H, x + s - 1, y + s, dirt[1]);
+        }
+        // grass clumps, more of them toward the verge, and the tufts that make the ragged edge
+        for (int k = 0; k < 230; k++) {
+            int y = r.nextInt(H);
+            int x = 16 + r.nextInt(Math.max(1, (int) dirtEnd[y] + 4 - 16));
+            if (x >= W - 4) continue;
+            float out = Math.min(1f, (x - 16) / Math.max(1f, dirtEnd[y] - 16)); // 0 by the ruts, 1 at the edge
+            if (r.nextFloat() > 0.08f + 0.92f * out * out) continue;
+            clump(px, W, H, x, y, 1 + r.nextInt(out > 0.75f ? 3 : 2), grass, r);
+        }
+        return new Texture(W, H, px);
+    }
+
+    private static void put(int[] px, int W, int H, int x, int y, int c) {
+        if (x < 0 || x >= W) return;
+        px[((y % H + H) % H) * W + x] = c;
+    }
+
+    /** A clump of grass: a dark base, then blades fanning up with lit tips. */
+    private static void clump(int[] px, int W, int H, int cx, int cy, int r, int[] g, java.util.Random rnd) {
+        for (int dy = -1; dy <= 1; dy++)
+            for (int dx = -r; dx <= r; dx++)
+                if (dx * dx + dy * dy * 4 <= r * r) put(px, W, H, cx + dx, cy + dy, g[dx > 0 ? 0 : 1]);
+        int blades = 3 + r * 2;
+        for (int b = 0; b < blades; b++) {
+            int x = cx - r + rnd.nextInt(2 * r + 1);
+            int len = 2 + rnd.nextInt(r + 2);
+            int lean = rnd.nextInt(3) - 1;
+            for (int s = 0; s < len; s++) {
+                int yy = cy - s, xx = x + (s * lean) / 2;
+                int shade = s == len - 1 ? (xx < cx ? 5 : 4) : s > len / 2 ? (xx < cx ? 4 : 3) : 2;
+                put(px, W, H, xx, yy, g[shade]);
+            }
+        }
+    }
+
     /** Freshly ploughed soil with furrows. */
     public static Texture soil(long seed) {
         Img m = new Img(64, 64);

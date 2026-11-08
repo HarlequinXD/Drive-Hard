@@ -143,6 +143,7 @@ public final class TextureLibrary implements java.io.Serializable {
         walkStrip = add(FarmTextures.walkStrip(asp, 1.75f));
         mouthTown = add(FarmTextures.mouth(asp, tm, 9f, 3f, 2.75f, false, true));
         int lanesTo = list.size();
+        roadEdge = add(FarmTextures.roadEdge(asp, seed));
         houseTextures((int) seed);
         houseKits(seed, lowMemory);
         // the pixel-art finish: baked relief light and dithered palettes on everything
@@ -175,7 +176,7 @@ public final class TextureLibrary implements java.io.Serializable {
     public HouseTextures.Door[] houseDoorKind;
     public HouseTextures.Roof[] houseRoofKind;
     /** Building props: a/c unit front and casing, balcony front and slab, power line ribbon. */
-    public int dirt, gravelTrack, dirtTrack, aircon, airconSide, balconyFront, balconySlab, powerLines;
+    public int dirt, roadEdge, gravelTrack, dirtTrack, aircon, airconSide, balconyFront, balconySlab, powerLines;
     /** Alley clutter: beer crates, rubbish bins, cardboard, gas bottles. */
     public int crateYellow, crateRed, bin, cardboard, gasBottle;
     public int fence, signTownOffice, signPost, signSuper, signSchool, signClinic, signGas, schoolWall, superWall, canopy, field;
