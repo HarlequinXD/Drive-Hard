@@ -226,21 +226,23 @@ final class GroundPaint {
 
     // ------------------------------------------------------------------ roads
 
-    private float[] rd;
+    private float[] rd, key;
     private short[] ri;
     private boolean anyRoad;
 
     private void roads(Ground.Tile t, float x0, float z0) {
         rd = new float[RN * RN * 4];
         ri = new short[RN * RN * 4];
+        key = new float[RN * RN];
         anyRoad = false;
-        for (int k = 0; k < RN * RN; k++) rd[k * 4] = 99f;
+        for (int k = 0; k < RN * RN; k++) { rd[k * 4] = 99f; key[k] = 99f; }
         float pad = 32f;
         net.forEachPieceIn(x0 - pad, z0 - pad, x0 + 64f + pad, z0 + 64f + pad, (e, i) -> piece(e, i, x0, z0));
         for (int dz = -1; dz <= 1; dz++)
             for (int dx = -1; dx <= 1; dx++)
                 for (RoadNode n : net.nodesInChunk(t.cx + dx, t.cz + dz)) junction(n, x0, z0);
         if (anyRoad) { t.road = rd; t.roadInfo = ri; }
+        key = null;
         rd = null;
         ri = null;
     }
@@ -266,9 +268,18 @@ final class GroundPaint {
         if (ma > 0f && (na.kind == RoadNode.Kind.CITY || givesWay(e, na))) flags |= Ground.Tile.RF_PAINT_A;
         if (mb > 0f && (nb.kind == RoadNode.Kind.CITY || givesWay(e, nb))) flags |= Ground.Tile.RF_PAINT_B;
         if (cls == RoadClass.RAMP && gore(e, i)) flags |= Ground.Tile.RF_PLAIN;
-        if (!cls.city && cls != RoadClass.FREEWAY && cls != RoadClass.RAMP) flags |= Ground.Tile.RF_SHOULDER;
+        if (e.surface == RoadEdge.GRAVEL) flags |= Ground.Tile.RF_GRAVEL;
+        else if (e.surface == RoadEdge.DIRT) flags |= Ground.Tile.RF_DIRT;
+        else if (!cls.city && cls != RoadClass.FREEWAY && cls != RoadClass.RAMP) flags |= Ground.Tile.RF_SHOULDER;
+        // ends where other roads join (a junction): no dirt there, and the through road owns the overlap
+        boolean joinA = joins(na), joinB = joins(nb);
+        boolean yieldA = joinA && minor(e, na), yieldB = joinB && minor(e, nb);
+        if (joinA) flags |= Ground.Tile.RF_JOIN_A;
+        if (joinB) flags |= Ground.Tile.RF_JOIN_B;
         float sa = e.s[i], sb = e.s[i + 1];
-        boolean first = i == 0, last = i == e.count() - 2;
+        // a bridge next to this piece: the painted road stops square where the deck begins
+        boolean first = i == 0 || e.bridge[i - 1], last = i == e.count() - 2 || e.bridge[i + 1];
+        float endA = i > 0 && e.bridge[i - 1] ? sa : trimA, endB = i < e.count() - 2 && e.bridge[i + 1] ? sb : e.len - trimB;
         int mouths = Math.min(255, Math.round(ma * 16f)) | Math.min(255, Math.round(mb * 16f)) << 8;
         for (int j = j0; j <= j1; j++)
             for (int k = i0; k <= i1; k++) {
@@ -282,11 +293,17 @@ final class GroundPaint {
                 if ((tl < 0f && first) || (tl > 1f && last)) across = side;
                 float s = sa + (sb - sa) * ((tl < 0f && first) || (tl > 1f && last) ? tl : tc);
                 float sdf = Math.abs(across) - hw;
-                float cut = Math.max(trimA - s, s - (e.len - trimB));
+                float cut = Math.max(endA - s, s - endB);
                 sdf = Math.max(sdf, cut);
                 int o = j * RN + k;
-                if (sdf >= rd[o * 4] || sdf > REACH) continue;
-                rd[o * 4] = sdf;
+                if (sdf > REACH) continue;
+                // the asphalt is the union of all roads; the sample belongs to the road it lies deepest in,
+                // except that a road arriving at a junction yields to the one it joins
+                float dA = s - trimA, dB = e.len - trimB - s;
+                float k2 = sdf + (yieldA ? Math.max(0f, 3f - dA) : 0f) + (yieldB ? Math.max(0f, 3f - dB) : 0f);
+                if (sdf < rd[o * 4]) rd[o * 4] = sdf;
+                if (k2 >= key[o]) continue;
+                key[o] = k2;
                 rd[o * 4 + 1] = across;
                 rd[o * 4 + 2] = s - trimA;
                 rd[o * 4 + 3] = e.len - trimB - s;
@@ -318,7 +335,16 @@ final class GroundPaint {
             if (c.city || c == RoadClass.FREEWAY || c == RoadClass.RAMP) shoulder = false;
             cls = c.ordinal();
         }
-        int flags = shoulder ? Ground.Tile.RF_SHOULDER : 0;
+        int flags = 0;                       // no dirt edge where roads meet
+        // where only farm tracks meet, the junction is gravel or dirt too
+        int unpaved = -1;
+        for (int id : n.edges) {
+            RoadEdge e = net.edges.get(id);
+            if (e.surface == RoadEdge.PAVED) { unpaved = -1; break; }
+            if (unpaved < 0) unpaved = e.surface;
+        }
+        if (unpaved == RoadEdge.GRAVEL) flags |= Ground.Tile.RF_GRAVEL;
+        else if (unpaved == RoadEdge.DIRT) flags |= Ground.Tile.RF_DIRT;
         for (int j = j0; j <= j1; j++)
             for (int k = i0; k <= i1; k++) {
                 float px = x0 + k, pz = z0 + j;
@@ -335,8 +361,10 @@ final class GroundPaint {
                 }
                 float sdf = (float) Math.sqrt(best) * (inside ? -1f : 1f);
                 int o = j * RN + k;
-                if (sdf >= rd[o * 4] || sdf > REACH) continue;
-                rd[o * 4] = sdf;
+                if (sdf > REACH) continue;
+                if (sdf < rd[o * 4]) rd[o * 4] = sdf;
+                if (sdf >= key[o]) continue;
+                key[o] = sdf;
                 rd[o * 4 + 1] = 0f;
                 rd[o * 4 + 2] = 0f;
                 rd[o * 4 + 3] = 0f;
@@ -346,6 +374,18 @@ final class GroundPaint {
                 ri[o * 4 + 3] = 0;
                 anyRoad = true;
             }
+    }
+
+    /** Other roads meet at n (not a freeway split, not just the road running on). */
+    private static boolean joins(RoadNode n) {
+        return n.kind != RoadNode.Kind.SPLIT && (n.ring != null || n.edges.length >= 3);
+    }
+
+    /** A more important road meets e at n (e arrives at it, rather than running through). */
+    private boolean minor(RoadEdge e, RoadNode n) {
+        int best = 0;
+        for (int id : n.edges) if (id != e.id) best = Math.max(best, net.edges.get(id).cls.priority);
+        return best > e.cls.priority;
     }
 
     /** Traffic on e gives way at n: a higher-priority road meets it there. */
@@ -366,7 +406,7 @@ final class GroundPaint {
     // ------------------------------------------------------------------ road style for the GPU
 
     static float[] roadStyle(com.harlequinxd.drivehard.core.tex.TextureLibrary lib) {
-        float[] out = new float[8 * 20 + 2];
+        float[] out = new float[8 * 20 + 6];
         for (RoadClass c : RoadClass.values()) {
             if (c.ordinal() >= 8) continue;
             int o = c.ordinal() * 20;
@@ -379,6 +419,10 @@ final class GroundPaint {
         }
         out[160] = lib.tiles.asphalt;
         out[161] = lib.roadEdge;
+        out[162] = lib.gravelTrack;
+        out[163] = lib.dirtTrack;
+        out[164] = lib.gravel;
+        out[165] = lib.dirt;
         return out;
     }
 }

@@ -1539,6 +1539,15 @@ public final class RoadNetwork implements java.io.Serializable {
                 if (d < flat) over.bridge[i] = true;
             }
         }
+        // a deck that would sit within 2 m of the natural ground is an embankment instead: the road
+        // is painted on the shaped ground there, not a slab floating just above it
+        for (RoadEdge e : edges)
+            for (int i = 0; i < e.count() - 1; i++) {
+                if (!e.bridge[i]) continue;
+                float g0 = e.y[i] - terrain.natural(e.x[i], e.z[i]), g1 = e.y[i + 1] - terrain.natural(e.x[i + 1], e.z[i + 1]);
+                float gm = (e.y[i] + e.y[i + 1]) * 0.5f - terrain.natural((e.x[i] + e.x[i + 1]) * 0.5f, (e.z[i] + e.z[i + 1]) * 0.5f);
+                if (Math.max(g0, Math.max(g1, gm)) < 2f) e.bridge[i] = false;
+            }
     }
 
     /** Steepest grade of a bridge approach (and of slip roads climbing to a raised crossroad). */

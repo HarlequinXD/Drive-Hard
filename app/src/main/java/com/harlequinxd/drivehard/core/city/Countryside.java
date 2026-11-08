@@ -320,9 +320,26 @@ public final class Countryside implements java.io.Serializable {
         if (Math.floorMod((int) az, PARCEL_D) == 0) leveeStrip(gb, ax, az, bx, az + w, lift, flags);
     }
 
+    /** A levee, in pieces, left out where a road crosses the paddies (roads are painted into the ground). */
     private void leveeStrip(GeoBuilder gb, float x0, float z0, float x1, float z1, float lift, int flags) {
-        gb.floorT(x0, z0, x1, z1, lift, lib.grass, 2f, 2f, L_OBJECT, flags, -0.4f, true);
+        boolean alongX = x1 - x0 > z1 - z0;
+        float len = alongX ? x1 - x0 : z1 - z0;
+        int n = Math.max(1, (int) Math.ceil(len / 1f));
+        int run = -1;
+        for (int k = 0; k <= n; k++) {
+            boolean clear = k < n && !onRoad(alongX ? x0 + (k + 0.5f) * len / n : (x0 + x1) * 0.5f,
+                    alongX ? (z0 + z1) * 0.5f : z0 + (k + 0.5f) * len / n);
+            if (clear && run < 0) run = k;
+            if (!clear && run >= 0) {
+                float a = run * len / n, b = k * len / n;
+                if (alongX) gb.floorT(x0 + a, z0, x0 + b, z1, lift, lib.grass, 2f, 2f, L_OBJECT, flags, -0.4f, true);
+                else gb.floorT(x0, z0 + a, x1, z0 + b, lift, lib.grass, 2f, 2f, L_OBJECT, flags, -0.4f, true);
+                run = -1;
+            }
+        }
     }
+
+    private boolean onRoad(float x, float z) { return roads.onAsphalt(x, z, 0.8f, -1); }
 
     // ------------------------------------------------------------------ site placement
 

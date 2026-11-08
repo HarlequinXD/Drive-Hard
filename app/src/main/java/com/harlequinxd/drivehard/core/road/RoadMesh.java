@@ -226,6 +226,8 @@ public final class RoadMesh {
             float vBase = (float) Math.floor(s0 / 64f) * 64f;
             float laneBase = (float) Math.floor(s0 / 320f) * 320f;
             float[][] bands = bands(cls);
+            if (e.surface == RoadEdge.GRAVEL || e.surface == RoadEdge.DIRT)
+                bands = new float[][]{{0f, hw, e.surface == RoadEdge.GRAVEL ? lib.gravelTrack : lib.dirtTrack, 1}};
             float la = Math.max(a, trimA + ma), lb = Math.min(b, e.len - trimB - mb);
             if (ma > 0f && a < e.clearA + ma) mouthStrip(gb, a, Math.min(b, e.clearA + ma), true, hw, cls);
             if (mb > 0f && b > e.len - e.clearB - mb) mouthStrip(gb, Math.max(a, e.len - e.clearB - mb), b, false, hw, cls);

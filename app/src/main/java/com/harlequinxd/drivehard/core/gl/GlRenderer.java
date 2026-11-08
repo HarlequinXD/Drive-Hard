@@ -522,9 +522,9 @@ public final class GlRenderer extends Renderer {
         }
         gl.uniform4fv(p.loc("uCls[0]"), 8, styleCls);
         gl.uniform4fv(p.loc("uBand[0]"), 32, styleBand);
-        atlas((int) st[160]);
-        atlas((int) st[161]);
-        gl.uniform2f(p.loc("uRoadTex"), st[160], st[161]);
+        for (int k = 160; k < 166; k++) atlas((int) st[k]);
+        gl.uniform4f(p.loc("uRoadTex"), st[160], st[161], st[162], st[163]);
+        gl.uniform2f(p.loc("uRoadTex2"), st[164], st[165]);
         gl.activeTexture(Gl.TEXTURE0);
         gl.bindTexture(Gl.TEXTURE_2D_ARRAY, atlasTex);
         gl.activeTexture(Gl.TEXTURE0 + 1);

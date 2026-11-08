@@ -131,19 +131,19 @@ public final class PropTextures {
      * brown earth with darker ruts and a grassy strip down the middle, ragged grassy edges.
      */
     public static Texture track(boolean dirt, int seed) {
-        Img m = new Img(32, 128);
+        Img m = new Img(64, 256);
         java.util.Random r = new java.util.Random(seed);
         int base = dirt ? rgb(132, 104, 72) : rgb(150, 142, 128);
         int rut = dirt ? rgb(104, 80, 54) : rgb(126, 118, 104);
         int grass = rgb(92, 118, 58);
         m.fill(base);
-        m.grain(0, 0, 32, 128, 0.10f, 0.10f, seed);
-        for (int y = 0; y < 128; y++) {
+        m.grain(0, 0, 64, 256, 0.10f, 0.10f, seed);
+        for (int y = 0; y < 256; y++) {
             // wheel ruts wander a little
-            float wob = (float) Math.sin(y * 0.11f + seed) * 0.6f;
-            for (int x = 0; x < 32; x++) {
-                float u = (x + 0.5f) / 32f;
-                float d1 = Math.abs(u - 0.27f - wob / 32f), d2 = Math.abs(u - 0.73f - wob / 32f);
+            float wob = (float) Math.sin(y * 0.055f + seed) * 1.2f;
+            for (int x = 0; x < 64; x++) {
+                float u = (x + 0.5f) / 64f;
+                float d1 = Math.abs(u - 0.27f - wob / 64f), d2 = Math.abs(u - 0.73f - wob / 64f);
                 float dr = Math.min(d1, d2);
                 int c = m.get(x, y);
                 if (dr < 0.07f) c = mix(c, rut, 0.75f * (1f - dr / 0.07f) + 0.15f);
@@ -154,8 +154,8 @@ public final class PropTextures {
             }
         }
         // loose stones / clods
-        for (int k = 0; k < 220; k++) {
-            int x = r.nextInt(32), y = r.nextInt(128);
+        for (int k = 0; k < 880; k++) {
+            int x = r.nextInt(64), y = r.nextInt(256);
             int c = m.get(x, y);
             m.set(x, y, r.nextBoolean() ? Img.mul(c, 1.25f) : Img.mul(c, 0.75f));
         }

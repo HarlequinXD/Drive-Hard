@@ -67,7 +67,7 @@ public final class Ground {
         /** Per road sample: owner id (low 16 bits), owner high bits | junction flag (0x8000), class | flags << 8, mouth lengths (1/16 m, a | b << 8). */
         public short[] roadInfo;
 
-        public static final int RF_PAINT_A = 1, RF_PAINT_B = 2, RF_PLAIN = 4, RF_SHOULDER = 8;
+        public static final int RF_PAINT_A = 1, RF_PAINT_B = 2, RF_PLAIN = 4, RF_SHOULDER = 8, RF_JOIN_A = 16, RF_JOIN_B = 32, RF_GRAVEL = 64, RF_DIRT = 128;
 
         public Tile(int cx, int cz, float[] h, byte[] water) {
             this.cx = cx;
@@ -101,7 +101,7 @@ public final class Ground {
          * How roads are painted, for the GPU: per road class (by ordinal, at most 8) four floats
          * (half width, mouth texture, band count, -) then four bands of four floats (centre-side
          * offset, kerb-side offset, lane texture or -1 for plain asphalt, 1 if one band spans both
-         * sides); then the plain asphalt and road-edge texture ids.
+         * sides); then the plain asphalt, road-edge, gravel track, dirt track, gravel and dirt texture ids.
          */
         float[] roadStyle();
         /** Ground height where no tile is loaded. */

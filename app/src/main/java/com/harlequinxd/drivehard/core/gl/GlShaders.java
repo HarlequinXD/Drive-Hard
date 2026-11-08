@@ -469,7 +469,8 @@ final class GlShaders {
             + "uniform vec4 uMatT[32];\n"
             + "uniform vec4 uCls[8];\n"
             + "uniform vec4 uBand[32];\n"
-            + "uniform vec2 uRoadTex;\n"
+            + "uniform vec4 uRoadTex;\n"            // asphalt, road edge, gravel track, dirt track
+            + "uniform vec2 uRoadTex2;\n"           // gravel, dirt (where tracks meet)
             + "uniform vec3 uTint;\n"
             + "uniform vec3 uFog;\n"
             + "uniform vec2 uFogRange;\n"
@@ -517,8 +518,9 @@ final class GlShaders {
             + "  int cls = int(own.z & 255u);\n"
             + "  uint fl = own.z >> 8;\n"
             + "  bool junction = (own.y & 0x8000u) != 0u;\n"
-            + "  bool shoulder = (fl & 8u) != 0u;\n"
             + "  float across = acc.x, s0 = acc.y, s1 = acc.z;\n"
+            // the dirt edge runs along the road's sides only: not round its junctions
+            + "  bool shoulder = (fl & 8u) != 0u && !((fl & 16u) != 0u && s0 < 2.5) && !((fl & 32u) != 0u && s1 < 2.5);\n"
             + "  hit = true;\n"
             + "  if (sdf >= (shoulder ? -0.3 : 0.0)) {\n"
             + "    if (!shoulder) { hit = false; return vec4(0.0); }\n"
@@ -526,10 +528,16 @@ final class GlShaders {
             + "    float v = junction ? dot(vWorld.xz, vec2(0.0707, 0.0707)) : s0 / 10.0;\n"
             + "    return texel(int(uRoadTex.y), vec2(u, v), true);\n"
             + "  }\n"
-            + "  if (junction) return asphalt(vWorld.xz);\n"
+            + "  if (junction) {\n"
+            + "    if ((fl & 64u) != 0u) return texel(int(uRoadTex2.x), vWorld.xz / 2.0, true);\n"
+            + "    if ((fl & 128u) != 0u) return texel(int(uRoadTex2.y), vWorld.xz / 2.0, true);\n"
+            + "    return asphalt(vWorld.xz);\n"
+            + "  }\n"
             + "  if ((fl & 4u) != 0u) return asphalt(vWorld.xz);\n"
             + "  vec4 cl = uCls[cls];\n"
             + "  float hw = cl.x, o = abs(across);\n"
+            // farm tracks and driveways: gravel or dirt with wheel ruts, the whole width
+            + "  if ((fl & 192u) != 0u) return texel(int((fl & 64u) != 0u ? uRoadTex.z : uRoadTex.w), vec2(clamp((across + hw) / (2.0 * hw), 0.0, 0.999), s0 / 16.0), true);\n"
             + "  float mA = float(own.w & 255u) / 16.0, mB = float(own.w >> 8) / 16.0;\n"
             + "  float fr = clamp((across + hw) / (2.0 * hw), 0.0, 0.999);\n"
             + "  if (s0 < mA) return (fl & 1u) != 0u ? texel(int(cl.y), vec2(clamp(1.0 - fr, 0.0, 0.999), 1.0 - s0 / mA), false) : asphalt(vWorld.xz);\n"
