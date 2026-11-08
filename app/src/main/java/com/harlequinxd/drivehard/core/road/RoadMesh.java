@@ -116,10 +116,18 @@ public final class RoadMesh {
     private static final float TILE_M = com.harlequinxd.drivehard.core.tex.TerrainTiles.METRES;
     /** Largest road polygon edge: one ground tile (8 m). */
     /** Junction surfaces are split into pieces no bigger than this, so they follow the ground. */
-    private static final float STEP = 24f;
+    private static final float STEP = 8f;
+    /** Longest road-surface piece (the CPU renderer's ground cover; the GPU paints roads instead). */
+    private static final float PIECE = 8f;
 
     /** Flat strip between offsets o0..o1 from s a..b with world-ish uv (plain asphalt). */
     private void strip(GeoBuilder gb, float a, float b, float o0, float o1, float lift, int tex, float bias, int flags, float uScale, float vBase) {
+        // ground cover for the CPU renderer: in pieces of at most one terrain cell, so it follows the hills
+        if (b - a > PIECE) {
+            int n = (int) Math.ceil((b - a) / PIECE);
+            for (int k = 0; k < n; k++) strip(gb, a + (b - a) * k / n, a + (b - a) * (k + 1) / n, o0, o1, lift, tex, bias, flags, uScale, vBase);
+            return;
+        }
         at(a, o0, lift, 0);
         at(a, o1, lift, 1);
         at(b, o1, lift, 2);
@@ -135,6 +143,11 @@ public final class RoadMesh {
 
     /** Lane strip: u 0 at the centre-side offset oc to 1 at the kerb-side offset ok; v repeats every 20 m. */
     private void laneStrip(GeoBuilder gb, float a, float b, float oc, float ok, int tex, float vBase) {
+        if (b - a > PIECE) {
+            int n = (int) Math.ceil((b - a) / PIECE);
+            for (int k = 0; k < n; k++) laneStrip(gb, a + (b - a) * k / n, a + (b - a) * (k + 1) / n, oc, ok, tex, vBase);
+            return;
+        }
         at(a, oc, 0.04f, 0);
         at(a, ok, 0.04f, 1);
         at(b, ok, 0.04f, 2);

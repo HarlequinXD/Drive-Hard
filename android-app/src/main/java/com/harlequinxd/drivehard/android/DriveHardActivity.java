@@ -164,6 +164,8 @@ public final class DriveHardActivity extends Activity {
         private float hintTime = 8f;
         // GPU drawing (GL thread)
         private volatile boolean gpu;
+        private volatile String gpuError = "";
+        private volatile long gpuErrorUntil;
         GLSurfaceView glView;
         private GlRenderer glRenderer;
         private volatile int screenW, screenH;
@@ -558,6 +560,10 @@ public final class DriveHardActivity extends Activity {
             } catch (Throwable e) {
                 // no usable GPU path on this phone: carry on with the CPU renderer
                 android.util.Log.e("DriveHard", "GPU renderer failed, using the CPU renderer", e);
+                // say so on screen for a while, so it can be reported
+                String why = String.valueOf(e.getMessage() != null ? e.getMessage() : e.toString());
+                gpuError = "GPU off: " + e.getClass().getSimpleName() + " " + (why.length() > 90 ? why.substring(0, 90) : why);
+                gpuErrorUntil = System.currentTimeMillis() + 20000L;
                 gpu = false;
                 if (glRenderer != null) glRenderer.contextLost();
                 runOnUiThread(() -> { if (glView != null) glView.setVisibility(View.GONE); });
@@ -623,6 +629,12 @@ public final class DriveHardActivity extends Activity {
             synchronized (frame) { canvas.drawBitmap(frame, null, dst, pixels); }
             Game gm = game;
             if (screen == Screen.GAME && gm != null && !gm.missions.modal()) drawControls(canvas);
+            if (!gpuError.isEmpty() && System.currentTimeMillis() < gpuErrorUntil) {
+                paint.setColor(0xFFFF8A80);
+                paint.setTextSize(12 * density);
+                paint.setTypeface(Typeface.DEFAULT_BOLD);
+                canvas.drawText(gpuError, 24 * density, getHeight() - 16 * density, paint);
+            }
         }
 
         // control layout in screen pixels

@@ -1519,6 +1519,7 @@ public final class RoadNetwork implements java.io.Serializable {
             }
         }
         // bridges: lift roads over motorways
+        java.util.Set<Long> spans = new java.util.HashSet<>();
         for (BridgeMark m : bridgeMarks) {
             float[] p = new float[5];
             m.under.point(m.underS, p);
@@ -1537,13 +1538,15 @@ public final class RoadNetwork implements java.io.Serializable {
             for (int i = 0; i < over.count() - 1; i++) {
                 float d = Math.abs((over.s[i] + over.s[i + 1]) * 0.5f - sc);
                 if (d < flat) over.bridge[i] = true;
+                // the span over the motorway itself (and a margin each side) always stays a deck
+                if (d < m.under.cls.halfWidth() + 10f) spans.add(((long) over.id << 32) | i);
             }
         }
-        // a deck that would sit within 2 m of the natural ground is an embankment instead: the road
-        // is painted on the shaped ground there, not a slab floating just above it
+        // a deck approach that would sit within 2 m of the natural ground is an embankment instead:
+        // the road is painted on the shaped ground there, not a slab floating just above it
         for (RoadEdge e : edges)
             for (int i = 0; i < e.count() - 1; i++) {
-                if (!e.bridge[i]) continue;
+                if (!e.bridge[i] || spans.contains(((long) e.id << 32) | i)) continue;
                 float g0 = e.y[i] - terrain.natural(e.x[i], e.z[i]), g1 = e.y[i + 1] - terrain.natural(e.x[i + 1], e.z[i + 1]);
                 float gm = (e.y[i] + e.y[i + 1]) * 0.5f - terrain.natural((e.x[i] + e.x[i + 1]) * 0.5f, (e.z[i] + e.z[i + 1]) * 0.5f);
                 if (Math.max(g0, Math.max(g1, gm)) < 2f) e.bridge[i] = false;
