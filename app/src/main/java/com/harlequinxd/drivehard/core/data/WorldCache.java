@@ -46,7 +46,7 @@ import java.util.zip.InflaterInputStream;
  */
 public final class WorldCache {
     /** Bump when the file layout changes. */
-    public static final int FORMAT = 11;
+    public static final int FORMAT = 13;
     private static final int CHUNK_MAGIC = 0x44484331; // "DHC1"
 
     /** The game data folder (set by the platform before the game starts); null turns the cache off. */
@@ -335,7 +335,7 @@ public final class WorldCache {
         int n = 64;
         if (t.land != null) n += (t.land.length + t.lit.length) * 4;
         if (t.splat != null) n += t.splat.length + 16 * 8;
-        if (t.mat != null) n += t.mat.length + t.matTex.length * 12;
+        if (t.mat != null) n += t.mat.length + t.matTex.length * 28;
         if (t.road != null) n += t.road.length * 4 + t.roadInfo.length * 2;
         return n;
     }
@@ -352,7 +352,10 @@ public final class WorldCache {
         }
         if (t.mat != null) {
             b.putInt(t.matTex.length);
-            for (int k = 0; k < t.matTex.length; k++) b.putInt(t.matTex[k]).putFloat(t.matScale[k * 2]).putFloat(t.matScale[k * 2 + 1]);
+            for (int k = 0; k < t.matTex.length; k++) {
+                b.putInt(t.matTex[k]).putFloat(t.matScale[k * 2]).putFloat(t.matScale[k * 2 + 1]);
+                for (int c = 0; c < 4; c++) b.putFloat(t.matRect[k * 4 + c]);
+            }
             b.put(t.mat);
         }
         if (t.road != null) {
@@ -381,7 +384,11 @@ public final class WorldCache {
             int n = b.getInt();
             t.matTex = new int[n];
             t.matScale = new float[n * 2];
-            for (int k = 0; k < n; k++) { t.matTex[k] = b.getInt(); t.matScale[k * 2] = b.getFloat(); t.matScale[k * 2 + 1] = b.getFloat(); }
+            t.matRect = new float[n * 4];
+            for (int k = 0; k < n; k++) {
+                t.matTex[k] = b.getInt(); t.matScale[k * 2] = b.getFloat(); t.matScale[k * 2 + 1] = b.getFloat();
+                for (int c = 0; c < 4; c++) t.matRect[k * 4 + c] = b.getFloat();
+            }
             t.mat = new byte[Ground.Tile.MAT * Ground.Tile.MAT];
             b.get(t.mat);
         }

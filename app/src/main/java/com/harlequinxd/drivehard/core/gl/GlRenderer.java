@@ -488,7 +488,7 @@ public final class GlRenderer extends Renderer {
     // ------------------------------------------------------------------ the painted terrain
 
     /** One chunk's terrain on the GPU: its mesh, layer weights, material map and road map. */
-    private static final class GTerr { int vao, vbo, splat, mat, road, info, water, lastUse; float minY, maxY; long bytes; float[] layers, mats; }
+    private static final class GTerr { int vao, vbo, splat, mat, road, info, water, lastUse; float minY, maxY; long bytes; float[] layers, mats, rects; }
     private final float[] styleCls = new float[32], styleBand = new float[128];
     private final IdentityHashMap<Ground.Tile, GTerr> terrs = new IdentityHashMap<>();
     public int terrBudget = 6;
@@ -522,7 +522,9 @@ public final class GlRenderer extends Renderer {
         }
         gl.uniform4fv(p.loc("uCls[0]"), 8, styleCls);
         gl.uniform4fv(p.loc("uBand[0]"), 32, styleBand);
-        for (int k = 160; k < 166; k++) atlas((int) st[k]);
+        for (int k = 160; k < 172; k++) atlas((int) st[k]);
+        gl.uniform4f(p.loc("uPark"), st[166], st[171], 0f, 0f);
+        gl.uniform4f(p.loc("uParkBay"), st[167], st[168], st[169], st[170]);
         gl.uniform4f(p.loc("uRoadTex"), st[160], st[161], st[162], st[163]);
         gl.uniform2f(p.loc("uRoadTex2"), st[164], st[165]);
         gl.activeTexture(Gl.TEXTURE0);
@@ -551,7 +553,10 @@ public final class GlRenderer extends Renderer {
                 gl.uniform2f(p.loc("uTile"), x0, z0);
                 gl.uniform4fv(p.loc("uLayer[0]"), Ground.Tile.LAYERS, g.layers);
                 gl.uniform1i(p.loc("uHasMat"), g.mat != 0 ? 1 : 0);
-                if (g.mat != 0) gl.uniform4fv(p.loc("uMatT[0]"), g.mats.length / 4, g.mats);
+                if (g.mat != 0) {
+                    gl.uniform4fv(p.loc("uMatT[0]"), g.mats.length / 4, g.mats);
+                    gl.uniform4fv(p.loc("uMatR[0]"), g.rects.length / 4, g.rects);
+                }
                 gl.uniform1i(p.loc("uHasRoad"), g.road != 0 ? 1 : 0);
                 gl.uniform1i(p.loc("uHasWater"), g.water != 0 ? 1 : 0);
                 gl.activeTexture(Gl.TEXTURE0 + 2); gl.bindTexture(Gl.TEXTURE_2D, g.splat);
@@ -619,6 +624,7 @@ public final class GlRenderer extends Renderer {
             gl.texImage2D(Gl.TEXTURE_2D, 0, Gl.R8, mn, mn, Gl.RED, Gl.UNSIGNED_BYTE, mb);
             g.bytes += mn * mn;
             for (int k = 1; k < t.matTex.length; k++) atlas(t.matTex[k]);
+            g.rects = t.matRect != null ? t.matRect : new float[t.matTex.length * 4];
             g.mats = new float[t.matTex.length * 4];
             for (int k = 1; k < t.matTex.length; k++) {
                 g.mats[k * 4] = t.matTex[k];

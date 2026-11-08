@@ -58,6 +58,8 @@ public final class Ground {
         /** Material table: texture id, metres per repeat across x and z (entry 0 unused). */
         public int[] matTex;
         public float[] matScale;
+        /** Per material, the area it was painted over (x0, z0, x1, z1): car parks lay out their bays in it. */
+        public float[] matRect;
         /**
          * Roads projected onto the ground, ROAD^2 samples, or null: per sample the signed distance to
          * the nearest asphalt edge (negative on the road; junctions included), and for the road that
@@ -101,7 +103,8 @@ public final class Ground {
          * How roads are painted, for the GPU: per road class (by ordinal, at most 8) four floats
          * (half width, mouth texture, band count, -) then four bands of four floats (centre-side
          * offset, kerb-side offset, lane texture or -1 for plain asphalt, 1 if one band spans both
-         * sides); then the plain asphalt, road-edge, gravel track, dirt track, gravel and dirt texture ids.
+         * sides); then the plain asphalt, road-edge, gravel track, dirt track, gravel and dirt texture ids;
+         * then the car park's texture, its four bay variants and its aisle.
          */
         float[] roadStyle();
         /** Ground height where no tile is loaded. */

@@ -128,6 +128,7 @@ final class GroundPaint {
                     }
                     // bare dirt worn along field edges and round yards
                     float dirt = Math.max(fieldMargin(grid, si, sj), yardFringe(yards, x, z));
+                    if (dirt > 0f && net.onAsphalt(x, z, 2.5f, -1)) dirt = 0f;        // not between a lot and the road
                     if (dirt > 0f) {
                         for (int k = 0; k < L; k++) one[k] *= 1f - dirt;
                         one[slot(city.lib.dirt, 2f)] += dirt;
@@ -201,6 +202,7 @@ final class GroundPaint {
         byte[] mat = new byte[MN * MN];
         int[] tex = new int[Ground.Tile.MATS];
         float[] sc = new float[Ground.Tile.MATS * 2];
+        float[] rc = new float[Ground.Tile.MATS * 4];
         int n = 1;
         boolean any = false;
         final float px = Ground.TILE / MN;
@@ -210,10 +212,11 @@ final class GroundPaint {
             if (i0 > i1 || j0 > j1) continue;
             int id = (int) r[4];
             int m = -1;
-            for (int k = 1; k < n; k++) if (tex[k] == id && sc[k * 2] == r[5] && sc[k * 2 + 1] == r[6]) { m = k; break; }
+            boolean park = id == city.lib.parking;              // each car park lays out its own bays
+            if (!park) for (int k = 1; k < n; k++) if (tex[k] == id && sc[k * 2] == r[5] && sc[k * 2 + 1] == r[6]) { m = k; break; }
             if (m < 0) {
                 if (n == Ground.Tile.MATS) m = n - 1;
-                else { m = n++; tex[m] = id; sc[m * 2] = r[5]; sc[m * 2 + 1] = r[6]; }
+                else { m = n++; tex[m] = id; sc[m * 2] = r[5]; sc[m * 2 + 1] = r[6]; System.arraycopy(r, 0, rc, m * 4, 4); }
             }
             for (int j = j0; j <= j1; j++) java.util.Arrays.fill(mat, j * MN + i0, j * MN + i1 + 1, (byte) m);
             any = true;
@@ -222,6 +225,7 @@ final class GroundPaint {
         t.mat = mat;
         t.matTex = java.util.Arrays.copyOf(tex, n);
         t.matScale = java.util.Arrays.copyOf(sc, n * 2);
+        t.matRect = java.util.Arrays.copyOf(rc, n * 4);
     }
 
     // ------------------------------------------------------------------ roads
@@ -406,7 +410,7 @@ final class GroundPaint {
     // ------------------------------------------------------------------ road style for the GPU
 
     static float[] roadStyle(com.harlequinxd.drivehard.core.tex.TextureLibrary lib) {
-        float[] out = new float[8 * 20 + 6];
+        float[] out = new float[8 * 20 + 12];
         for (RoadClass c : RoadClass.values()) {
             if (c.ordinal() >= 8) continue;
             int o = c.ordinal() * 20;
@@ -423,6 +427,9 @@ final class GroundPaint {
         out[163] = lib.dirtTrack;
         out[164] = lib.gravel;
         out[165] = lib.dirt;
+        out[166] = lib.parking;
+        for (int k = 0; k < 4; k++) out[167 + k] = lib.parkingBays[k];
+        out[171] = lib.parkingAisle;
         return out;
     }
 }

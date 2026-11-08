@@ -61,7 +61,9 @@ public final class TextureLibrary implements java.io.Serializable {
         roofGravel = add(roof(seed, 0));
         roofMembrane = add(roof(seed, 1));
         roofTar = add(roof(seed, 2));
-        parking = add(parking(seed));
+        parking = add(ParkingTextures.bay(seed, 0));
+        parkingBays = new int[]{parking, add(ParkingTextures.bay(seed, 1)), add(ParkingTextures.bay(seed, 2)), add(ParkingTextures.bay(seed, 3))};
+        parkingAisle = add(ParkingTextures.aisle(seed));
         paintWhite = add(solid(0xFFEDEDE6, seed));
         paintYellow = add(solid(0xFFE2B33A, seed));
         paintRed = add(solid(0xFFC0282A, seed));
@@ -176,6 +178,9 @@ public final class TextureLibrary implements java.io.Serializable {
     public HouseTextures.Door[] houseDoorKind;
     public HouseTextures.Roof[] houseRoofKind;
     /** Building props: a/c unit front and casing, balcony front and slab, power line ribbon. */
+    /** Car park bays (variants; the first is {@link #parking}) and the aisle between them. */
+    public int[] parkingBays;
+    public int parkingAisle;
     public int dirt, roadEdge, gravelTrack, dirtTrack, aircon, airconSide, balconyFront, balconySlab, powerLines;
     /** Alley clutter: beer crates, rubbish bins, cardboard, gas bottles. */
     public int crateYellow, crateRed, bin, cardboard, gasBottle;
@@ -570,15 +575,6 @@ public final class TextureLibrary implements java.io.Serializable {
             m.grain(0, 0, 64, 64, 0.08f, 0.06f, sd);
             for (int y = 0; y < 64; y += 21) m.shade(0, y, 64, y + 1, 0.7f);
         }
-        return m.texture();
-    }
-
-    private static Texture parking(long seed) {
-        Img m = new Img(64, 64);
-        Texture a = asphalt(seed + 3, false);
-        System.arraycopy(a.px, 0, m.px, 0, 64 * 64);
-        m.rect(0, 0, 3, 64, 0xFFE8E8E0);       // stall line
-        m.rect(0, 0, 64, 3, 0xFFE8E8E0);       // end line
         return m.texture();
     }
 
