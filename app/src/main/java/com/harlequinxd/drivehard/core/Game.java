@@ -821,14 +821,14 @@ public final class Game {
         float far2 = (r.far + 40f) * (r.far + 40f);
         for (Chunk c : city.chunks.chunks()) {
             if (dist2(c.minX, c.minZ, c.maxX, c.maxZ, r.ex, r.ez) > far2) continue;
-            if (!r.boxVisible(c.minX, -15f, c.minZ, c.maxX, 220f, c.maxZ)) continue;
+            if (!r.boxVisible(c.minX, c.minY - 2f, c.minZ, c.maxX, c.maxY + 2f, c.maxZ)) continue;
             for (Geo g : c.batches) {
                 if (dist2(g.minX, g.minZ, g.maxX, g.maxZ, r.ex, r.ez) > far2
                         || !r.boxVisible(g.minX, g.minY, g.minZ, g.maxX, g.maxY, g.maxZ)) {
                     batchesCulled++;
                     continue;
                 }
-                if (g.object && terrain.occluded(r.ex, r.ey, r.ez, (g.minX + g.maxX) * 0.5f, g.maxY, (g.minZ + g.maxZ) * 0.5f)) {
+                if (occlusionCull && g.object && terrain.occludedBox(r.ex, r.ey, r.ez, g.minX, g.minZ, g.maxX, g.maxZ, g.minY, g.maxY)) {
                     batchesOccluded++;
                     continue;
                 }
@@ -846,6 +846,9 @@ public final class Game {
         r.flush();
         r.weatherOverlay();
     }
+
+    /** Skip buildings and plants hidden behind hills (off for tests: nothing should change). */
+    public boolean occlusionCull = true;
 
     private void drawVehicle(Renderer r, Vehicle v) {
         SpriteCache.Entry e = carEntries[v.style];
@@ -1016,7 +1019,14 @@ public final class Game {
             }
             float top = s.top();
             if (!r.boxVisible(x + s.left(), y, z + s.left(), x + s.right(), y + top, z + s.right())) continue;
-            if (d2 > 900f && terrain.occluded(r.ex, r.ey, r.ez, x, y + top, z)) continue;
+            if (occlusionCull && d2 > 900f) {
+                // a tree or pole is hidden only if its top and both sides of its crown are
+                float hw = (s.right() - s.left()) * 0.5f;
+                float rxv = (float) Math.cos(Math.atan2(r.ex - x, r.ez - z)), rzv = -(float) Math.sin(Math.atan2(r.ex - x, r.ez - z));
+                if (terrain.occluded(r.ex, r.ey, r.ez, x, y + top + 1f, z)
+                        && terrain.occluded(r.ex, r.ey, r.ez, x + rxv * hw, y + top * 0.75f, z + rzv * hw)
+                        && terrain.occluded(r.ex, r.ey, r.ez, x - rxv * hw, y + top * 0.75f, z - rzv * hw)) continue;
+            }
             float viewYaw = (float) Math.atan2(r.ex - x, r.ez - z);
             sprite(r, tex, s, s.directionFor(yaw, viewYaw), frame, x, y, z, -0.3f);
             spritesDrawn++;

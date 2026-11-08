@@ -435,11 +435,30 @@ public final class Terrain implements java.io.Serializable {
 
     /** True if the line of sight from the eye to the point is blocked by terrain. */
     public boolean occluded(float ex, float ey, float ez, float px, float py, float pz) {
-        for (int i = 1; i < 12; i++) {
-            float t = i / 12f;
+        float d = (float) Math.hypot(px - ex, pz - ez);
+        int n = Math.max(12, Math.min(48, (int) (d / 6f)));
+        // a clear margin over the ground: only a ridge that properly rises above the line counts
+        for (int i = 1; i < n; i++) {
+            float t = i / (float) n;
             float x = ex + (px - ex) * t, y = ey + (py - ey) * t, z = ez + (pz - ez) * t;
-            if (height(x, z) > y + 0.6f) return true;
+            if (height(x, z) > y + 2f) return true;
         }
         return false;
+    }
+
+    /**
+     * True only if a box is hidden behind the land from every side: the lines of sight to its top
+     * centre, its four top corners and the middle of its sides are all blocked. One blocked line
+     * is not enough on a hillside (a slope can cut across the line to the middle of a building
+     * whose roof and walls are in plain view); the ground already hides, pixel by pixel, whatever
+     * really is behind a hill, so this cull only skips what certainly is.
+     */
+    public boolean occludedBox(float ex, float ey, float ez, float x0, float z0, float x1, float z1, float y0, float y1) {
+        float cx = (x0 + x1) * 0.5f, cz = (z0 + z1) * 0.5f, top = y1 + 1f, mid = (y0 + y1) * 0.5f;
+        if (!occluded(ex, ey, ez, cx, top, cz)) return false;
+        if (!occluded(ex, ey, ez, x0, top, z0) || !occluded(ex, ey, ez, x1, top, z0)) return false;
+        if (!occluded(ex, ey, ez, x0, top, z1) || !occluded(ex, ey, ez, x1, top, z1)) return false;
+        return occluded(ex, ey, ez, x0, mid, cz) && occluded(ex, ey, ez, x1, mid, cz)
+                && occluded(ex, ey, ez, cx, mid, z0) && occluded(ex, ey, ez, cx, mid, z1);
     }
 }

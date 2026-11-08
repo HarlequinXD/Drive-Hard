@@ -26,6 +26,8 @@ public final class Chunk {
     public float[] sprites = new float[SPRITE_STRIDE * 16];
     public int spriteCount;
     public float minX = Float.MAX_VALUE, minZ = Float.MAX_VALUE, maxX = -Float.MAX_VALUE, maxZ = -Float.MAX_VALUE;
+    /** Height range of everything in the chunk (ground, buildings, plants): mountains reach 850 m. */
+    public float minY = Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
     public int polyCount;
 
     public Chunk(int cx, int cz) {
@@ -48,6 +50,7 @@ public final class Chunk {
             if (g.maxZ > maxZ) maxZ = g.maxZ;
             polyCount += g.count;
         }
+        heights();
         for (Box b : boxes) {
             if (b.minX < minX) minX = b.minX;
             if (b.minZ < minZ) minZ = b.minZ;
@@ -57,5 +60,20 @@ public final class Chunk {
         float x0 = cx * ChunkManager.SIZE, z0 = cz * ChunkManager.SIZE;
         minX = Math.min(minX, x0); minZ = Math.min(minZ, z0);
         maxX = Math.max(maxX, x0 + ChunkManager.SIZE); maxZ = Math.max(maxZ, z0 + ChunkManager.SIZE);
+    }
+
+    /** The height range of everything in the chunk (also for chunks read back from disk). */
+    public void heights() {
+        minY = Float.MAX_VALUE;
+        maxY = -Float.MAX_VALUE;
+        for (Geo g : batches) { minY = Math.min(minY, g.minY); maxY = Math.max(maxY, g.maxY); }
+        for (int k = 0; k < spriteCount; k++) {
+            float y = sprites[k * SPRITE_STRIDE + 3];
+            minY = Math.min(minY, y);
+            maxY = Math.max(maxY, y + 25f);                     // the tallest trees and poles
+        }
+        if (ground != null) for (float h : ground.h) { minY = Math.min(minY, h); maxY = Math.max(maxY, h); }
+        for (Box b : boxes) { minY = Math.min(minY, b.minY); maxY = Math.max(maxY, b.maxY); }
+        if (minY > maxY) { minY = -15f; maxY = 220f; }
     }
 }

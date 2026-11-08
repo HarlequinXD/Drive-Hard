@@ -381,6 +381,7 @@ public final class WorldCache {
             if (wl >= 0) { water = new byte[wl]; b.get(water); }
             c.ground = new Ground.Tile(cx, cz, ms, h, water);
         }
+        c.heights();
         return c;
     }
 
