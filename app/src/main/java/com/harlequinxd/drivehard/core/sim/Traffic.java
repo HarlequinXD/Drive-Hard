@@ -495,14 +495,27 @@ public final class Traffic {
         c.y = city.surface(c.x, c.z, c.y0 + (c.y3 - c.y0) * t + 0.5f);
     }
 
-    /** Collision boxes for the cars near a point (axis-aligned bounds of each car). */
+    /**
+     * Collision boxes for the cars near a point: each car as a chain of small squares along its
+     * length, so a car driving at an angle to the world axes (highways and country roads curve
+     * every way) is only as wide as it really is. One box round the whole car would be up to
+     * 1.4 m too wide each side at 45 degrees, knocking you away as you pass.
+     */
     public void boxesNear(float x, float z, List<Box> out) {
         for (Car c : cars) {
             float dx = c.x - x, dz = c.z - z;
-            if (dx * dx + dz * dz > 100f) continue;
-            float s = Math.abs((float) Math.sin(c.yaw)), co = Math.abs((float) Math.cos(c.yaw));
-            float hx = (c.len * s + c.wid * co) * 0.5f, hz = (c.len * co + c.wid * s) * 0.5f;
-            out.add(new Box(c.x - hx, c.y, c.z - hz, c.x + hx, c.y + 1.5f, c.z + hz));
+            float reach = c.len * 0.5f + 8f;
+            if (dx * dx + dz * dz > reach * reach) continue;
+            float fx = (float) Math.sin(c.yaw), fz = (float) Math.cos(c.yaw);
+            // squares a little narrower than the body: their corners stick out when the car is
+            // diagonal, so at any angle the chain stays within the bodywork's width
+            float half = c.wid * 0.4f;
+            int n = Math.max(2, (int) Math.ceil(c.len / (half * 1.6f)));
+            for (int k = 0; k < n; k++) {
+                float t = -c.len * 0.5f + half + (c.len - 2 * half) * k / (n - 1);
+                float cx = c.x + fx * t, cz = c.z + fz * t;
+                out.add(new Box(cx - half, c.y, cz - half, cx + half, c.y + 1.5f, cz + half));
+            }
         }
     }
 
