@@ -1,6 +1,6 @@
 # Drive Hard — Windows desktop edition
 
-This is a **complete Windows-only repository**, not an overlay. The game simulation, procedural world, traffic, pedestrians walking on the city and settlement footpaths, and original PS1-style software renderer remain in `app/src/main/java/com/harlequinxd/drivehard/core/`. The Windows Swing frontend is in `.../desktop/`.
+This is a **complete Windows-only repository**, not an overlay. The game simulation, procedural world, traffic, pedestrians walking on the city and settlement footpaths, and the renderers (OpenGL on the GPU, with the PS1-style software renderer as the fallback) remain in `app/src/main/java/com/harlequinxd/drivehard/core/`. The Windows Swing frontend is in `.../desktop/`.
 
 ## Upload to GitHub
 

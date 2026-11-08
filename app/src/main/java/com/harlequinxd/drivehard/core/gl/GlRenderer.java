@@ -51,8 +51,6 @@ public final class GlRenderer extends Renderer {
     private final Gl gl;
     private boolean ready;
     private int frame;
-    /** PS1 vertex snapping (whole-pixel vertices, the slight wobble of the original hardware). */
-    public boolean snap = true;
     /**
      * PlayStation ordering table instead of a depth buffer between objects: every object polygon and
      * sprite is sorted far-to-near by its average depth (its farthest for {@link Geo#FLAG_SORT_FAR}) and
@@ -68,7 +66,7 @@ public final class GlRenderer extends Renderer {
     public int statBatches, statTiles, statUploads;
     public long gpuBytes;
 
-    private Program poly, groundProg, sky, flat, blit;
+    private Program poly, groundProg, sky, flat, blit, terrainProg;
     private int fbo, fboTex, fboDepth, emptyVao, overlayTex, imageTex, imageW, imageH;
     private int cloudTex, waveTex, alongTex, foamTex, infoTex;
     private int gridIbo, gridCount;
@@ -83,6 +81,7 @@ public final class GlRenderer extends Renderer {
         ready = false;
         batches.clear();
         tiles.clear();
+        terrs.clear();
         flats.clear();
         singles.clear();
         atlasRect.clear();
@@ -90,6 +89,7 @@ public final class GlRenderer extends Renderer {
         java.util.Arrays.fill(infoOf, null);
         atlasTex = 0;
         atlasPages = 0;
+        pageFill = new int[0];
         gpuBytes = 0;
         otVao = otVbo = cornerTex = 0;
         sandTex = 0;
@@ -105,10 +105,18 @@ public final class GlRenderer extends Renderer {
         tiles.clear();
         for (GTile t : flats.values()) freeTile(t);
         flats.clear();
+        for (GTerr t : terrs.values()) freeTerr(t);
+        terrs.clear();
         for (Single s : singles.values()) gl.deleteTexture(s.tex);
         singles.clear();
         if (otVao != 0) { gl.deleteVertexArray(otVao); gl.deleteBuffer(otVbo); otVao = otVbo = 0; }
         if (cornerTex != 0) { gl.deleteTexture(cornerTex); cornerTex = 0; }
+        // the frame, the atlas and the tables go too (a PC keeps one context for several islands)
+        for (int t : new int[]{atlasTex, fboTex, overlayTex, imageTex, cloudTex, waveTex, alongTex, foamTex, infoTex, sandTex})
+            if (t != 0) gl.deleteTexture(t);
+        if (fbo != 0) gl.deleteFramebuffer(fbo);
+        if (fboDepth != 0) gl.deleteRenderbuffer(fboDepth);
+        contextLost();                      // and the renderer starts afresh if it is used again
     }
 
     // ------------------------------------------------------------------ set up
@@ -154,6 +162,7 @@ public final class GlRenderer extends Renderer {
         owner = Thread.currentThread();
         poly = new Program(gl, GlShaders.POLY_VS, GlShaders.POLY_FS);
         groundProg = new Program(gl, GlShaders.GROUND_VS, GlShaders.GROUND_FS);
+        terrainProg = new Program(gl, GlShaders.TERRAIN_VS, GlShaders.TERRAIN_FS);
         sky = new Program(gl, GlShaders.FULLSCREEN_VS, GlShaders.SKY_FS);
         flat = new Program(gl, GlShaders.FLAT_VS, GlShaders.FLAT_FS);
         blit = new Program(gl, GlShaders.FULLSCREEN_VS, GlShaders.BLIT_FS);
@@ -370,7 +379,7 @@ public final class GlRenderer extends Renderer {
     private void camera(Program p) {
         gl.uniform3f(p.loc("uEye"), ex, ey, ez);
         gl.uniform4f(p.loc("uBasis"), rx, rz, fx, fz);
-        gl.uniform4f(p.loc("uProj"), 2f * focal / W, 2f * focal / H, 1f - 2f * hy / H, snap ? 1f : 0f);
+        gl.uniform4f(p.loc("uProj"), 2f * focal / W, 2f * focal / H, 1f - 2f * hy / H, 0f);
         float n = near, f = FAR_PLANE;
         gl.uniform2f(p.loc("uDepth"), (f + n) / (f - n), -2f * f * n / (f - n));
         gl.uniform2f(p.loc("uRes"), W, H);
@@ -473,6 +482,183 @@ public final class GlRenderer extends Renderer {
                 statTiles++;
             }
         gl.activeTexture(Gl.TEXTURE0);
+        drawTerrain(tx0, tz0, reach);
+    }
+
+    // ------------------------------------------------------------------ the painted terrain
+
+    /** One chunk's terrain on the GPU: its mesh, layer weights, material map and road map. */
+    private static final class GTerr { int vao, vbo, splat, mat, road, info, water, lastUse; float minY, maxY; long bytes; float[] layers, mats; }
+    private final float[] styleCls = new float[32], styleBand = new float[128];
+    private final IdentityHashMap<Ground.Tile, GTerr> terrs = new IdentityHashMap<>();
+    public int terrBudget = 6;
+
+    private void drawTerrain(int tx0, int tz0, int reach) {
+        Program p = terrainProg;
+        gl.useProgram(p.id);
+        camera(p);
+        gl.uniform3f(p.loc("uTint"), tR / 256f, tG / 256f, tB / 256f);
+        gl.uniform3f(p.loc("uFog"), fogR, fogG, fogB);
+        gl.uniform2f(p.loc("uFogRange"), fogStart, 1f / (fogEnd - fogStart));
+        gl.uniform1f(p.loc("uGroundS"), 0.94f);
+        gl.uniform1i(p.loc("uAtlas"), 0);
+        gl.uniform1i(p.loc("uInfo"), 1);
+        gl.uniform1i(p.loc("uSplat"), 2);
+        gl.uniform1i(p.loc("uMat"), 3);
+        gl.uniform1i(p.loc("uRoad"), 4);
+        gl.uniform1i(p.loc("uRoadInfo"), 6);
+        gl.uniform1i(p.loc("uWater"), 7);
+        // how roads are painted (per class: width, mouth texture, lane bands)
+        float[] st = ground.roadStyle();
+        for (int c = 0; c < 8; c++) {
+            int o = c * 20;
+            atlas((int) st[o + 1]);
+            System.arraycopy(st, o, styleCls, c * 4, 4);
+            for (int b = 0; b < 4; b++) {
+                int q = o + 4 + b * 4;
+                if (st[q + 2] >= 0f) atlas((int) st[q + 2]);
+                System.arraycopy(st, q, styleBand, (c * 4 + b) * 4, 4);
+            }
+        }
+        gl.uniform4fv(p.loc("uCls[0]"), 8, styleCls);
+        gl.uniform4fv(p.loc("uBand[0]"), 32, styleBand);
+        atlas((int) st[160]);
+        atlas((int) st[161]);
+        gl.uniform2f(p.loc("uRoadTex"), st[160], st[161]);
+        gl.activeTexture(Gl.TEXTURE0);
+        gl.bindTexture(Gl.TEXTURE_2D_ARRAY, atlasTex);
+        gl.activeTexture(Gl.TEXTURE0 + 1);
+        gl.bindTexture(Gl.TEXTURE_2D, infoTex);
+        gl.depthFunc(Gl.LEQUAL);
+        int budget = terrBudget;
+        for (int j = 0; j <= reach * 2; j++)
+            for (int i = 0; i <= reach * 2; i++) {
+                int cx = tx0 + i, cz = tz0 + j;
+                float x0 = cx * Ground.TILE, z0 = cz * Ground.TILE;
+                float nx = Math.max(x0, Math.min(ex, x0 + Ground.TILE)) - ex, nz = Math.max(z0, Math.min(ez, z0 + Ground.TILE)) - ez;
+                if (nx * nx + nz * nz > far * far * 1.1f) continue;
+                Ground.Tile t = ground.tile(cx, cz);
+                if (t == null || t.land == null || t.splat == null) continue;
+                GTerr g = terrs.get(t);
+                if (g == null) {
+                    if (budget <= 0) continue;
+                    g = uploadTerr(t);
+                    budget--;
+                }
+                if (g.maxY < -0.3f) continue;                       // all under the sea
+                if (!boxVisible(x0, g.minY, z0, x0 + Ground.TILE, g.maxY, z0 + Ground.TILE)) continue;
+                g.lastUse = frame;
+                gl.uniform2f(p.loc("uTile"), x0, z0);
+                gl.uniform4fv(p.loc("uLayer[0]"), Ground.Tile.LAYERS, g.layers);
+                gl.uniform1i(p.loc("uHasMat"), g.mat != 0 ? 1 : 0);
+                if (g.mat != 0) gl.uniform4fv(p.loc("uMatT[0]"), g.mats.length / 4, g.mats);
+                gl.uniform1i(p.loc("uHasRoad"), g.road != 0 ? 1 : 0);
+                gl.uniform1i(p.loc("uHasWater"), g.water != 0 ? 1 : 0);
+                gl.activeTexture(Gl.TEXTURE0 + 2); gl.bindTexture(Gl.TEXTURE_2D, g.splat);
+                gl.activeTexture(Gl.TEXTURE0 + 3); gl.bindTexture(Gl.TEXTURE_2D, g.mat);
+                gl.activeTexture(Gl.TEXTURE0 + 4); gl.bindTexture(Gl.TEXTURE_2D, g.road);
+                gl.activeTexture(Gl.TEXTURE0 + 6); gl.bindTexture(Gl.TEXTURE_2D, g.info);
+                gl.activeTexture(Gl.TEXTURE0 + 7); gl.bindTexture(Gl.TEXTURE_2D, g.water);
+                gl.bindVertexArray(g.vao);
+                gl.drawElements(Gl.TRIANGLES, gridCount, Gl.UNSIGNED_INT, 0);
+                statTiles++;
+            }
+        gl.bindVertexArray(0);
+        gl.activeTexture(Gl.TEXTURE0);
+    }
+
+    private GTerr uploadTerr(Ground.Tile t) {
+        GTerr g = new GTerr();
+        int m = Ground.Tile.MESH;
+        float x0 = t.cx * Ground.TILE, z0 = t.cz * Ground.TILE, step = Ground.TILE / (m - 1);
+        ByteBuffer vb = direct(m * m * 16);
+        g.minY = Float.MAX_VALUE;
+        g.maxY = -Float.MAX_VALUE;
+        for (int j = 0; j < m; j++)
+            for (int i = 0; i < m; i++) {
+                float y = t.land[j * m + i];
+                g.minY = Math.min(g.minY, y);
+                g.maxY = Math.max(g.maxY, y);
+                vb.putFloat(x0 + i * step).putFloat(y).putFloat(z0 + j * step).putFloat(t.lit[j * m + i]);
+            }
+        vb.flip();
+        g.vao = gl.genVertexArray();
+        gl.bindVertexArray(g.vao);
+        g.vbo = gl.genBuffer();
+        gl.bindBuffer(Gl.ARRAY_BUFFER, g.vbo);
+        gl.bufferData(Gl.ARRAY_BUFFER, m * m * 16, vb, Gl.STATIC_DRAW);
+        gl.enableVertexAttribArray(0);
+        gl.vertexAttribPointer(0, 3, Gl.FLOAT, false, 16, 0);
+        gl.enableVertexAttribArray(1);
+        gl.vertexAttribPointer(1, 1, Gl.FLOAT, false, 16, 12);
+        gl.bindBuffer(Gl.ELEMENT_ARRAY_BUFFER, gridIbo);
+        gl.bindVertexArray(0);
+        g.bytes = m * m * 16;
+        // layer weights: layers 0-3 in the top half, 4-7 in the bottom half
+        int n = Ground.Tile.SPLAT, L = Ground.Tile.LAYERS;
+        ByteBuffer sb = direct(n * n * 8);
+        for (int s = 0; s < n * n; s++)
+            for (int c = 0; c < 4; c++) {
+                sb.put(s * 4 + c, t.splat[s * L + c]);
+                sb.put(n * n * 4 + s * 4 + c, t.splat[s * L + 4 + c]);
+            }
+        g.splat = newTexture(Gl.LINEAR, Gl.CLAMP_TO_EDGE);
+        gl.texImage2D(Gl.TEXTURE_2D, 0, Gl.RGBA8, n, n * 2, Gl.RGBA, Gl.UNSIGNED_BYTE, sb);
+        g.bytes += n * n * 8;
+        for (int k = 0; k < L; k++) if (t.layerTex[k] >= 0) atlas(t.layerTex[k]);
+        g.layers = new float[L * 4];
+        for (int k = 0; k < L; k++) {
+            g.layers[k * 4] = Math.max(0, t.layerTex[k]);
+            g.layers[k * 4 + 1] = t.layerScale[k] > 0f ? t.layerScale[k] : 8f;
+        }
+        if (t.mat != null) {
+            int mn = Ground.Tile.MAT;
+            ByteBuffer mb = direct(mn * mn);
+            mb.put(t.mat).flip();
+            g.mat = newTexture(Gl.NEAREST, Gl.CLAMP_TO_EDGE);
+            gl.texImage2D(Gl.TEXTURE_2D, 0, Gl.R8, mn, mn, Gl.RED, Gl.UNSIGNED_BYTE, mb);
+            g.bytes += mn * mn;
+            for (int k = 1; k < t.matTex.length; k++) atlas(t.matTex[k]);
+            g.mats = new float[t.matTex.length * 4];
+            for (int k = 1; k < t.matTex.length; k++) {
+                g.mats[k * 4] = t.matTex[k];
+                g.mats[k * 4 + 1] = t.matScale[k * 2];
+                g.mats[k * 4 + 2] = t.matScale[k * 2 + 1];
+            }
+        }
+        if (t.road != null) {
+            int rn = Ground.Tile.ROAD;
+            FloatBuffer rb = direct(rn * rn * 16).asFloatBuffer();
+            rb.put(t.road).flip();
+            g.road = newTexture(Gl.NEAREST, Gl.CLAMP_TO_EDGE);
+            gl.texImage2D(Gl.TEXTURE_2D, 0, RGBA32F, rn, rn, Gl.RGBA, Gl.FLOAT, rb);
+            ShortBuffer ib = direct(rn * rn * 8).asShortBuffer();
+            ib.put(t.roadInfo).flip();
+            g.info = newTexture(Gl.NEAREST, Gl.CLAMP_TO_EDGE);
+            gl.texImage2D(Gl.TEXTURE_2D, 0, RGBA16UI, rn, rn, RGBA_INTEGER, Gl.UNSIGNED_SHORT, ib);
+            g.bytes += rn * rn * 24L;
+        }
+        if (t.water != null) {
+            int wn = Ground.WRES + 1;
+            ByteBuffer wb = direct(wn * wn);
+            for (int i = 0; i < wn * wn; i++) {
+                int code = t.water[i] & 255;
+                wb.put(i, (byte) (code == 0 ? 0 : Math.min(255, code + 3)));
+            }
+            g.water = newTexture(Gl.LINEAR, Gl.CLAMP_TO_EDGE);
+            gl.texImage2D(Gl.TEXTURE_2D, 0, Gl.R8, wn, wn, Gl.RED, Gl.UNSIGNED_BYTE, wb);
+            g.bytes += wn * wn;
+        }
+        terrs.put(t, g);
+        gpuBytes += g.bytes;
+        return g;
+    }
+
+    private void freeTerr(GTerr g) {
+        gl.deleteVertexArray(g.vao);
+        gl.deleteBuffer(g.vbo);
+        for (int tex : new int[]{g.splat, g.mat, g.road, g.info, g.water}) if (tex != 0) gl.deleteTexture(tex);
+        gpuBytes -= g.bytes;
     }
 
     private GTile meshTile(float[] pos, int[] colour) {
@@ -653,6 +839,7 @@ public final class GlRenderer extends Renderer {
     private float scrollRate;
 
     @Override public void drawGeoOffset(Geo g, float ox, float oy, float oz) {
+        if (g.cpuGround) return;                 // painted into the terrain instead
         if (g.count == 0 || !boxVisible(g.minX + ox, g.minY + oy, g.minZ + oz, g.maxX + ox, g.maxY + oy, g.maxZ + oz)) return;
         Draw d = draws.size() < drawPool.size() ? drawPool.get(draws.size()) : null;
         if (d == null) { d = new Draw(); drawPool.add(d); }
@@ -1310,6 +1497,11 @@ public final class GlRenderer extends Renderer {
             GTile g = ti.next().getValue();
             if (frame - g.lastUse > 90) { freeTile(g); ti.remove(); }
         }
+        Iterator<Map.Entry<Ground.Tile, GTerr>> tri = terrs.entrySet().iterator();
+        while (tri.hasNext()) {
+            GTerr g = tri.next().getValue();
+            if (frame - g.lastUse > 90) { freeTerr(g); tri.remove(); }
+        }
         Iterator<Map.Entry<Texture, Single>> si = singles.entrySet().iterator();
         while (si.hasNext()) {
             Map.Entry<Texture, Single> e = si.next();
@@ -1482,9 +1674,13 @@ public final class GlRenderer extends Renderer {
     }
 
     /** Reads the finished frame back as ARGB, top row first (tools and tests). */
+    private ByteBuffer readBuf;
+
     public void readFrame(int[] out) {
         gl.bindFramebuffer(Gl.FRAMEBUFFER, fbo);
-        ByteBuffer b = direct(W * H * 4);
+        if (readBuf == null) readBuf = direct(W * H * 4);
+        ByteBuffer b = readBuf;
+        b.clear();
         gl.readPixels(0, 0, W, H, Gl.RGBA, Gl.UNSIGNED_BYTE, b);
         for (int y = 0; y < H; y++)
             for (int x = 0; x < W; x++) {

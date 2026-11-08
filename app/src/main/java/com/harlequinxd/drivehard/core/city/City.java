@@ -398,9 +398,90 @@ public final class City extends World implements java.io.Serializable {
         gb.begin(false);
         SectorBuilder.toMeshes(ch.sectors, gb);
         gb.end();
+        gb.endGround();
         gb.maxEdge = 0f;
+        // the same ground painted into the terrain, for the GPU
+        if (ch.ground != null) {
+            GroundPainter.Surface[] grid = new GroundPainter.Surface[100];
+            for (int j = -1; j <= 8; j++)
+                for (int i = -1; i <= 8; i++) {
+                    float ax = x0 + i * 8f, az = z0 + j * 8f;
+                    grid[(j + 1) * 10 + (i + 1)] = surface(ax, az, ax + 8f, az + 8f);
+                }
+            List<float[]> paint = new ArrayList<>();
+            countryside.yards(x0, z0, x1, z1, (a, b, c, d, t) -> paint.add(new float[]{a, b, c, d, t, 2f, 2f}));
+            groundPaint(x0, z0, x1, z1, paint);
+            new GroundPaint(this).paint(ch.ground, gb, grid, paint);
+        }
         ch.finish();
         return ch;
+    }
+
+    // ------------------------------------------------------------------ painted city ground
+
+    /** Street medians and the promenade, bucketed by 256 m cells for quick lookup. */
+    private transient java.util.Map<Long, List<float[]>> streetPaint;
+    private transient java.util.concurrent.ConcurrentHashMap<Integer, List<float[]>> blockPaint;
+
+    private static long paintCell(int i, int j) { return ((long) i << 32) ^ (j & 0xFFFFFFFFL); }
+
+    private synchronized java.util.Map<Long, List<float[]>> streetPaint() {
+        if (streetPaint != null) return streetPaint;
+        List<float[]> out = new ArrayList<>();
+        GeoBuilder gb = new GeoBuilder(terrain, new Chunk(0, 0));
+        gb.dry = true;
+        gb.paint = out;
+        Chunk dummy = new Chunk(0, 0);
+        for (int i = 0; i <= nbx; i++)
+            for (int j = 0; j < nbz; j++)
+                if (nsStreet(i, j)) roadSegment(dummy, gb, true, rx0[i], rx1[i], rz1[j], rz0[j + 1], avenueX[i]);
+        for (int j = 0; j <= nbz; j++)
+            for (int i = 0; i < nbx; i++)
+                if (ewStreet(i, j)) roadSegment(dummy, gb, false, rz0[j], rz1[j], rx1[i], rx0[i + 1], avenueZ[j]);
+        // the seaside promenade beside the city's east edge
+        out.add(new float[]{cityX1 + 10f, cityZ0, cityX1 + 15f, cityZ1, lib.pavers, 2f, 2f});
+        java.util.Map<Long, List<float[]>> map = new java.util.HashMap<>();
+        for (float[] r : out)
+            for (int j = (int) Math.floor(r[1] / 256f); j <= (int) Math.floor(r[3] / 256f); j++)
+                for (int i = (int) Math.floor(r[0] / 256f); i <= (int) Math.floor(r[2] / 256f); i++)
+                    map.computeIfAbsent(paintCell(i, j), k -> new ArrayList<>()).add(r);
+        streetPaint = map;
+        blockPaint = new java.util.concurrent.ConcurrentHashMap<>();
+        return map;
+    }
+
+    /**
+     * Ground cover painted into the terrain in this rectangle: sidewalks, lots, parks, car parks,
+     * plazas, medians and the promenade, each {x0, z0, x1, z1, texture, uScale, vScale}. A block's
+     * areas come from a dry run of its generator (same seed, no geometry), cached.
+     */
+    void groundPaint(float x0, float z0, float x1, float z1, List<float[]> out) {
+        if (x1 < cityX0 - 30f || x0 > cityX1 + 30f || z1 < cityZ0 || z0 > cityZ1) return;
+        java.util.Map<Long, List<float[]>> sp = streetPaint();
+        java.util.Set<float[]> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        for (int cj = (int) Math.floor(z0 / 256f); cj <= (int) Math.floor(z1 / 256f); cj++)
+            for (int ci = (int) Math.floor(x0 / 256f); ci <= (int) Math.floor(x1 / 256f); ci++) {
+                List<float[]> l = sp.get(paintCell(ci, cj));
+                if (l == null) continue;
+                for (float[] r : l) if (r[2] > x0 && r[0] < x1 && r[3] > z0 && r[1] < z1 && seen.add(r)) out.add(r);
+            }
+        for (int j = 0; j < nbz; j++) {
+            if (rz0[j + 1] < z0 || rz1[j] > z1) continue;
+            for (int i = 0; i < nbx; i++) {
+                if (rx0[i + 1] < x0 || rx1[i] > x1) continue;
+                if (!blockActive(i, j)) continue;
+                final int bi = i, bj = j;
+                List<float[]> list = blockPaint.computeIfAbsent(j * nbx + i, k -> {
+                    List<float[]> l = new ArrayList<>();
+                    GeoBuilder gb = new GeoBuilder(terrain, new Chunk(0, 0));
+                    gb.dry = true;
+                    gb.paint = l;
+                    block(new Chunk(0, 0), gb, bi, bj);
+                    return l;
+                });
+                for (float[] r : list) if (r[2] > x0 && r[0] < x1 && r[3] > z0 && r[1] < z1) out.add(r);
+            }
+        }
     }
 
     /** The ground tiles (sea-floor heights and water maps) of loaded chunks, flat colours beyond. */
@@ -413,6 +494,11 @@ public final class City extends World implements java.io.Serializable {
             @Override public float height(float x, float z) { return Math.max(-0.05f, terrain.height(x, z)); }
             @Override public int color(float x, float z) { return GroundPainter.farColor(terrain, x, z); }
             @Override public int sandTexture() { return lib.tiles.base[TerrainTiles.SAND]; }
+            private float[] style;
+            @Override public float[] roadStyle() {
+                if (style == null) style = GroundPaint.roadStyle(lib);
+                return style;
+            }
         };
     }
 
@@ -512,7 +598,7 @@ public final class City extends World implements java.io.Serializable {
     }
 
     /** Natural ground type at a grid corner: rock on steep slopes, sand on beaches, hill grass up high. */
-    private int cornerType(float x, float z) {
+    int cornerType(float x, float z) {
         float h = terrain.height(x, z);
         float dx = (terrain.height(x + 4f, z) - terrain.height(x - 4f, z)) / 8f;
         float dz = (terrain.height(x, z + 4f) - terrain.height(x, z - 4f)) / 8f;

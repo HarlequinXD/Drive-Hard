@@ -46,7 +46,7 @@ import java.util.zip.InflaterInputStream;
  */
 public final class WorldCache {
     /** Bump when the file layout changes. */
-    public static final int FORMAT = 8;
+    public static final int FORMAT = 9;
     private static final int CHUNK_MAGIC = 0x44484331; // "DHC1"
 
     /** The game data folder (set by the platform before the game starts); null turns the cache off. */
@@ -293,13 +293,14 @@ public final class WorldCache {
         Ground.Tile t = c.ground;
         if (t != null) {
             size += 16 + t.h.length * 4 + (t.water != null ? t.water.length : 0);
+            size += paintSize(t);
         }
         ByteBuffer b = ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN);
         b.putInt(c.batches.size());
         for (Geo g : c.batches) {
             int n = g.count;
             b.putInt(n);
-            b.put((byte) ((g.object ? 1 : 0) | (g.alpha != null ? 2 : 0) | (c.objectBatches.contains(g) ? 4 : 0)));
+            b.put((byte) ((g.object ? 1 : 0) | (g.alpha != null ? 2 : 0) | (c.objectBatches.contains(g) ? 4 : 0) | (g.cpuGround ? 8 : 0)));
             b.putFloat(g.minX).putFloat(g.minY).putFloat(g.minZ).putFloat(g.maxX).putFloat(g.maxY).putFloat(g.maxZ);
             b.asFloatBuffer().put(g.pos, 0, n * 12); b.position(b.position() + n * 48);
             b.asFloatBuffer().put(g.uv, 0, n * 8); b.position(b.position() + n * 32);
@@ -323,8 +324,74 @@ public final class WorldCache {
             b.asFloatBuffer().put(t.h); b.position(b.position() + t.h.length * 4);
             b.putInt(t.water == null ? -1 : t.water.length);
             if (t.water != null) b.put(t.water);
+            writePaint(b, t);
         }
         return Arrays.copyOf(b.array(), b.position());
+    }
+
+    // the painted terrain (see GroundPaint): mesh heights and light, layers, materials, roads
+
+    private static int paintSize(Ground.Tile t) {
+        int n = 64;
+        if (t.land != null) n += (t.land.length + t.lit.length) * 4;
+        if (t.splat != null) n += t.splat.length + 16 * 8;
+        if (t.mat != null) n += t.mat.length + t.matTex.length * 12;
+        if (t.road != null) n += t.road.length * 4 + t.roadInfo.length * 2;
+        return n;
+    }
+
+    private static void writePaint(ByteBuffer b, Ground.Tile t) {
+        b.put((byte) ((t.land != null ? 1 : 0) | (t.splat != null ? 2 : 0) | (t.mat != null ? 4 : 0) | (t.road != null ? 8 : 0)));
+        if (t.land != null) {
+            for (float v : t.land) b.putFloat(v);
+            for (float v : t.lit) b.putFloat(v);
+        }
+        if (t.splat != null) {
+            for (int k = 0; k < Ground.Tile.LAYERS; k++) b.putInt(t.layerTex[k]).putFloat(t.layerScale[k]);
+            b.put(t.splat);
+        }
+        if (t.mat != null) {
+            b.putInt(t.matTex.length);
+            for (int k = 0; k < t.matTex.length; k++) b.putInt(t.matTex[k]).putFloat(t.matScale[k * 2]).putFloat(t.matScale[k * 2 + 1]);
+            b.put(t.mat);
+        }
+        if (t.road != null) {
+            for (float v : t.road) b.putFloat(v);
+            for (short v : t.roadInfo) b.putShort(v);
+        }
+    }
+
+    private static void readPaint(ByteBuffer b, Ground.Tile t) {
+        int f = b.get();
+        if ((f & 1) != 0) {
+            int m = Ground.Tile.MESH * Ground.Tile.MESH;
+            t.land = new float[m];
+            t.lit = new float[m];
+            for (int k = 0; k < m; k++) t.land[k] = b.getFloat();
+            for (int k = 0; k < m; k++) t.lit[k] = b.getFloat();
+        }
+        if ((f & 2) != 0) {
+            t.layerTex = new int[Ground.Tile.LAYERS];
+            t.layerScale = new float[Ground.Tile.LAYERS];
+            for (int k = 0; k < Ground.Tile.LAYERS; k++) { t.layerTex[k] = b.getInt(); t.layerScale[k] = b.getFloat(); }
+            t.splat = new byte[Ground.Tile.SPLAT * Ground.Tile.SPLAT * Ground.Tile.LAYERS];
+            b.get(t.splat);
+        }
+        if ((f & 4) != 0) {
+            int n = b.getInt();
+            t.matTex = new int[n];
+            t.matScale = new float[n * 2];
+            for (int k = 0; k < n; k++) { t.matTex[k] = b.getInt(); t.matScale[k * 2] = b.getFloat(); t.matScale[k * 2 + 1] = b.getFloat(); }
+            t.mat = new byte[Ground.Tile.MAT * Ground.Tile.MAT];
+            b.get(t.mat);
+        }
+        if ((f & 8) != 0) {
+            int n = Ground.Tile.ROAD * Ground.Tile.ROAD * 4;
+            t.road = new float[n];
+            t.roadInfo = new short[n];
+            for (int k = 0; k < n; k++) t.road[k] = b.getFloat();
+            for (int k = 0; k < n; k++) t.roadInfo[k] = b.getShort();
+        }
     }
 
     private static Chunk decode(ByteBuffer b, int cx, int cz) throws IOException {
@@ -336,6 +403,7 @@ public final class WorldCache {
             Geo g = new Geo();
             g.count = n;
             g.object = (flags & 1) != 0;
+            g.cpuGround = (flags & 8) != 0;
             g.minX = b.getFloat(); g.minY = b.getFloat(); g.minZ = b.getFloat();
             g.maxX = b.getFloat(); g.maxY = b.getFloat(); g.maxZ = b.getFloat();
             int m = Math.max(1, n);
@@ -367,6 +435,7 @@ public final class WorldCache {
             byte[] water = null;
             if (wl >= 0) { water = new byte[wl]; b.get(water); }
             c.ground = new Ground.Tile(cx, cz, h, water);
+            readPaint(b, c.ground);
         }
         c.heights();
         return c;

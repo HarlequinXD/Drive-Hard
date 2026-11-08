@@ -122,6 +122,12 @@ public final class FfmGl implements Gl {
     @Override public void uniform1f(int loc, float x) { v(g("Uniform1f", null, JAVA_INT, JAVA_FLOAT), loc, x); }
     @Override public void uniform2f(int loc, float a, float b) { v(g("Uniform2f", null, JAVA_INT, JAVA_FLOAT, JAVA_FLOAT), loc, a, b); }
     @Override public void uniform3f(int loc, float a, float b, float c) { v(g("Uniform3f", null, JAVA_INT, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT), loc, a, b, c); }
+    @Override public void uniform4fv(int loc, int count, float[] values) {
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment m = a.allocateArray(JAVA_FLOAT, values);
+            v(g("Uniform4fv", null, JAVA_INT, JAVA_INT, ADDRESS), loc, count, m);
+        }
+    }
     @Override public void uniform4f(int loc, float a, float b, float c, float d) { v(g("Uniform4f", null, JAVA_INT, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT), loc, a, b, c, d); }
 
     @Override public int genBuffer() { return gen("GenBuffers"); }

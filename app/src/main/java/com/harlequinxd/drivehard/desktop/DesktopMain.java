@@ -192,6 +192,57 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
         if (game != null && screen == Screen.GAME) { screen = Screen.PAUSE; menuIndex = 0; }
     }
 
+    // ------------------------------------------------------------------ the GPU
+
+    /** The OpenGL context (made once, current on the game thread) and this island's GPU renderer. */
+    private DesktopGl.Context glContext;
+    private com.harlequinxd.drivehard.core.gl.GlRenderer gpu;
+    /** No usable OpenGL here (or -Ddrivehard.cpu=true): the CPU renderer draws. */
+    private boolean cpuOnly = Boolean.getBoolean("drivehard.cpu");
+    private final int[] gpuFrame = new int[W * H];
+
+    /** Draws with the GPU when there is one (the painted terrain needs it), else the CPU renderer. */
+    private void useGpu(Game g) {
+        if (cpuOnly) return;
+        try {
+            if (glContext == null) {
+                glContext = DesktopGl.create();
+                System.out.println("Drive Hard: " + glContext.description);
+            }
+            gpu = new com.harlequinxd.drivehard.core.gl.GlRenderer(glContext.gl, W, H);
+            g.useRenderer(gpu);
+            settings.apply(g);
+        } catch (Throwable e) {
+            System.err.println("Drive Hard: no usable OpenGL, drawing with the CPU");
+            e.printStackTrace();
+            toCpu(g);
+        }
+    }
+
+    private void toCpu(Game g) {
+        cpuOnly = true;
+        gpu = null;
+        g.setResolution(W, H);
+        settings.apply(g);
+    }
+
+    private void renderFrame(Game g) {
+        if (g.renderer == gpu && gpu != null) {
+            try {
+                g.render();
+                gpu.readFrame(gpuFrame);
+                return;
+            } catch (Throwable e) {
+                System.err.println("Drive Hard: the GPU renderer failed, drawing with the CPU");
+                e.printStackTrace();
+                toCpu(g);
+            }
+        }
+        g.render();
+    }
+
+    private int[] frameOf(Game g) { return g.renderer == gpu && gpu != null ? gpuFrame : g.renderer.fb; }
+
     // ------------------------------------------------------------------ main loop
 
     @Override public void run() {
@@ -205,6 +256,7 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
                 if (settings == null) settings = Settings.load(new java.io.File(com.harlequinxd.drivehard.core.data.WorldCache.root, "settings.txt"));
                 g.settings = settings;
                 settings.apply(g);
+                useGpu(g);
                 audio = new DesktopAudio(g.audio.mixer);
                 audio.start();
                 mainMenu = new MainMenu(g, settings, false);
@@ -311,9 +363,9 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
             default: break;
         }
         g.attract(dt);
-        g.render();
+        renderFrame(g);
         synchronized (image) {
-            System.arraycopy(g.renderer.fb, 0, pixels, 0, pixels.length);
+            System.arraycopy(frameOf(g), 0, pixels, 0, pixels.length);
             m.draw(pixels, W, H, dt);
             imageReady = true;
         }
@@ -344,9 +396,9 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
         float[] c;
         while ((c = clicks.poll()) != null) g.missions.tap(c[0], c[1]);
         if (g.missions.request) { g.missions.request = false; openMenu(g, true); return; }
-        g.render();
+        renderFrame(g);
         synchronized (image) {
-            System.arraycopy(g.renderer.fb, 0, pixels, 0, pixels.length);
+            System.arraycopy(frameOf(g), 0, pixels, 0, pixels.length);
             mapView.drawMinimap(pixels, W, H, W - 50, 50, 42, g);
             mapView.drawHud(pixels, W, H, g, 6, 6);
             g.missions.draw(pixels, W, H);
@@ -380,10 +432,10 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
         boolean handbrake = key(KeyEvent.VK_SPACE, KeyEvent.VK_SPACE)
                 || (connected && (pad.buttons() & (XboxInput.A | XboxInput.X)) != 0);
         g.update(dt, x, y, yaw, pitch, jump, x, gas, brake, car, handbrake);
-        g.render();
+        renderFrame(g);
         hintTime -= dt;
         synchronized (image) {
-            System.arraycopy(g.renderer.fb, 0, pixels, 0, pixels.length);
+            System.arraycopy(frameOf(g), 0, pixels, 0, pixels.length);
             mapView.drawMinimap(pixels, W, H, W - 50, 50, 42, g);
             mapView.drawHud(pixels, W, H, g, 6, 6);
             g.missions.draw(pixels, W, H);
@@ -470,9 +522,9 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
         if (choose == 3) { newIsland = true; return; }
         if (choose == 4) { openMenu(g, false); return; }
         if (choose == 5) { running = false; SwingUtilities.invokeLater(() -> window.dispose()); System.exit(0); }
-        g.render();
+        renderFrame(g);
         synchronized (image) {
-            System.arraycopy(g.renderer.fb, 0, pixels, 0, pixels.length);
+            System.arraycopy(frameOf(g), 0, pixels, 0, pixels.length);
             mapView.drawMenu(pixels, W, H, "PAUSED", MENU, menuIndex, new String[]{
                     "#KEYBOARD AND MOUSE",
                     "WASD / ARROWS   WALK, STEER",

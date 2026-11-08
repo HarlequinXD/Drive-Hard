@@ -19,6 +19,11 @@ public final class Geo {
     public int count;
     /** Tall object batch (building): eligible for terrain occlusion culling. */
     public boolean object;
+    /**
+     * Ground cover the GPU paints into the terrain instead (terrain cells, road surfaces, lots and
+     * sidewalks, dirt margins): only the CPU renderer draws these polygons.
+     */
+    public boolean cpuGround;
     public float[] pos = new float[12 * 64];
     public float[] uv = new float[8 * 64];
     public float[] light = new float[4 * 64];

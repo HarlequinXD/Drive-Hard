@@ -58,8 +58,14 @@ public final class RoadMesh {
 
     public void generate(Chunk ch, GeoBuilder gb, int cx, int cz, float x0, float z0, float x1, float z1) {
         gb.begin(false);
+        // the road surfaces are ground cover (painted into the terrain on the GPU), the rest are objects
+        gb.ground = true;
+        surfaces = true;
         net.forEachPieceIn(x0, z0, x1, z1, (e, i) -> piece(ch, gb, e, i));
         for (RoadNode n : net.nodesInChunk(cx, cz)) junction(gb, n);
+        gb.ground = false;
+        surfaces = false;
+        net.forEachPieceIn(x0, z0, x1, z1, (e, i) -> piece(ch, gb, e, i));
         gb.end();
     }
 
@@ -68,6 +74,8 @@ public final class RoadMesh {
     private RoadEdge e;
     private int pi;
     private boolean city;
+    /** This pass builds the road surfaces (else everything standing on or beside them). */
+    private boolean surfaces;
 
     /** Mitred left normal at sample k. */
     private static void normal(RoadEdge e, int k, float[] out) {
@@ -158,7 +166,9 @@ public final class RoadMesh {
      * Cross-section bands {centre-side offset, kerb-side offset, texture (-1 plain asphalt), symmetric}.
      * Painted lines live in the lane textures, so markings sort exactly with the road surface.
      */
-    private float[][] bands(RoadClass c) {
+    private float[][] bands(RoadClass c) { return bands(c, lib); }
+
+    public static float[][] bands(RoadClass c, TextureLibrary lib) {
         float hw = c.halfWidth();
         switch (c) {
             case STREET:
@@ -182,7 +192,9 @@ public final class RoadMesh {
         }
     }
 
-    private int mouthTex(RoadClass c) {
+    private int mouthTex(RoadClass c) { return mouthTex(c, lib); }
+
+    public static int mouthTex(RoadClass c, TextureLibrary lib) {
         switch (c) {
             case STREET: return lib.mouthStreet;
             case AVENUE: return lib.mouthAvenue;
@@ -209,7 +221,7 @@ public final class RoadMesh {
         boolean bridge = e.bridge[i];
         // ramp still merged with the freeway (the taper / gore): plain asphalt, no rails
         boolean gore = cls == RoadClass.RAMP && rampOverlap();
-        if (b - a > 0.05f && !bridge) {
+        if (b - a > 0.05f && !bridge && surfaces) {
             // the road surface: lane strips along each piece of the spline, split around the two mouths
             float vBase = (float) Math.floor(s0 / 64f) * 64f;
             float laneBase = (float) Math.floor(s0 / 320f) * 320f;
@@ -238,7 +250,7 @@ public final class RoadMesh {
                 }
             }
         }
-        if (b - a > 0.05f && bridge) {
+        if (b - a > 0.05f && bridge && !surfaces) {
             // The deck solids carry the road textures on their top faces; no road strip is overlaid.
             float vBase = (float) Math.floor(s0 / 64f) * 64f;
             float laneBase = (float) Math.floor(s0 / 320f) * 320f;
@@ -252,7 +264,10 @@ public final class RoadMesh {
                 }
             }
         }
-        if (b - a > 0.05f) {
+        if (b - a > 0.05f && surfaces) {
+            if (!city && !bridge && cls != RoadClass.FREEWAY && cls != RoadClass.RAMP) shoulders(gb, s0, s1, hw);
+        }
+        if (b - a > 0.05f && !surfaces) {
             if (!city) {
                 if (cls == RoadClass.FREEWAY) {
                     wallStrip(gb, a, b, 0f, 0f, 0.85f, lib.concrete, 0.95f, 0);
@@ -265,7 +280,6 @@ public final class RoadMesh {
                 }
                 if (bridge) bridgePiece(ch, gb, a, b, hw);
                 if ((cls == RoadClass.COUNTRY || cls == RoadClass.TOWN) && !bridge) poles(ch, gb, a, b, hw);
-                if (!bridge && cls != RoadClass.FREEWAY && cls != RoadClass.RAMP) shoulders(gb, s0, s1, hw);
             }
         }
         // cut-and-fill verges run the whole piece (through junction areas too, under the junction surface)

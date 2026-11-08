@@ -52,8 +52,22 @@ public final class GeoBuilder {
     }
 
     private Geo target() {
+        if (ground) {
+            if (gcur == null) { gcur = new Geo(); gcur.cpuGround = true; }
+            return gcur;
+        }
         if (cur == null) begin(false);
         return cur;
+    }
+
+    /** Ground cover being built (see {@link Geo#cpuGround}): it goes to a separate batch. */
+    public boolean ground;
+    private Geo gcur;
+
+    /** Ends the chunk's ground-cover batch (once, when the chunk is complete). */
+    public void endGround() {
+        if (gcur != null && gcur.count > 0) chunk.batches.add(gcur);
+        gcur = null;
     }
 
     /** Dry run: no geometry at all, only ground paint is recorded (see {@link #floorAreaT}). */
@@ -240,6 +254,9 @@ public final class GeoBuilder {
         floor4(ax, az, bx, bz, y0, y1, y2, y3, tex, uScale, vScale, layer, flags, bias, l0, l1, l2, l3);
     }
 
+    /** The light baked into the ground at (x, z): its slope and broad soft patches. */
+    public float groundLight(float x, float z) { return tl(x, z); }
+
     private float tl(float x, float z) {
         terrain.normal(x, z, n3);
         // "vertex painting": broad, soft patches of lighter and darker ground
@@ -247,7 +264,7 @@ public final class GeoBuilder {
     }
 
     /** Smooth value noise in 0..1 with ~30 m features, for per-vertex ground tint. */
-    static float paint(float x, float z) {
+    public static float paint(float x, float z) {
         float fx = x / 31f, fz = z / 31f;
         int ix = (int) Math.floor(fx), iz = (int) Math.floor(fz);
         float tx = fx - ix, tz = fz - iz;
@@ -269,7 +286,10 @@ public final class GeoBuilder {
             l[k] = tl(xs[k], zs[k]);
             a[k] = cov[k];
         }
+        boolean was = ground;
+        ground = true;
         if (!dry) target().addBlend(p, t, l, a, tex, layer, flags, bias);
+        ground = was;
     }
 
     /** Corners: 0=(ax,bz) 1=(bx,bz) 2=(bx,az) 3=(ax,az). */
@@ -301,12 +321,15 @@ public final class GeoBuilder {
         float step = 16f;                                   // footpaths and lots: big pieces that still follow the ground
         int nx = Math.max(1, (int) Math.ceil((bx - ax) / step)), nz = Math.max(1, (int) Math.ceil((bz - az) / step));
         float lift = Math.max(off, 0.02f);
+        boolean was = ground;
+        ground = true;
         for (int j = 0; j < nz; j++)
             for (int i = 0; i < nx; i++) {
                 float x0 = ax + (bx - ax) * i / nx, x1 = ax + (bx - ax) * (i + 1) / nx;
                 float z0 = az + (bz - az) * j / nz, z1 = az + (bz - az) * (j + 1) / nz;
                 floorT(x0, z0, x1, z1, lift, tex, uScale, vScale, SoftRenderer.L_DECAL, 0, 0f, true);
             }
+        ground = was;
     }
 
     /**
@@ -329,7 +352,10 @@ public final class GeoBuilder {
         l[0] = tl(x0, z1); l[1] = tl(x1, z1); l[2] = tl(x1, z0); l[3] = tl(x0, z0);
         // never culled: a cell is rarely flat, and one normal can't speak for both its triangles over
         // a ridge (back slopes are hidden by the ground's depth test anyway)
+        boolean was = ground;
+        ground = true;
         target().add(p, t, l, tex, layer, 0, 0f, true);
+        ground = was;
     }
 
     // ------------------------------------------------------------------ walls

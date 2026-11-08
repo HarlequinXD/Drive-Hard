@@ -41,6 +41,34 @@ public final class Ground {
             return 1 + Math.min(254, Math.round((0.6f - h) * 20f));
         }
 
+        // ---------------------------------------------------------------- the painted terrain (GPU)
+
+        /** Terrain mesh vertices per tile edge (4 m apart), samples of the layer weights and road map (1 m), material texels (0.25 m). */
+        public static final int MESH = 17, SPLAT = 65, ROAD = 65, MAT = 256, LAYERS = 8, MATS = 32;
+
+        /** True land heights at the mesh vertices (MESH^2, not raised to the sea) and their baked light. */
+        public float[] land, lit;
+        /** Natural ground layers: texture ids (-1 unused) and metres per texture repeat. */
+        public int[] layerTex;
+        public float[] layerScale;
+        /** Layer weights 0..255, SPLAT^2 samples x LAYERS (sample-major), blended and dithered on the GPU. */
+        public byte[] splat;
+        /** Painted cover (lots, sidewalks, yards, parks): MAT^2 indices into the material table, 0 = none; null if none. */
+        public byte[] mat;
+        /** Material table: texture id, metres per repeat across x and z (entry 0 unused). */
+        public int[] matTex;
+        public float[] matScale;
+        /**
+         * Roads projected onto the ground, ROAD^2 samples, or null: per sample the signed distance to
+         * the nearest asphalt edge (negative on the road; junctions included), and for the road that
+         * owns the sample its lateral offset and the distances from its two (trimmed) ends.
+         */
+        public float[] road;
+        /** Per road sample: owner id (low 16 bits), owner high bits | junction flag (0x8000), class | flags << 8, mouth lengths (1/16 m, a | b << 8). */
+        public short[] roadInfo;
+
+        public static final int RF_PAINT_A = 1, RF_PAINT_B = 2, RF_PLAIN = 4, RF_SHOULDER = 8;
+
         public Tile(int cx, int cz, float[] h, byte[] water) {
             this.cx = cx;
             this.cz = cz;
@@ -69,6 +97,13 @@ public final class Ground {
     /** Supplies tiles (may be missing while streaming) and fallbacks for the unloaded distance. */
     public interface Source {
         Tile tile(int cx, int cz);
+        /**
+         * How roads are painted, for the GPU: per road class (by ordinal, at most 8) four floats
+         * (half width, mouth texture, band count, -) then four bands of four floats (centre-side
+         * offset, kerb-side offset, lane texture or -1 for plain asphalt, 1 if one band spans both
+         * sides); then the plain asphalt and road-edge texture ids.
+         */
+        float[] roadStyle();
         /** Ground height where no tile is loaded. */
         float height(float x, float z);
         /** Flat colour where no tile is loaded. */

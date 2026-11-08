@@ -41,6 +41,7 @@ final class AndroidGl implements Gl {
     @Override public void uniform2f(int loc, float a, float b) { GLES30.glUniform2f(loc, a, b); }
     @Override public void uniform3f(int loc, float a, float b, float c) { GLES30.glUniform3f(loc, a, b, c); }
     @Override public void uniform4f(int loc, float a, float b, float c, float d) { GLES30.glUniform4f(loc, a, b, c, d); }
+    @Override public void uniform4fv(int loc, int count, float[] values) { GLES30.glUniform4fv(loc, count, values, 0); }
 
     @Override public int genBuffer() { return gen1(0); }
     @Override public void deleteBuffer(int buffer) { one[0] = buffer; GLES30.glDeleteBuffers(1, one, 0); }

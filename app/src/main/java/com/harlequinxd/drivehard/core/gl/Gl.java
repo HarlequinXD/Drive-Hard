@@ -50,6 +50,8 @@ public interface Gl {
     void uniform2f(int loc, float a, float b);
     void uniform3f(int loc, float a, float b, float c);
     void uniform4f(int loc, float a, float b, float c, float d);
+    /** {@code count} vec4s from {@code values} (an array uniform, from its first element's location). */
+    void uniform4fv(int loc, int count, float[] values);
 
     int genBuffer();
     void deleteBuffer(int buffer);
