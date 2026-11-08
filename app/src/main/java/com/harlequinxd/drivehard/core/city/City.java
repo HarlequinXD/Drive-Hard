@@ -475,10 +475,23 @@ public final class City extends World implements java.io.Serializable {
                 else gb.groundCell(ax, az, bx, bz, h00, h10, h11, h01, 0f, 0f, 1f, 1f, tex, L_GROUND);
                 if (Countryside.paddy(sf.crop) && !fine[(j + 1) * 10 + (i + 1)]) countryside.levees(gb, ax, az, bx, bz);
             }
+        fieldMargins(gb, x0, z0, grid);
         // farm yards and konbini car parks, over the tiles
         countryside.yards(x0, z0, x1, z1, (rx0, rz0, rx1, rz1, t) -> {
             float a0 = Math.max(rx0, x0), a1 = Math.min(rx1, x1), b0 = Math.max(rz0, z0), b1 = Math.min(rz1, z1);
-            if (a1 - a0 > 0.05f && b1 - b0 > 0.05f) gb.floorAreaT(a0, b0, a1, b1, 0.03f, t, 2f, 2f, L_DECAL, 8f, 0, 0f);
+            if (a1 - a0 > 0.05f && b1 - b0 > 0.05f) {
+                gb.floorAreaT(a0, b0, a1, b1, 0.03f, t, 2f, 2f, L_DECAL, 8f, 0, 0f);
+                // a fringe of dirt where the yard meets the grass (only the yard's own edges)
+                final float f = 1.2f;
+                if (rx0 >= x0 && !urban(rx0 - 2f, (b0 + b1) * 0.5f))
+                    gb.floorBlend(a0 - f, b0, a0, b1, lib.dirt, 2f, new float[]{0, 1, 1, 0}, L_DECAL, 0, 0f);
+                if (rx1 <= x1 && !urban(rx1 + 2f, (b0 + b1) * 0.5f))
+                    gb.floorBlend(a1, b0, a1 + f, b1, lib.dirt, 2f, new float[]{1, 0, 0, 1}, L_DECAL, 0, 0f);
+                if (rz0 >= z0 && !urban((a0 + a1) * 0.5f, rz0 - 2f))
+                    gb.floorBlend(a0, b0 - f, a1, b0, lib.dirt, 2f, new float[]{1, 1, 0, 0}, L_DECAL, 0, 0f);
+                if (rz1 <= z1 && !urban((a0 + a1) * 0.5f, rz1 + 2f))
+                    gb.floorBlend(a0, b1, a1, b1 + f, lib.dirt, 2f, new float[]{0, 0, 1, 1}, L_DECAL, 0, 0f);
+            }
         });
         // the sea-floor / beach heights and the water map for the animated sea
         ch.ground = new GroundPainter(this).tile(ch.cx, ch.cz);
@@ -538,6 +551,49 @@ public final class City extends World implements java.io.Serializable {
                 int o = pj * 5 + pi;
                 gb.groundCell(px0, pz0, px1, pz1, hv[o], hv[o + 1], hv[o + 6], hv[o + 5],
                         pi / 4f, pj / 4f, (pi + 1) / 4f, (pj + 1) / 4f, tex, L_GROUND);
+            }
+    }
+
+    /**
+     * Field edges: where a field meets grass or a different crop, a margin of bare dirt runs along
+     * the boundary and frays out on both sides (dithered), the way tractors and feet wear a
+     * headland round every field.
+     */
+    private void fieldMargins(GeoBuilder gb, float x0, float z0, GroundPainter.Surface[] grid) {
+        final float in = 1.6f, out = 1.1f;
+        for (int j = 0; j < 8; j++)
+            for (int i = 0; i < 8; i++) {
+                GroundPainter.Surface sf = grid[j * 8 + i];
+                if (sf.crop == Countryside.Crop.NONE) continue;
+                float ax = x0 + i * 8f, az = z0 + j * 8f, bx = ax + 8f, bz = az + 8f;
+                if (urban(ax + 4f, az + 4f)) continue;
+                // west, east, north, south neighbours (outside the chunk: worked out afresh)
+                for (int side = 0; side < 4; side++) {
+                    int ni = i + (side == 0 ? -1 : side == 1 ? 1 : 0), nj = j + (side == 2 ? -1 : side == 3 ? 1 : 0);
+                    Countryside.Crop other;
+                    if (ni >= 0 && ni < 8 && nj >= 0 && nj < 8) other = grid[nj * 8 + ni].crop;
+                    else {
+                        float nx = x0 + ni * 8f, nz = z0 + nj * 8f;
+                        other = urban(nx + 4f, nz + 4f) ? sf.crop : surface(nx, nz, nx + 8f, nz + 8f).crop;
+                    }
+                    if (other == sf.crop) continue;
+                    // the margin inside this field, solid at the edge and fading inwards
+                    float[] c;
+                    switch (side) {
+                        case 0: c = new float[]{1, 0, 0, 1}; gb.floorBlend(ax, az, ax + in, bz, lib.dirt, 2f, c, L_DECAL, 0, 0f); break;
+                        case 1: c = new float[]{0, 1, 1, 0}; gb.floorBlend(bx - in, az, bx, bz, lib.dirt, 2f, c, L_DECAL, 0, 0f); break;
+                        case 2: c = new float[]{0, 0, 1, 1}; gb.floorBlend(ax, az, bx, az + in, lib.dirt, 2f, c, L_DECAL, 0, 0f); break;
+                        default: c = new float[]{1, 1, 0, 0}; gb.floorBlend(ax, bz - in, bx, bz, lib.dirt, 2f, c, L_DECAL, 0, 0f); break;
+                    }
+                    // and out into the grass next to it (a neighbouring field draws its own margin)
+                    if (other != Countryside.Crop.NONE) continue;
+                    switch (side) {
+                        case 0: c = new float[]{0, 1, 1, 0}; gb.floorBlend(ax - out, az, ax, bz, lib.dirt, 2f, c, L_DECAL, 0, 0f); break;
+                        case 1: c = new float[]{1, 0, 0, 1}; gb.floorBlend(bx, az, bx + out, bz, lib.dirt, 2f, c, L_DECAL, 0, 0f); break;
+                        case 2: c = new float[]{1, 1, 0, 0}; gb.floorBlend(ax, az - out, bx, az, lib.dirt, 2f, c, L_DECAL, 0, 0f); break;
+                        default: c = new float[]{0, 0, 1, 1}; gb.floorBlend(ax, bz, bx, bz + out, lib.dirt, 2f, c, L_DECAL, 0, 0f); break;
+                    }
+                }
             }
     }
 

@@ -175,7 +175,7 @@ public final class TextureLibrary implements java.io.Serializable {
     public HouseTextures.Door[] houseDoorKind;
     public HouseTextures.Roof[] houseRoofKind;
     /** Building props: a/c unit front and casing, balcony front and slab, power line ribbon. */
-    public int gravelTrack, dirtTrack, aircon, airconSide, balconyFront, balconySlab, powerLines;
+    public int dirt, gravelTrack, dirtTrack, aircon, airconSide, balconyFront, balconySlab, powerLines;
     /** Alley clutter: beer crates, rubbish bins, cardboard, gas bottles. */
     public int crateYellow, crateRed, bin, cardboard, gasBottle;
     public int fence, signTownOffice, signPost, signSuper, signSchool, signClinic, signGas, schoolWall, superWall, canopy, field;
@@ -281,6 +281,7 @@ public final class TextureLibrary implements java.io.Serializable {
         gasBottle = add(PropTextures.gasBottle(seed + 3418));
         gravelTrack = add(PropTextures.track(false, seed + 3419));
         dirtTrack = add(PropTextures.track(true, seed + 3420));
+        dirt = add(FarmTextures.dirt(seed));
     }
 
     /**

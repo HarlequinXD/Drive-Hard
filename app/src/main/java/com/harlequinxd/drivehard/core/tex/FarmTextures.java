@@ -56,6 +56,27 @@ public final class FarmTextures {
         return m.texture();
     }
 
+    /**
+     * Packed earth for road shoulders and field margins: brown-grey dirt worn smooth, small stones,
+     * tyre-darkened patches and a few blades of grass coming through.
+     */
+    public static Texture dirt(long seed) {
+        Img m = new Img(64, 64);
+        int sd = (int) seed + 930;
+        for (int y = 0; y < 64; y++)
+            for (int x = 0; x < 64; x++) {
+                float n = Noise.fbm(x, y, 64, 64, sd), g = Noise.rnd(x, y, sd + 1);
+                float k = 0.84f + n * 0.22f + g * 0.08f;
+                int c = rgb((int) (132 * k), (int) (112 * k), (int) (84 * k));
+                float st = Noise.rnd(x, y, sd + 2);
+                if (st > 0.95f) c = mix(c, rgb(176, 170, 156), 0.7f);          // pebble
+                else if (st < 0.03f) c = mix(c, rgb(70, 60, 48), 0.6f);        // shadow of one
+                else if (Noise.rnd(x, y, sd + 3) > 0.975f) c = mix(c, rgb(96, 128, 60), 0.75f);   // a blade of grass
+                m.px[y * 64 + x] = c;
+            }
+        return m.texture();
+    }
+
     /** Freshly ploughed soil with furrows. */
     public static Texture soil(long seed) {
         Img m = new Img(64, 64);

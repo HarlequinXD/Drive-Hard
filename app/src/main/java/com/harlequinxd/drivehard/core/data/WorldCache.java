@@ -46,7 +46,7 @@ import java.util.zip.InflaterInputStream;
  */
 public final class WorldCache {
     /** Bump when the file layout changes. */
-    public static final int FORMAT = 6;
+    public static final int FORMAT = 7;
     private static final int CHUNK_MAGIC = 0x44484331; // "DHC1"
 
     /** The game data folder (set by the platform before the game starts); null turns the cache off. */

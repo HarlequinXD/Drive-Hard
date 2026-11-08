@@ -13,6 +13,7 @@ import com.harlequinxd.drivehard.core.tex.TextureLibrary;
 
 import java.util.Arrays;
 
+import static com.harlequinxd.drivehard.core.render.SoftRenderer.L_DECAL;
 import static com.harlequinxd.drivehard.core.render.SoftRenderer.L_GROUND;
 import static com.harlequinxd.drivehard.core.render.SoftRenderer.L_OBJECT;
 import static com.harlequinxd.drivehard.core.render.SoftRenderer.L_RAISED;
@@ -264,6 +265,7 @@ public final class RoadMesh {
                 }
                 if (bridge) bridgePiece(ch, gb, a, b, hw);
                 if ((cls == RoadClass.COUNTRY || cls == RoadClass.TOWN) && !bridge) poles(ch, gb, a, b, hw);
+                if (!bridge && cls != RoadClass.FREEWAY && cls != RoadClass.RAMP) shoulders(gb, s0, s1, hw);
             }
         }
         // cut-and-fill verges run the whole piece (through junction areas too, under the junction surface)
@@ -346,13 +348,54 @@ public final class RoadMesh {
                             || net.onAsphalt(p[6], p[8], 0.05f, e.id) || net.onAsphalt(p[9], p[11], 0.05f, e.id)
                             || net.onAsphalt((p[0] + p[6]) * 0.5f, (p[2] + p[8]) * 0.5f, 0.05f, e.id))) continue;
                     float dy = Math.abs(p[4] - p[1]) / Math.abs(o1 - o0);
-                    int tex = dy > 0.9f ? lib.rock : lib.grass;
+                    // the shoulder next to the tarmac is bare dirt; then grass (or rock on a steep cut)
+                    int tex = dy > 0.9f ? lib.rock : q == 0 ? lib.dirt : lib.grass;
                     for (int c = 0; c < 4; c++) { uv[c * 2] = p[c * 3] / 2f; uv[c * 2 + 1] = p[c * 3 + 2] / 2f; }
                     // light from the bank slope, facing away from the road
                     float slope = (p[4] - p[1]) / Math.abs(o1 - o0);
                     float lt = Math.max(0.55f, GeoBuilder.sunLight(0, 1, 0) - slope * 0.25f);
                     l[0] = l[1] = l[2] = l[3] = lt;
                     gb.quad(p, uv, l, tex, L_OBJECT, Geo.FLAG_SORT_FAR, VERGE_BIAS, true);
+                    if (q == 1 && tex == lib.grass) {
+                        // the dirt frays out into the grass: a dithered fade over the next band
+                        fade[0] = 1f; fade[1] = 0f; fade[2] = 0f; fade[3] = 1f;
+                        for (int c = 0; c < 4; c++) p[c * 3 + 1] += 0.01f;
+                        gb.quadBlend(p, uv, l, fade, lib.dirt, L_OBJECT, Geo.FLAG_SORT_FAR, VERGE_BIAS - 0.1f);
+                    }
+                }
+            }
+        }
+    }
+
+    private final float[] fade = new float[4];
+
+    /**
+     * The road's edges outside town: a shoulder of bare dirt right next to the tarmac, then the
+     * dirt fraying out into the grass (a dithered fade), in pieces that follow the ground.
+     */
+    private void shoulders(GeoBuilder gb, float s0, float s1, float hw) {
+        final float solid = 0.7f, frayed = 1.7f;
+        int nsub = Math.max(1, (int) Math.ceil((s1 - s0) / 8f));
+        float lt = GeoBuilder.sunLight(0, 1, 0);
+        for (int k = 0; k < nsub; k++) {
+            float sa = s0 + (s1 - s0) * k / nsub, sb = s0 + (s1 - s0) * (k + 1) / nsub;
+            for (int side = -1; side <= 1; side += 2) {
+                for (int q = 0; q < 2; q++) {
+                    float o0 = (hw + (q == 0 ? -0.05f : solid)) * side, o1 = (hw + (q == 0 ? solid : solid + frayed)) * side;
+                    vergePoint(sa, o0, q == 0, 0);
+                    vergePoint(sa, o1, false, 1);
+                    vergePoint(sb, o1, false, 2);
+                    vergePoint(sb, o0, q == 0, 3);
+                    for (int c = 0; c < 4; c++) {
+                        p[c * 3 + 1] += 0.02f;
+                        uv[c * 2] = p[c * 3] / 2f; uv[c * 2 + 1] = p[c * 3 + 2] / 2f;
+                        l[c] = lt;
+                    }
+                    if (q == 0) gb.quad(p, uv, l, lib.dirt, L_DECAL, 0, 0f, true);
+                    else {
+                        fade[0] = 1f; fade[1] = 0f; fade[2] = 0f; fade[3] = 1f;
+                        gb.quadBlend(p, uv, l, fade, lib.dirt, L_DECAL, 0, -0.05f);
+                    }
                 }
             }
         }
