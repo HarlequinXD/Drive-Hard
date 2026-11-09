@@ -57,6 +57,11 @@ public final class Countryside implements java.io.Serializable {
     }
 
     private final HashMap<Long, List<Site>> sites = new HashMap<>();
+
+    /** Every placed site (for the map checker). */
+    void forEachSite(java.util.function.Consumer<Site> f) {
+        for (List<Site> l : sites.values()) for (Site s : l) f.accept(s);
+    }
     public int siteCount, farmCount;
 
     Countryside(City city, TextureLibrary lib, long seed) {
@@ -368,10 +373,10 @@ public final class Countryside implements java.io.Serializable {
         for (float[] q : pts) {
             if (terrain.coastOver(q[0], q[1]) > -120f) return false;
             if (roads.roadClearance(q[0], q[1], 40f) < clearance) return false;
-            float h = terrain.natural(q[0], q[1]);
+            float h = terrain.exact(q[0], q[1]);
             lo = Math.min(lo, h); hi = Math.max(hi, h);
         }
-        return hi - lo < 4.5f && lo > 3f;
+        return hi - lo < Math.min(4.5f, 0.08f * (float) Math.hypot(x1 - x0, z1 - z0)) && lo > 3f;
     }
 
     private void add(Site s) {
@@ -427,33 +432,90 @@ public final class Countryside implements java.io.Serializable {
         }
         // villages and towns with street grids: lots along every street, a centre with civic buildings
         for (com.harlequinxd.drivehard.core.road.Town t : roads.towns) if (t.grid != null) townLots(t, rnd);
-        // hamlets: houses around the junction
-        for (com.harlequinxd.drivehard.core.road.Town t : roads.towns) {
-            if (t.grid != null) continue;
-            RoadNode v = t.centre;
-            int houses = 9 + rnd.nextInt(8);
-            boolean shop = false;
-            for (int k = 0; k < houses * 3 && houses > 0; k++) {
-                double ang = rnd.nextDouble() * Math.PI * 2;
-                float r = 28f + rnd.nextFloat() * 140f;
-                float cx = v.x + (float) Math.cos(ang) * r, cz = v.z + (float) Math.sin(ang) * r;
-                int kind = !shop && r < 70f ? KONBINI : (rnd.nextInt(7) == 0 ? APAATO : HOUSE);
-                float hw = kind == KONBINI ? 8f : (kind == APAATO ? 9f : 6f), hd = kind == APAATO ? 6f : 5.5f;
-                // face the village centre's road (the junction) along the dominant axis
-                float dx = v.x - cx, dz = v.z - cz;
-                int face = Math.abs(dx) > Math.abs(dz) ? (dx > 0 ? 3 : 2) : (dz > 0 ? 1 : 0);
-                boolean wide = face < 2;
-                float x0 = cx - (wide ? hw : hd), x1 = cx + (wide ? hw : hd), z0 = cz - (wide ? hd : hw), z1 = cz + (wide ? hd : hw);
-                if (!buildable(x0 - 2f, z0 - 2f, x1 + 2f, z1 + 2f, 3f) || !reserve(x0 - 2f, z0 - 2f, x1 + 2f, z1 + 2f)) continue;
-                Site st = new Site();
-                st.x0 = x0; st.z0 = z0; st.x1 = x1; st.z1 = z1;
-                st.kind = kind; st.face = face; st.seed = rnd.nextInt();
-                st.rx = Float.NaN;
-                add(st);
+        // hamlets: houses strung along the roads out of the junction, each facing its road
+        for (com.harlequinxd.drivehard.core.road.Town t : roads.towns) if (t.grid == null) hamlet(t, rnd);
+    }
+
+    /**
+     * A hamlet: houses (and the odd small apartment block) along the roads leading out of its
+     * junction, closest in first, alternating sides, each set back from its road and facing it with
+     * a drive across to the road edge; a convenience store near the junction with its car park
+     * opening onto the road. Plots that would sit on a road, on a slope or well above or below
+     * their road are skipped.
+     */
+    private void hamlet(com.harlequinxd.drivehard.core.road.Town t, Random rnd) {
+        RoadNode v = t.centre;
+        int want = 9 + rnd.nextInt(8);
+        List<float[]> cand = new ArrayList<>();       // edge, distance from the junction, side
+        for (int eid : v.edges) {
+            RoadEdge e = roads.edges.get(eid);
+            if (e.cls.motorway() || e.cls.city) continue;
+            float start = e.clear(v.id) + 7f, end = Math.min(e.len - e.clear(e.other(v.id)) - 12f, e.cls == RoadClass.LANE ? 120f : 330f);
+            for (float d = start; d < end; d += 15f + rnd.nextFloat() * 9f)
+                for (int side = -1; side <= 1; side += 2) cand.add(new float[]{eid, d + rnd.nextFloat() * 4f, side});
+        }
+        cand.sort((A, B) -> Float.compare(A[1], B[1]));
+        boolean shop = false;
+        float[] p = new float[5];
+        for (float[] c : cand) {
+            if (want <= 0) break;
+            RoadEdge e = roads.edges.get((int) c[0]);
+            float s = v.id == e.a ? c[1] : e.len - c[1];
+            e.point(s, p);
+            int kind = !shop && c[1] < 110f ? KONBINI : (rnd.nextInt(8) == 0 ? APAATO : HOUSE);
+            if (roadside(e, p, c[2], kind, rnd)) {
                 if (kind == KONBINI) shop = true;
-                houses--;
+                want--;
             }
         }
+    }
+
+    /** Places a building beside road e at point p (x, z, y, tx, tz) on side (+1 left, -1 right). */
+    private boolean roadside(RoadEdge e, float[] p, float side, int kind, Random rnd) {
+        float nx = p[4] * side, nz = -p[3] * side;               // away from the road
+        // the plot is square to the world: it faces the side its road is mostly on
+        int face = Math.abs(nx) > Math.abs(nz) ? (nx > 0 ? 2 : 3) : (nz > 0 ? 0 : 1);
+        float hw = kind == KONBINI ? 8f : (kind == APAATO ? 9f : 6f), hd = kind == APAATO ? 6f : 5.5f;
+        float apron = kind == KONBINI ? 7.5f : 0f;                 // the store's car park lies in front of it
+        boolean wide = face < 2;
+        for (float push = 0f; push <= 4.5f; push += 1.5f) {
+            float set = e.cls.halfWidth() + 1.6f + apron + push;
+            float cx = p[0] + nx * (set + hd), cz = p[1] + nz * (set + hd);
+            float x0 = cx - (wide ? hw : hd), x1 = cx + (wide ? hw : hd), z0 = cz - (wide ? hd : hw), z1 = cz + (wide ? hd : hw);
+            // with its car park (konbini) the whole front must be clear of every road
+            float px0 = x0, px1 = x1, pz0 = z0, pz1 = z1;
+            if (apron > 0f) {
+                if (face == 0) pz0 -= 7f; else if (face == 1) pz1 += 7f; else if (face == 2) px0 -= 7f; else px1 += 7f;
+                if (wide) { px0 -= 3f; px1 += 3f; } else { pz0 -= 3f; pz1 += 3f; }
+            }
+            if (!roads.rectClear(px0, pz0, px1, pz1, 0.8f)) continue;
+            // the front: within reach of the road, not far above or below it
+            float fx = face == 2 ? px0 - 0.5f : face == 3 ? px1 + 0.5f : cx, fz = face == 0 ? pz0 - 0.5f : face == 1 ? pz1 + 0.5f : cz;
+            float gap = roads.roadClearance(fx, fz, 20f);
+            if (gap > 5f) return false;
+            if (inTown(cx, cz, 40f) || !buildable(x0, z0, x1, z1, 0.8f)) return false;
+            if (Math.abs(terrain.natural(fx, fz) - p[2]) > 2.2f) return false;
+            if (!reserve(px0 - 1f, pz0 - 1f, px1 + 1f, pz1 + 1f)) return false;
+            return addRoadside(x0, z0, x1, z1, cx, cz, face, kind, gap, rnd);
+        }
+        return false;
+    }
+
+    private boolean addRoadside(float x0, float z0, float x1, float z1, float cx, float cz, int face, int kind, float gap, Random rnd) {
+        Site st = new Site();
+        st.x0 = x0; st.z0 = z0; st.x1 = x1; st.z1 = z1;
+        st.kind = kind; st.face = face; st.seed = rnd.nextInt();
+        st.rx = Float.NaN;
+        if (kind != KONBINI) {
+            // a drive from the front door across to the road edge
+            float d = gap + 0.6f, w = 1.6f;
+            float[] dr = face == 0 ? new float[]{cx - w, z0 - d, cx + w, z0} : face == 1 ? new float[]{cx - w, z1, cx + w, z1 + d}
+                    : face == 2 ? new float[]{x0 - d, cz - w, x0, cz + w} : new float[]{x1, cz - w, x1 + d, cz + w};
+            st.ground = new ArrayList<>();
+            st.ground.add(new float[]{dr[0], dr[1], dr[2], dr[3], rnd.nextBoolean() ? lib.concrete : lib.gravel});
+        }
+        add(st);
+        return true;
     }
 
     // ------------------------------------------------------------------ towns
@@ -466,8 +528,8 @@ public final class Countryside implements java.io.Serializable {
 
     /** True inside the built-up area of a village or town (no fields or forest there). */
     public boolean inTown(float x, float z, float margin) {
-        com.harlequinxd.drivehard.core.road.Town t = roads.townAt(x, z, margin);
-        return t != null && t.grid != null;
+        for (com.harlequinxd.drivehard.core.road.Town t : roads.towns) if (t.grid != null && t.contains(x, z, margin)) return true;
+        return false;
     }
 
     /**
@@ -486,7 +548,12 @@ public final class Countryside implements java.io.Serializable {
             for (int bi = 0; bi < nbx; bi++) {
                 float bx0 = t.gx[bi] + edge, bx1 = t.gx[bi + 1] - edge, bz0 = t.gz[bj] + edge, bz1 = t.gz[bj + 1] - edge;
                 float rowD = (bz1 - bz0) * 0.5f;
+                // rows face the streets along the block's north and south sides; a street left off
+                // a hillside leaves its row empty
+                boolean nOK = t.street(bi, bj, true), sOK = t.street(bi, bj + 1, true);
+                if (!nOK && !sOK) continue;
                 String role = blockRole(town, bi, bj, ci, cj, nbx, nbz, t.id);
+                if (!nOK || !sOK || !t.street(bi, bj, false) || !t.street(bi + 1, bj, false)) role = "houses";
                 switch (role) {
                     case "civic":
                         civicPart(TOWN_HALL, bx0, bz0, bx1, bz0 + rowD, 0, lib.concrete, 0.5f, 52f, 34f, rnd);
@@ -498,8 +565,8 @@ public final class Countryside implements java.io.Serializable {
                         shopRow(bx0, bz1 - rowD, bx1, bz1, 1, rnd);
                         break;
                     case "market":
-                        civicPart(SUPERMARKET, bx0, bz0, bx1, bz0 + rowD, 0, lib.parking, 0.5f, 70f, Math.min(rowD, 52f), rnd);
-                        houseRow(bx0, bz1 - rowD, bx1, bz1, 1, rnd, true);
+                        // the store takes the block's depth: car park off the north street, store behind
+                        civicPart(SUPERMARKET, bx0, bz0, bx1, bz1, 0, lib.parking, 0.5f, 70f, Math.min(bz1 - bz0, 52f), rnd);
                         break;
                     case "school":
                         civicPart(SCHOOL, bx0, bz0, bx1, bz1, 0, lib.field, 0.5f, 110f, Math.min(bz1 - bz0, 96f), rnd);
@@ -514,13 +581,13 @@ public final class Countryside implements java.io.Serializable {
                         houseRow(bx0, bz1 - rowD, bx1, bz1, 1, rnd, false);
                         break;
                     default:
-                        boolean gas = role.equals("gas");
-                        boolean kon = role.equals("konbini");
+                        boolean gas = nOK && role.equals("gas");
+                        boolean kon = nOK && role.equals("konbini");
                         float cut = bx0;
                         if (gas) { civic(GAS, bx0, bz0, bx0 + 26f, bz0 + rowD, 0, lib.concrete, rnd); cut = bx0 + 26f; }
                         if (kon) { civic(TOWN_KONBINI, bx0, bz0, bx0 + 22f, bz0 + rowD, 0, lib.parking, rnd); cut = bx0 + 22f; }
-                        houseRow(cut, bz0, bx1, bz0 + rowD, 0, rnd, true);
-                        houseRow(bx0, bz1 - rowD, bx1, bz1, 1, rnd, true);
+                        if (nOK) houseRow(cut, bz0, bx1, bz0 + rowD, 0, rnd, true);
+                        if (sOK) houseRow(bx0, bz1 - rowD, bx1, bz1, 1, rnd, true);
                         break;
                 }
             }
@@ -589,7 +656,7 @@ public final class Countryside implements java.io.Serializable {
             float lx0 = x, lx1 = x + w;
             x += w;
             float sz0 = face == 0 ? z0 + 1f : z1 - depth, sz1 = face == 0 ? z0 + depth : z1 - 1f;
-            if (!lotClear(lx0, sz0, lx1, sz1)) continue;
+            if (!lotClear(lx0, sz0, lx1, sz1, true)) continue;
             Site st = new Site();
             st.x0 = lx0 + 0.2f; st.z0 = sz0; st.x1 = lx1 - 0.2f; st.z1 = sz1;
             st.kind = SHOP; st.face = face; st.seed = rnd.nextInt(); st.rx = Float.NaN;
@@ -608,6 +675,7 @@ public final class Countryside implements java.io.Serializable {
                            float w, float d, Random rnd) {
         float rw = x1 - x0;
         w = Math.min(w, rw);
+        d = Math.min(d, z1 - z0);
         float px0 = x0 + (rw - w) * at, px1 = px0 + w;
         float pz0 = face == 0 ? z0 : z1 - d, pz1 = face == 0 ? z0 + d : z1;
         boolean ok = civic(kind, px0, pz0, px1, pz1, face, groundTex, rnd);
@@ -617,7 +685,7 @@ public final class Countryside implements java.io.Serializable {
     }
 
     private boolean civic(int kind, float x0, float z0, float x1, float z1, int face, int groundTex, Random rnd) {
-        if (!lotClear(x0, z0, x1, z1)) return false;
+        if (!lotClear(x0, z0, x1, z1, true)) return false;
         Site st = new Site();
         st.x0 = x0; st.z0 = z0; st.x1 = x1; st.z1 = z1;
         st.kind = kind; st.face = face; st.seed = rnd.nextInt(); st.rx = Float.NaN;
@@ -653,20 +721,27 @@ public final class Countryside implements java.io.Serializable {
     }
 
     /** A lot is usable if no road crosses it and the ground is gentle. */
-    private boolean lotClear(float x0, float z0, float x1, float z1) {
+    private boolean lotClear(float x0, float z0, float x1, float z1) { return lotClear(x0, z0, x1, z1, false); }
+
+    /**
+     * {@code shaped}: judge the slope on the ground as the streets shape it (for small plots built
+     * up to the pavement, where a street's bank can tilt the whole plot); otherwise the natural
+     * ground is enough.
+     */
+    private boolean lotClear(float x0, float z0, float x1, float z1, boolean shaped) {
         float lo = Float.MAX_VALUE, hi = -Float.MAX_VALUE;
-        // one query at the centre clears the whole lot when the nearest road is beyond its corners
-        float half = (float) Math.hypot(x1 - x0, z1 - z0) * 0.5f;
-        boolean open = roads.roadClearance((x0 + x1) * 0.5f, (z0 + z1) * 0.5f, half + 1f) > half + 0.5f;
+        if (!roads.rectClear(x0 + 0.5f, z0 + 0.5f, x1 - 0.5f, z1 - 0.5f, 0f)) return false;
         // the four corners and the middle; the natural ground is enough to judge the slope
         for (int k = 0; k < 5; k++) {
             float fi = k == 4 ? 0.5f : (k & 1), fj = k == 4 ? 0.5f : (k >> 1);
             float x = x0 + 1f + (x1 - x0 - 2f) * fi, z = z0 + 1f + (z1 - z0 - 2f) * fj;
-            if (!open && roads.roadClearance(x, z, 20f) < 0.5f) return false;
-            float h = terrain.natural(x, z);
+            float h = shaped ? terrain.exact(x, z) : terrain.natural(x, z);
             lo = Math.min(lo, h); hi = Math.max(hi, h);
         }
-        return hi - lo < 3f;
+        float limit = Math.min(2.5f, (shaped ? 0.12f : 0.09f) * (float) Math.hypot(x1 - x0, z1 - z0));
+        // on a slope already, a street's bank could tip it over: judge those on the shaped ground
+        if (!shaped && hi - lo < limit && hi - lo > limit * 0.5f) return lotClear(x0, z0, x1, z1, true);
+        return hi - lo < limit;
     }
 
     // ------------------------------------------------------------------ building

@@ -179,7 +179,14 @@ public final class RoadNetwork implements java.io.Serializable {
     /** A fresh unique place name (suburbs of the city). */
     public String newPlaceName() { return names.town(); }
     /** Street spacing in towns (centre line to centre line). */
-    public static final float TOWN_SX = 145f, TOWN_SZ = 145f;
+    /**
+     * Town blocks: 145 m along the streets lots face, 60 m between them, so each block holds two
+     * rows of ~25 m deep lots back to back (a house and a small garden behind it, not a field).
+     */
+    public static final float TOWN_SX = 145f, TOWN_SZ = 60f;
+
+    /** Street lines across the z axis for a town nx streets wide (odd, so the centre is a crossroads). */
+    static int townRows(int nx) { return 2 * Math.round((nx - 1) * TOWN_SX / TOWN_SZ / 2f) + 1; }
     private static final int LARGE_TOWN_GRID = 49, TOWN_GRID = 15;
     private static final int LARGE_VILLAGE_GRID = 21, VILLAGE_GRID = 9;
     private boolean hasLargeTownGrid, hasLargeVillageGrid;
@@ -234,10 +241,19 @@ public final class RoadNetwork implements java.io.Serializable {
                 if (best > 0f) cand.add(new float[]{bx, bz, best, bd});
             }
         cand.sort((A, B) -> Float.compare(B[2], A[2]));
+        // the island's largest town first, so nothing else is founded inside it
+        float[] largeTownSite = largestTownSite();
+        Town largeTown = null;
+        if (largeTownSite != null) {
+            RoadNode centre = addNode(largeTownSite[0], largeTownSite[1], RoadNode.Kind.JUNCTION);
+            villages.add(centre);
+            largeTown = makeTown(centre, Town.Size.TOWN, false);
+            largeTown.coastal = largeTownSite[3] < 3000f;
+        }
         List<float[]> chosen = new ArrayList<>();
         for (float[] c : cand) {
             float min = c[3] < 3000f ? 4000f : 4600f;
-            boolean ok = true;
+            boolean ok = largeTown == null || !largeTown.contains(c[0], c[1], 1800f);
             for (float[] o : chosen) if (Math.hypot(o[0] - c[0], o[1] - c[1]) < min) { ok = false; break; }
             if (ok) chosen.add(c);
         }
@@ -249,13 +265,6 @@ public final class RoadNetwork implements java.io.Serializable {
             villages.add(nd);
             Town t = makeTown(nd, size, false);
             t.coastal = c[3] < 3000f;
-        }
-        float[] largeTownSite = largestTownSite();
-        if (largeTownSite != null) {
-            RoadNode centre = addNode(largeTownSite[0], largeTownSite[1], RoadNode.Kind.JUNCTION);
-            villages.add(centre);
-            Town largeTown = makeTown(centre, Town.Size.TOWN, false);
-            largeTown.coastal = largeTownSite[3] < 3000f;
         }
     }
 
@@ -317,7 +326,7 @@ public final class RoadNetwork implements java.io.Serializable {
         towns.add(t);
         townByNode.put(centre.id, t);
         if (nx > 0) {
-            townGrid(t, nx, nx);
+            townGrid(t, nx, townRows(nx));
             if (size == Town.Size.TOWN && nx == LARGE_TOWN_GRID) hasLargeTownGrid = true;
             if (size == Town.Size.VILLAGE && nx == LARGE_VILLAGE_GRID) hasLargeVillageGrid = true;
         }
@@ -339,7 +348,7 @@ public final class RoadNetwork implements java.io.Serializable {
 
     /** A street grid needs gentle ground and no freeway or coast through it. */
     private boolean gridFits(float cx, float cz, int nx) {
-        float hx = (nx - 1) * 0.5f * TOWN_SX + 40f, hz = (nx - 1) * 0.5f * TOWN_SZ + 40f;
+        float hx = (nx - 1) * 0.5f * TOWN_SX + 40f, hz = (nx - 1) * 0.5f * TOWN_SX + 40f;
         float[][] heights = new float[5][5];
         float stepX = hx * 0.5f, stepZ = hz * 0.5f;
         for (int j = 0; j < 5; j++)
@@ -378,15 +387,63 @@ public final class RoadNetwork implements java.io.Serializable {
                 t.grid[i][j] = centre ? c : addNode(t.gx[i], t.gz[j], RoadNode.Kind.JUNCTION);
                 townByNode.put(t.grid[i][j].id, t);
             }
+        // streets that would climb a hillside too steep to drive (or to build along) are left
+        // out: the town stops at the foot of the hill instead of running a grid over it
+        t.hStreet = new boolean[nx][nz];
+        t.vStreet = new boolean[nx][nz];
+        for (int j = 0; j < nz; j++)
+            for (int i = 0; i < nx; i++) {
+                if (i + 1 < nx) t.hStreet[i][j] = gentle(t.gx[i], t.gz[j], t.gx[i + 1], t.gz[j]);
+                if (j + 1 < nz) t.vStreet[i][j] = gentle(t.gx[i], t.gz[j], t.gx[i], t.gz[j + 1]);
+            }
+        // keep only what is joined to the centre
+        boolean[][] reach = new boolean[nx][nz];
+        java.util.ArrayDeque<int[]> q = new java.util.ArrayDeque<>();
+        int ci = (nx - 1) / 2, cj = (nz - 1) / 2;
+        reach[ci][cj] = true;
+        q.add(new int[]{ci, cj});
+        while (!q.isEmpty()) {
+            int[] cur = q.poll();
+            int i = cur[0], j = cur[1];
+            int[][] nb = {{i + 1, j}, {i - 1, j}, {i, j + 1}, {i, j - 1}};
+            for (int[] b : nb) {
+                if (b[0] < 0 || b[1] < 0 || b[0] >= nx || b[1] >= nz || reach[b[0]][b[1]]) continue;
+                if (!t.street(Math.min(i, b[0]), Math.min(j, b[1]), b[0] != i)) continue;
+                reach[b[0]][b[1]] = true;
+                q.add(b);
+            }
+        }
+        for (int j = 0; j < nz; j++)
+            for (int i = 0; i < nx; i++) {
+                if (!reach[i][j]) {
+                    t.grid[i][j].dead = true;
+                    if (i + 1 < nx) t.hStreet[i][j] = false;
+                    if (j + 1 < nz) t.vStreet[i][j] = false;
+                    if (i > 0) t.hStreet[i - 1][j] = false;
+                    if (j > 0) t.vStreet[i][j - 1] = false;
+                }
+            }
         List<float[]> wp = new ArrayList<>();
         for (int j = 0; j < nz; j++)
             for (int i = 0; i < nx; i++) {
                 RoadNode a = t.grid[i][j];
-                if (i + 1 < nx) townStreet(a, t.grid[i + 1][j], wp);
-                if (j + 1 < nz) townStreet(a, t.grid[i][j + 1], wp);
+                if (i + 1 < nx && t.hStreet[i][j]) townStreet(a, t.grid[i + 1][j], wp);
+                if (j + 1 < nz && t.vStreet[i][j]) townStreet(a, t.grid[i][j + 1], wp);
             }
         t.x0 = t.gx[0] - 26f; t.x1 = t.gx[nx - 1] + 26f;
         t.z0 = t.gz[0] - 26f; t.z1 = t.gz[nz - 1] + 26f;
+    }
+
+    /** A town street from (ax, az) to (bx, bz) would be drivable: no stretch steeper than a town street may be. */
+    private boolean gentle(float ax, float az, float bx, float bz) {
+        float len = (float) Math.hypot(bx - ax, bz - az);
+        int n = Math.max(2, (int) (len / 8f));
+        float[] h = new float[n + 1];
+        for (int k = 0; k <= n; k++) h[k] = terrain.natural(ax + (bx - ax) * k / n, az + (bz - az) * k / n);
+        if (Math.abs(h[n] - h[0]) / len > 0.09f) return false;
+        int w = Math.max(1, (int) (24f / (len / n)));
+        for (int k = 0; k + w <= n; k++) if (Math.abs(h[k + w] - h[k]) / (w * len / n) > 0.14f) return false;
+        return true;
     }
 
     private void townStreet(RoadNode a, RoadNode b, List<float[]> wp) {
@@ -398,24 +455,70 @@ public final class RoadNetwork implements java.io.Serializable {
     }
 
     /**
-     * Where a road from (fx, fz) enters a settlement: the grid node on the town's edge nearest to
-     * it (roads don't cut through the streets), or the junction itself for a hamlet.
+     * Where a road from (fx, fz) enters a settlement: a street end on the edge of the town facing
+     * it (roads don't cut through the blocks), or the junction itself for a hamlet. Each gate
+     * remembers the way out of town there, so the road leaves it straight along the street.
      */
     private RoadNode gate(RoadNode v, float fx, float fz) {
         Town t = townByNode.get(v.id);
         if (t == null || t.grid == null) return v;
         RoadNode best = v;
         float bd = Float.MAX_VALUE;
+        float[] bestDir = null;
         int nx = t.grid.length, nz = t.grid[0].length;
+        int[][] dirs = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
         for (int j = 0; j < nz; j++)
             for (int i = 0; i < nx; i++) {
-                if (i != 0 && j != 0 && i != nx - 1 && j != nz - 1) continue;
-                if ((i == 0 || i == nx - 1) && (j == 0 || j == nz - 1)) continue;    // not at the corners
                 RoadNode g = t.grid[i][j];
-                float d = (g.x - fx) * (g.x - fx) + (g.z - fz) * (g.z - fz);
-                if (d < bd) { bd = d; best = g; }
+                if (g.dead) continue;
+                for (int[] d : dirs) {
+                    // open country that way: no street, and no live part of the town beyond
+                    if (t.street(Math.min(i, i + d[0]), Math.min(j, j + d[1]), d[0] != 0)) continue;
+                    boolean open = true;
+                    for (int k = 1; open; k++) {
+                        int a = i + d[0] * k, b = j + d[1] * k;
+                        if (a < 0 || b < 0 || a >= nx || b >= nz) break;
+                        if (!t.grid[a][b].dead) open = false;
+                    }
+                    if (!open) continue;
+                    // not a corner of the town: the side streets either side must exist
+                    int pi = d[1], pj = d[0];
+                    boolean sides = t.street(Math.min(i, i + pi), Math.min(j, j + pj), pi != 0)
+                            && t.street(Math.min(i, i - pi), Math.min(j, j - pj), pi != 0);
+                    if (!sides) continue;
+                    float[] old = gateDirs.get(g.id);
+                    if (old != null && (old[0] != d[0] || old[1] != d[1])) continue;
+                    // facing the road's other end
+                    float ox = fx - g.x, oz = fz - g.z, ol = (float) Math.hypot(ox, oz);
+                    float facing = ol > 0f ? (ox * d[0] + oz * d[1]) / ol : 1f;
+                    if (facing < 0.2f) continue;
+                    float dd = (float) Math.hypot(g.x - fx, g.z - fz) * (1.6f - facing);
+                    // one road per street end: a second road there would run on top of the first
+                    if (old != null) dd = dd * 4f + 3000f;
+                    if (dd < bd) { bd = dd; best = g; bestDir = new float[]{d[0], d[1]}; }
+                }
             }
+        if (bestDir == null) {
+            // nothing faces that way: the nearest street end of any kind
+            for (int j = 0; j < nz; j++)
+                for (int i = 0; i < nx; i++) {
+                    RoadNode g = t.grid[i][j];
+                    if (g.dead || g.edges.length >= 4) continue;
+                    float dd = (float) Math.hypot(g.x - fx, g.z - fz);
+                    if (dd < bd) { bd = dd; best = g; }
+                }
+            return best;
+        }
+        gateDirs.put(best.id, bestDir);
         return best;
+    }
+
+    /** Way out of town at each gate used so far. */
+    private final java.util.HashMap<Integer, float[]> gateDirs = new java.util.HashMap<>();
+
+    /** Outward unit direction of a town gate (the way a road leaves the town there), or null. */
+    private float[] gateDir(RoadNode g) {
+        return gateDirs.get(g.id);
     }
 
     /** A town ~800 m off a freeway exit on side (sx, sz) of terminal t, if the ground allows. */
@@ -445,17 +548,41 @@ public final class RoadNetwork implements java.io.Serializable {
     private RoadEdge route(RoadClass cls, RoadNode a, RoadNode b, float sx, float sz, float ex, float ez) {
         if (a == b || Math.hypot(a.x - b.x, a.z - b.z) < 60f) return null;
         if (router != null) {
-            float lead = (sx != 0f || sz != 0f) ? Math.min(400f, (float) Math.hypot(b.x - a.x, b.z - a.z) * 0.2f) : 0f;
-            float tail = (ex != 0f || ez != 0f) ? Math.min(400f, (float) Math.hypot(b.x - a.x, b.z - a.z) * 0.2f) : 0f;
+            float dist = (float) Math.hypot(b.x - a.x, b.z - a.z);
+            float lead = (sx != 0f || sz != 0f) ? Math.min(400f, dist * 0.2f) : 0f;
+            float tail = (ex != 0f || ez != 0f) ? Math.min(400f, dist * 0.2f) : 0f;
+            // a road into a town arrives head-on along the street it continues (not across the
+            // corner of a block): leave and reach town gates straight out from the town's edge
+            float[] ga = gateDir(a), gb = gateDir(b);
+            float gLead = 0f, gTail = 0f;
+            if (lead == 0f && ga != null) { sx = ga[0]; sz = ga[1]; gLead = Math.min(220f, dist * 0.3f); }
+            if (tail == 0f && gb != null) { ex = -gb[0]; ez = -gb[1]; gTail = Math.min(220f, dist * 0.3f); }
+            lead = Math.max(lead, gLead);
+            tail = Math.max(tail, gTail);
             float ax = a.x + sx * lead, az = a.z + sz * lead, bx = b.x - ex * tail, bz = b.z - ez * tail;
             List<float[]> path = router.path(ax, az, bx, bz, cls, ringRouting);
             if (path == null) return null;
             List<float[]> wp = new ArrayList<>();
             wp.add(new float[]{a.x, a.z});
+            if (gLead > 0f) {
+                wp.add(new float[]{a.x + sx * gLead * 0.45f, a.z + sz * gLead * 0.45f});
+                path.get(0)[0] = ax; path.get(0)[1] = az;
+            }
             List<float[]> simple = simplify(path, cls == RoadClass.HIGHWAY ? 80f : 60f);
             for (float[] q : simple) {
                 float[] l = wp.get(wp.size() - 1);
                 if (Math.hypot(q[0] - l[0], q[1] - l[1]) > 30f) wp.add(q);
+            }
+            if (gTail > 0f) {
+                // drop path points that reach back past the approach point, then come straight in
+                while (wp.size() > 1) {
+                    float[] q = wp.get(wp.size() - 1);
+                    if ((q[0] - bx) * ex + (q[1] - bz) * ez > -1f && Math.hypot(q[0] - bx, q[1] - bz) > 1f) wp.remove(wp.size() - 1);
+                    else break;
+                }
+                float[] q = wp.get(wp.size() - 1);
+                if (Math.hypot(q[0] - bx, q[1] - bz) > 30f) wp.add(new float[]{bx, bz});
+                wp.add(new float[]{b.x - ex * gTail * 0.45f, b.z - ez * gTail * 0.45f});
             }
             float[] l = wp.get(wp.size() - 1);
             if (Math.hypot(b.x - l[0], b.z - l[1]) > 30f) wp.add(new float[]{b.x, b.z});
@@ -565,7 +692,10 @@ public final class RoadNetwork implements java.io.Serializable {
      */
     private void network(List<RoadEdge> fw) {
         router = new Router();
-        for (Town t : towns) if (t.grid != null) router.markArea(t.x0 - 60f, t.z0 - 60f, t.x1 + 60f, t.z1 + 60f, 4);
+        for (Town t : towns) if (t.grid != null) {
+            router.markArea(t.x0 - 60f, t.z0 - 60f, t.x1 + 60f, t.z1 + 60f, 4);
+            router.markTown(t.x0 - 30f, t.z0 - 30f, t.x1 + 30f, t.z1 + 30f);
+        }
         java.util.HashSet<Long> linked = new java.util.HashSet<>();
         // 1. coastal highway round the island, through the city
         List<Town> ring = new ArrayList<>();
@@ -679,6 +809,19 @@ public final class RoadNetwork implements java.io.Serializable {
         for (float[] h : harbours) if (Math.hypot(h[0] - qx, h[1] - qz) < 1500f) return;
         RoadNode q = addNode(qx, qz, RoadNode.Kind.END);
         RoadNode from = gate(t.centre, qx, qz);
+        // a road already heading down to the shore: the harbour road branches off it where it
+        // passes closest, rather than running alongside it from the town
+        float fd = (float) Math.hypot(from.x - qx, from.z - qz);
+        RoadEdge near = null;
+        float nearS = 0f, nearD = fd * 0.7f;
+        for (RoadEdge e : edges) {
+            if (e.cls.motorway() || e.cls.city || e.cls == RoadClass.TOWN) continue;
+            float sc = project(e, qx, qz);
+            if (sc < 120f || sc > e.len - 120f) continue;
+            float d = distTo(e, qx, qz);
+            if (d < nearD && d > 160f) { nearD = d; near = e; nearS = sc; }
+        }
+        if (near != null) from = nodes.get(splitAt(near, nearS, RoadNode.Kind.JUNCTION));
         if (route(RoadClass.TOWN, from, q, 0f, 0f, sx, sz) == null && route(RoadClass.COUNTRY, from, q, 0f, 0f, 0f, 0f) == null) {
             q.dead = true;
             return;
@@ -744,6 +887,13 @@ public final class RoadNetwork implements java.io.Serializable {
                 if (p2 == null) continue;
                 float len = pathLength(p1) + pathLength(p2);
                 if (len > d * 2.4f) continue;          // a real alternative, not a huge detour
+                // not out and back along the same valley: the way there and the way on must part
+                int shared = 0;
+                for (float[] q2 : p2) {
+                    if (Math.hypot(q2[0] - best[0], q2[1] - best[1]) < 600f) continue;
+                    for (float[] q1 : p1) if (Math.hypot(q1[0] - q2[0], q1[1] - q2[1]) < 400f) { shared++; break; }
+                }
+                if (shared > 1) continue;
                 RoadNode mid = addNode(best[0], best[1], RoadNode.Kind.JUNCTION);
                 RoadEdge e1 = route(RoadClass.COUNTRY, ga, mid, 0f, 0f, 0f, 0f);
                 RoadEdge e2 = e1 == null ? null : route(RoadClass.COUNTRY, mid, gb, 0f, 0f, 0f, 0f);
@@ -818,7 +968,16 @@ public final class RoadNetwork implements java.io.Serializable {
         }
         if (best == null) return;
         float lx = a.x + dx * 1100f, lz = a.z + dz * 1100f;
-        List<float[]> path = router.path(lx, lz, best.centre.x, best.centre.z, RoadClass.FREEWAY, false);
+        // aim at the edge of the town facing the city (freeways don't run through towns)
+        float tx = best.centre.x, tz = best.centre.z;
+        if (best.grid != null) {
+            float ux = lx - tx, uz = lz - tz, ul = (float) Math.hypot(ux, uz);
+            ux /= ul; uz /= ul;
+            float hx = (best.x1 - best.x0) * 0.5f + 400f, hz = (best.z1 - best.z0) * 0.5f + 400f;
+            float k = Math.min(hx / Math.max(1e-3f, Math.abs(ux)), hz / Math.max(1e-3f, Math.abs(uz)));
+            tx += ux * k; tz += uz * k;
+        }
+        List<float[]> path = router.path(lx, lz, tx, tz, RoadClass.FREEWAY, false);
         if (path == null) return;
         // stop short of the town
         float left = 0f;
@@ -899,6 +1058,8 @@ public final class RoadNetwork implements java.io.Serializable {
         final float cell = Terrain.ISLAND_SIZE / n;
         final float[] h = new float[n * n], inland = new float[n * n], steep = new float[n * n];
         final byte[] used = new byte[n * n];
+        /** Cells covering a village or town's streets: through roads go round, not across the blocks. */
+        final boolean[] town = new boolean[n * n];
         final float[] g = new float[n * n];
         final int[] from = new int[n * n], stamp = new int[n * n];
         int[] heap = new int[1 << 16];
@@ -935,6 +1096,11 @@ public final class RoadNetwork implements java.io.Serializable {
                 for (int i = ci(x0); i <= ci(x1); i++) used[j * n + i] = (byte) Math.min(120, Math.max(used[j * n + i], v));
         }
 
+        void markTown(float x0, float z0, float x1, float z1) {
+            for (int j = cj(z0); j <= cj(z1); j++)
+                for (int i = ci(x0); i <= ci(x1); i++) town[j * n + i] = true;
+        }
+
         /** Marks the cells a road runs through so later roads keep their distance. */
         void mark(float[] xs, float[] zs, int v) {
             for (int k = 0; k < xs.length; k++) {
@@ -967,6 +1133,12 @@ public final class RoadNetwork implements java.io.Serializable {
             if (cls == RoadClass.FREEWAY) c += Math.max(0f, h[b] - 60f) / 120f;
             int u = used[b];
             if (u > 0 && !end) c += u * 0.6f;
+            // right on top of another road: cross it, don't run along it
+            if (u >= 6 && u < 100 && !end) c += 18f;
+            if (town[b] && !end) {
+                if (cls == RoadClass.FREEWAY) return Float.POSITIVE_INFINITY;
+                c += 30f;
+            }
             return len * c;
         }
 
@@ -985,6 +1157,7 @@ public final class RoadNetwork implements java.io.Serializable {
                 // leaving the city the freeway may cross its fringe (it starts at the city's edge)
                 boolean fringe = Math.hypot(sx - start[0], sz - start[1]) < 1500f;
                 if (inland[c] < 150f || (used[c] >= 100 && !fringe)) return false;
+                if (town[c] && Math.hypot(sx - q[0], sz - q[1]) > 1500f) return false;
                 if (steep[c] > 0.5f) return false;
                 if (Math.abs(h[c] - (h0 + (h1 - h0) * t)) > 40f) return false;
             }
@@ -1518,6 +1691,26 @@ public final class RoadNetwork implements java.io.Serializable {
                 for (RoadEdge e : edges) if (e.cls == cls) { profile(e); pin(e); }
             }
         }
+        // inside the built-up city the ground isn't shaped by rural roads: a road leaving the city
+        // lies on the streets' ground there, and climbs or falls to its own profile beyond at no
+        // more than its class's grade
+        for (RoadEdge e : edges) {
+            if (e.cls.city || e.cls.motorway()) continue;
+            int n = e.count();
+            boolean[] urb = new boolean[n];
+            boolean any = false;
+            for (int i = 0; i < n; i++) if (city.urban(e.x[i], e.z[i])) { urb[i] = true; any = true; e.y[i] = terrain.natural(e.x[i], e.z[i]); }
+            if (!any) continue;
+            float g = e.cls.grade * 0.9f;
+            for (int i = 1; i < n; i++) if (!urb[i] && urb[i - 1] || (!urb[i] && i > 1)) {
+                float ds = e.s[i] - e.s[i - 1];
+                e.y[i] = Math.max(e.y[i - 1] - g * ds, Math.min(e.y[i - 1] + g * ds, e.y[i]));
+            }
+            for (int i = n - 2; i >= 0; i--) if (!urb[i]) {
+                float ds = e.s[i + 1] - e.s[i];
+                e.y[i] = Math.max(e.y[i + 1] - g * ds, Math.min(e.y[i + 1] + g * ds, e.y[i]));
+            }
+        }
         // bridges: lift roads over motorways
         java.util.Set<Long> spans = new java.util.HashSet<>();
         for (BridgeMark m : bridgeMarks) {
@@ -1628,7 +1821,10 @@ public final class RoadNetwork implements java.io.Serializable {
                 boolean wide = face < 2;
                 float hu = 15f, hv = 13f;
                 float x0 = cx - (wide ? hu : hv), x1 = cx + (wide ? hu : hv), z0 = cz - (wide ? hv : hu), z1 = cz + (wide ? hv : hu);
-                if (!e.bridge[e.seg(s)] && laneClear(p[0] + lx * (e.cls.halfWidth() + 4f), p[1] + lz * (e.cls.halfWidth() + 4f), cx, cz)
+                // the yard must be about level with the road (not up the side of a cutting)
+                boolean level = Math.abs(terrain.natural(cx, cz) - p[2]) < off * 0.08f + 1.5f
+                        && Math.abs(terrain.natural(p[0] + lx * (e.cls.halfWidth() + 6f), p[1] + lz * (e.cls.halfWidth() + 6f)) - p[2]) < 2.5f;
+                if (level && !e.bridge[e.seg(s)] && laneClear(p[0] + lx * (e.cls.halfWidth() + 4f), p[1] + lz * (e.cls.halfWidth() + 4f), cx, cz)
                         && farmSite(x0, z0, x1, z1)) {
                     farms.add(new float[]{x0, z0, x1, z1, face, r.nextInt()});
                     picks.add(new float[]{ei, s, side, farms.size() - 1});
@@ -1702,6 +1898,8 @@ public final class RoadNetwork implements java.io.Serializable {
             List<float[]> wp = new ArrayList<>();
             wp.add(new float[]{p[0], p[1]});
             float x = p[0] + nx * (hw + 14f), z = p[1] + nz * (hw + 14f);
+            // the track leaves the road onto ground about level with it (not up a cutting side)
+            if (Math.abs(terrain.natural(x, z) - p[2]) > 2.5f) continue;
             wp.add(new float[]{x, z});
             float hx = nx, hz = nz, run = hw + 14f;
             boolean ok = true;
@@ -1847,6 +2045,10 @@ public final class RoadNetwork implements java.io.Serializable {
             float tx = track[0][i], tz = track[1][i];
             if (tx > x0 - 5f && tx < x1 + 5f && tz > z0 - 5f && tz < z1 + 5f) return false;
         }
+        // the driveway from the track must not be a ramp
+        float px = track[0][vi], pz = track[1][vi], cx = Math.max(x0, Math.min(x1, px)), cz = Math.max(z0, Math.min(z1, pz));
+        float d = (float) Math.hypot(cx - px, cz - pz);
+        if (Math.abs(terrain.natural(cx, cz) - terrain.natural(px, pz)) > d * 0.1f + 0.8f) return false;
         return farmSite(x0, z0, x1, z1);
     }
 
@@ -1870,7 +2072,7 @@ public final class RoadNetwork implements java.io.Serializable {
             float h = terrain.natural(q[0], q[1]);
             lo = Math.min(lo, h); hi = Math.max(hi, h);
         }
-        if (hi - lo > 4.5f || lo < 3f) return false;
+        if (hi - lo > Math.min(4.5f, 0.08f * (float) Math.hypot(x1 - x0, z1 - z0)) || lo < 3f) return false;
         int a = (int) Math.floor(x0 / 32f) - 1, b = (int) Math.floor(x1 / 32f) + 1, c = (int) Math.floor(z0 / 32f) - 1, d = (int) Math.floor(z1 / 32f) + 1;
         for (int z = c; z <= d; z++) for (int x = a; x <= b; x++) if (farmCells.contains(((long) x << 32) ^ (z & 0xFFFFFFFFL))) return false;
         for (int z = c; z <= d; z++) for (int x = a; x <= b; x++) farmCells.add(((long) x << 32) ^ (z & 0xFFFFFFFFL));
@@ -2404,6 +2606,25 @@ public final class RoadNetwork implements java.io.Serializable {
     }
 
     public interface PieceVisitor { void visit(RoadEdge e, int piece); }
+
+    /** True if no road surface comes within {@code margin} of the rectangle. */
+    public boolean rectClear(float x0, float z0, float x1, float z1, float margin) {
+        final boolean[] hit = {false};
+        forEachPiece(x0 - 16f, z0 - 16f, x1 + 16f, z1 + 16f, (e, i) -> {
+            if (hit[0]) return;
+            float r = e.cls.halfWidth() + margin;
+            float ax = e.x[i], az = e.z[i], bx = e.x[i + 1], bz = e.z[i + 1];
+            if (Math.min(ax, bx) - r > x1 || Math.max(ax, bx) + r < x0 || Math.min(az, bz) - r > z1 || Math.max(az, bz) + r < z0) return;
+            float len = (float) Math.hypot(bx - ax, bz - az);
+            int n = Math.max(1, (int) Math.ceil(len / 1.5f));
+            for (int k = 0; k <= n; k++) {
+                float t = k / (float) n, x = ax + (bx - ax) * t, z = az + (bz - az) * t;
+                float dx = Math.max(0f, Math.max(x0 - x, x - x1)), dz = Math.max(0f, Math.max(z0 - z, z - z1));
+                if (dx * dx + dz * dz < r * r) { hit[0] = true; return; }
+            }
+        });
+        return !hit[0];
+    }
 
     /** Visits each road piece whose midpoint lies inside the rectangle exactly once. */
     public void forEachPieceIn(float x0, float z0, float x1, float z1, PieceVisitor v) {

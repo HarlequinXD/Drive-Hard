@@ -17,6 +17,15 @@ public final class Town implements java.io.Serializable {
     public final RoadNode centre;
     /** Street grid: nodes[i][j] (i along x, j along z), null for hamlets. */
     public RoadNode[][] grid;
+    /** Which grid streets were built: hStreet[i][j] joins (i,j)-(i+1,j), vStreet[i][j] joins (i,j)-(i,j+1). */
+    public boolean[][] hStreet, vStreet;
+
+    /** True if the street from grid node (i, j) east (alongX) or south was built. */
+    public boolean street(int i, int j, boolean alongX) {
+        boolean[][] a = alongX ? hStreet : vStreet;
+        return a != null && i >= 0 && j >= 0 && i < a.length && j < a[0].length && a[i][j];
+    }
+
     /** Grid line positions (street centre lines). */
     public float[] gx, gz;
     /** Built-up area. */

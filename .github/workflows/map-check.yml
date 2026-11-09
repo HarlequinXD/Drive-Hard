@@ -1,0 +1,29 @@
+name: Map check
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  map-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Build the island and check it
+        run: |
+          mkdir -p build/map-check/classes
+          javac --release 17 -nowarn -d build/map-check/classes $(find app/src/main/java/com/harlequinxd/drivehard/core -name '*.java') tools/MapCheck.java
+          java -Xmx4g -Djava.awt.headless=true -cp build/map-check/classes MapCheck build/map-check
+      - name: Upload the marked map
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DriveHard-map-check
+          path: |
+            build/map-check/map-check.png
+            build/map-check/map-check.txt
