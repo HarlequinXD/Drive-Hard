@@ -359,6 +359,7 @@ public final class City extends World implements java.io.Serializable {
 
         gb.begin(false);
         terrainAndWater(ch, gb, x0, z0, x1, z1);
+        new Seawall(this, ch, gb).build(x0, z0, x1, z1);
         promenadePath(gb, x0, z0, x1, z1);
         gb.end();
 
@@ -704,6 +705,21 @@ public final class City extends World implements java.io.Serializable {
         return s;
     }
 
+    /** Inside one of the bamboo groves that grow on the uncultivated ground near settlements. */
+    private boolean bambooGrove(float x, float z) {
+        float gx = x / 110f, gz = z / 110f;
+        int ix = (int) Math.floor(gx), iz = (int) Math.floor(gz);
+        float tx = gx - ix, tz = gz - iz;
+        tx = tx * tx * (3 - 2 * tx);
+        tz = tz * tz * (3 - 2 * tz);
+        int sd = (int) seed + 520;
+        float a = Noise.rnd(ix, iz, sd), b = Noise.rnd(ix + 1, iz, sd), c = Noise.rnd(ix, iz + 1, sd), d = Noise.rnd(ix + 1, iz + 1, sd);
+        float n = (a + (b - a) * tx) + ((c + (d - c) * tx) - (a + (b - a) * tx)) * tz;
+        if (n < 0.66f) return false;
+        // within a few hundred metres of a village, hamlet or town
+        return roads.townAt(x, z, 450f) != null;
+    }
+
     private void vegetation(Chunk ch, GeoBuilder gb, float ax, float az, Countryside.Crop crop) {
         int ix = (int) Math.floor(ax / 8f), iz = (int) Math.floor(az / 8f);
         int sd = (int) seed;
@@ -767,6 +783,8 @@ public final class City extends World implements java.io.Serializable {
         // hills: cedar and cypress forest up high, mixed woodland, bamboo groves and maples lower down
         float p = h < 7f ? 0.15f : (h < 25f ? 0.2f : 0.24f);
         if (rural) p = h < 20f ? 0.14f : (h < 80f ? 0.26f : 0.34f);   // forests thicken up the hills
+        // the dense bamboo groves on the slopes behind villages
+        if (rural && h <= 25f && bambooGrove(jx, jz)) p = 0.6f;
         if (r >= p) {
             if (r < p + 0.05f) plant(ch, r2 < 0.4f ? Flora.AZALEA : (r2 < 0.7f ? Flora.CAMELLIA : Flora.HYDRANGEA), ix, iz, jx, h, jz);
             return;
@@ -774,6 +792,7 @@ public final class City extends World implements java.io.Serializable {
         Flora f;
         if (rural && h > 110f) f = r2 < 0.75f ? Flora.CEDAR : (r2 < 0.9f ? Flora.BLACK_PINE : Flora.MAPLE);
         else if (h > 25f) f = r2 < 0.7f ? Flora.CEDAR : (r2 < 0.85f ? Flora.BLACK_PINE : Flora.MAPLE);
+        else if (rural && bambooGrove(jx, jz)) f = r2 < 0.9f ? Flora.BAMBOO : Flora.CAMPHOR;
         else if (r2 < 0.2f) f = Flora.CAMPHOR;
         else if (r2 < 0.38f) f = Flora.BAMBOO;
         else if (r2 < 0.55f) f = Flora.MAPLE;
