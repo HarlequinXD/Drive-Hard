@@ -409,7 +409,10 @@ public final class City extends World implements java.io.Serializable {
                     grid[(j + 1) * 10 + (i + 1)] = surface(ax, az, ax + 8f, az + 8f);
                 }
             List<float[]> paint = new ArrayList<>();
-            countryside.yards(x0, z0, x1, z1, (a, b, c, d, t, f) -> paint.add(new float[]{a, b, c, d, t, 2f, 2f, f}));
+            countryside.yards(x0, z0, x1, z1, (a, b, c, d, t, f) -> {
+                float sc = t == lib.cabbage || t == lib.soil ? 8f : 2f;    // crops at field scale
+                paint.add(new float[]{a, b, c, d, t, sc, sc, f});
+            });
             groundPaint(x0, z0, x1, z1, paint);
             new GroundPaint(this).paint(ch.ground, gb, grid, paint);
         }

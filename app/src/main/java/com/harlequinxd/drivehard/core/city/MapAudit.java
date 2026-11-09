@@ -74,8 +74,8 @@ public final class MapAudit {
                 if (e.bridge[i]) {
                     // the first and last deck pieces rest on their abutments
                     if (i == 0 || i == e.bridge.length - 1 || !e.bridge[i - 1] || !e.bridge[i + 1]) continue;
-                    float nat = terrain.natural(mx, mz);
-                    float gap = my - Math.max(nat, terrain.height(mx, mz));
+                    // (the ground under a deck is as the roads shape it: a deck may span a cutting)
+                    float gap = my - terrain.height(mx, mz);
                     if (gap < 0.5f && i - last > 6) { add("buried deck", true, mx, mz, String.format("%s e%d deck %.1f m vs ground", e.cls, e.id, gap)); last = i; }
                     continue;
                 }
@@ -189,7 +189,7 @@ public final class MapAudit {
     // ------------------------------------------------------------------ buildings
 
     private static final String[] KIND = {"farm", "house", "apartment", "convenience store", "lot", "town hall", "post office", "clinic",
-            "shop", "supermarket", "school", "shrine", "petrol station", "convenience store", "harbour"};
+            "shop", "supermarket", "school", "shrine", "petrol station", "convenience store", "harbour", "vegetable plot"};
 
     private void sites() {
         List<Countryside.Site> all = new ArrayList<>();

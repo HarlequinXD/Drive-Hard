@@ -396,6 +396,24 @@ public final class RoadNetwork implements java.io.Serializable {
                 if (i + 1 < nx) t.hStreet[i][j] = gentle(t.gx[i], t.gz[j], t.gx[i + 1], t.gz[j]);
                 if (j + 1 < nz) t.vStreet[i][j] = gentle(t.gx[i], t.gz[j], t.gx[i], t.gz[j + 1]);
             }
+        // towns aren't square: the outline is a rounded blob, wider where the land invites it
+        // (the corners and a ragged edge are left as fields)
+        int ci0 = (nx - 1) / 2, cj0 = (nz - 1) / 2;
+        if (nx >= 7) {
+            for (int j = 0; j < nz; j++)
+                for (int i = 0; i < nx; i++) {
+                    float u = Math.abs(i - ci0) / (nx * 0.5f), v = Math.abs(j - cj0) / (nz * 0.5f);
+                    float r = (float) Math.pow(u * u * u + v * v * v, 1.0 / 3.0);
+                    float ang = (float) Math.atan2(v * (j < cj0 ? -1 : 1), u * (i < ci0 ? -1 : 1));
+                    float lobe = 0.86f + 0.16f * (float) Math.sin(ang * 3 + t.id) + 0.08f * Noise.rnd(i, j, seed + 2210 + t.id);
+                    if (r > lobe) {
+                        if (i + 1 < nx) t.hStreet[i][j] = false;
+                        if (j + 1 < nz) t.vStreet[i][j] = false;
+                        if (i > 0) t.hStreet[i - 1][j] = false;
+                        if (j > 0) t.vStreet[i][j - 1] = false;
+                    }
+                }
+        }
         // keep only what is joined to the centre
         boolean[][] reach = new boolean[nx][nz];
         java.util.ArrayDeque<int[]> q = new java.util.ArrayDeque<>();

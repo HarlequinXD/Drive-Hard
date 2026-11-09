@@ -51,6 +51,25 @@ public final class Town implements java.io.Serializable {
         return x >= x0 - margin && x <= x1 + margin && z >= z0 - margin && z <= z1 + margin;
     }
 
+    /**
+     * True on the built-up part of a town (within margin of a block whose streets were built): a
+     * town's outline is ragged, so the corners of its rectangle can be fields.
+     */
+    public boolean built(float x, float z, float margin) {
+        if (!contains(x, z, margin)) return false;
+        if (grid == null || hStreet == null) return true;
+        int nx = gx.length, nz = gz.length;
+        float sx = nx > 1 ? gx[1] - gx[0] : 1f, sz = nz > 1 ? gz[1] - gz[0] : 1f;
+        int i0 = (int) Math.floor((x - margin - gx[0]) / sx), i1 = (int) Math.floor((x + margin - gx[0]) / sx);
+        int j0 = (int) Math.floor((z - margin - gz[0]) / sz), j1 = (int) Math.floor((z + margin - gz[0]) / sz);
+        for (int j = Math.max(-1, j0); j <= Math.min(nz - 1, j1); j++)
+            for (int i = Math.max(-1, i0); i <= Math.min(nx - 1, i1); i++) {
+                // block (i, j) is built if a street along its north or south side exists
+                if (street(i, j, true) || street(i, j + 1, true) || street(i, j, false) || street(i + 1, j, false)) return true;
+            }
+        return false;
+    }
+
     /** A named district of the island; towns belong to the nearest region centre. */
     public static final class Region implements java.io.Serializable {
         public final String name;

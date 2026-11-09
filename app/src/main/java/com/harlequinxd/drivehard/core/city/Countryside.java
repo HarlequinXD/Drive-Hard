@@ -42,7 +42,9 @@ public final class Countryside implements java.io.Serializable {
     private final int seed;
 
     static final int FARM = 0, HOUSE = 1, APAATO = 2, KONBINI = 3, LOT = 4, TOWN_HALL = 5, POST = 6, CLINIC = 7, SHOP = 8,
-            SUPERMARKET = 9, SCHOOL = 10, SHRINE = 11, GAS = 12, TOWN_KONBINI = 13, HARBOUR = 14;
+            SUPERMARKET = 9, SCHOOL = 10, SHRINE = 11, GAS = 12, TOWN_KONBINI = 13, HARBOUR = 14,
+            /** A vacant lot farmed as a vegetable plot (towns thin out into fields at their edges). */
+            FIELD = 15;
 
     /** A building site: footprint, kind, the side facing the road (0=N,1=S,2=W,3=E), driveway end. */
     static final class Site implements java.io.Serializable {
@@ -431,6 +433,10 @@ public final class Countryside implements java.io.Serializable {
             add(st);
         }
         // villages and towns with street grids: lots along every street, a centre with civic buildings
+
+        // towns and villages spill out along the roads leading into them (a town's petrol station
+        // stands there, by its main road in), then the lots along their streets
+        for (com.harlequinxd.drivehard.core.road.Town t : roads.towns) if (t.grid != null) ribbon(t, rnd);
         for (com.harlequinxd.drivehard.core.road.Town t : roads.towns) if (t.grid != null) townLots(t, rnd);
         // hamlets: houses strung along the roads out of the junction, each facing its road
         for (com.harlequinxd.drivehard.core.road.Town t : roads.towns) if (t.grid == null) hamlet(t, rnd);
@@ -470,12 +476,68 @@ public final class Countryside implements java.io.Serializable {
         }
     }
 
+    /**
+     * Ribbon development: houses line the roads out of a town or village for a few hundred metres,
+     * thinning out into the fields, the way Japanese towns grow along their roads. A town's petrol
+     * station stands on its main road just outside, where traffic comes in.
+     */
+    private void ribbon(com.harlequinxd.drivehard.core.road.Town t, Random rnd) {
+        boolean town = t.size == com.harlequinxd.drivehard.core.road.Town.Size.TOWN;
+        List<Object[]> ways = new ArrayList<>();
+        for (RoadNode[] col : t.grid)
+            for (RoadNode g : col) {
+                if (g.dead) continue;
+                for (int eid : g.edges) {
+                    RoadEdge e = roads.edges.get(eid);
+                    if (e.cls == RoadClass.TOWN || e.cls == RoadClass.LANE || e.cls.motorway() || e.cls.city) continue;
+                    ways.add(new Object[]{e, g});
+                }
+            }
+        ways.sort((A, B) -> Integer.compare(((RoadEdge) B[0]).cls.priority, ((RoadEdge) A[0]).cls.priority));
+        boolean gasDone = !town;
+        float[] p = new float[5];
+        for (Object[] w : ways) {
+            RoadEdge e = (RoadEdge) w[0];
+            RoadNode from = (RoadNode) w[1];
+            float reach = (town ? 700f : 420f) * (0.6f + 0.4f * rnd.nextFloat());
+            float base = 0f, d = e.clear(from.id) + 30f;
+            int guard = 0;
+            while (d < reach && guard++ < 200) {
+                float local = d - base;
+                if (local > e.len - e.clear(e.other(from.id)) - 25f) {
+                    // carry on along the same road past a farm lane's junction
+                    RoadNode o = roads.nodes.get(e.other(from.id));
+                    RoadEdge next = null;
+                    for (int eid : o.edges) {
+                        RoadEdge c = roads.edges.get(eid);
+                        if (c != e && c.origin == e.origin) next = c;
+                    }
+                    if (next == null) break;
+                    base += e.len;
+                    from = o;
+                    e = next;
+                    d = Math.max(d, base + e.clear(from.id) + 25f);
+                    continue;
+                }
+                e.point(from.id == e.a ? local : e.len - local, p);
+                float density = 1f - d / reach;
+                for (int side = -1; side <= 1; side += 2) {
+                    if (rnd.nextFloat() > 0.15f + 0.8f * density * density) continue;
+                    int kind = !gasDone && d < 260f ? GAS : (rnd.nextInt(12) == 0 ? APAATO : HOUSE);
+                    if (roadside(e, p, side, kind, rnd) && kind == GAS) { gasDone = true; roadsideGas.add(t.id); }
+                }
+                d += 16f + rnd.nextFloat() * 12f;
+            }
+        }
+    }
+
     /** Places a building beside road e at point p (x, z, y, tx, tz) on side (+1 left, -1 right). */
     private boolean roadside(RoadEdge e, float[] p, float side, int kind, Random rnd) {
         float nx = p[4] * side, nz = -p[3] * side;               // away from the road
         // the plot is square to the world: it faces the side its road is mostly on
         int face = Math.abs(nx) > Math.abs(nz) ? (nx > 0 ? 2 : 3) : (nz > 0 ? 0 : 1);
-        float hw = kind == KONBINI ? 8f : (kind == APAATO ? 9f : 6f), hd = kind == APAATO ? 6f : 5.5f;
+        if (kind == GAS && face >= 2) return false;                // the forecourt is laid out north-south
+        float hw = kind == GAS ? 13f : kind == KONBINI ? 8f : (kind == APAATO ? 9f : 6f), hd = kind == GAS ? 11f : kind == APAATO ? 6f : 5.5f;
         float apron = kind == KONBINI ? 7.5f : 0f;                 // the store's car park lies in front of it
         boolean wide = face < 2;
         for (float push = 0f; push <= 4.5f; push += 1.5f) {
@@ -506,7 +568,12 @@ public final class Countryside implements java.io.Serializable {
         st.x0 = x0; st.z0 = z0; st.x1 = x1; st.z1 = z1;
         st.kind = kind; st.face = face; st.seed = rnd.nextInt();
         st.rx = Float.NaN;
-        if (kind != KONBINI) {
+        if (kind == GAS) {
+            // the forecourt: concrete from the road edge right back to the kiosk
+            float d = gap + 0.6f;
+            st.ground = new ArrayList<>();
+            st.ground.add(face == 0 ? new float[]{x0, z0 - d, x1, z1, lib.concrete} : new float[]{x0, z0, x1, z1 + d, lib.concrete});
+        } else if (kind != KONBINI) {
             // a drive from the front door across to the road edge
             float d = gap + 0.6f, w = 1.6f;
             float[] dr = face == 0 ? new float[]{cx - w, z0 - d, cx + w, z0} : face == 1 ? new float[]{cx - w, z1, cx + w, z1 + d}
@@ -528,7 +595,7 @@ public final class Countryside implements java.io.Serializable {
 
     /** True inside the built-up area of a village or town (no fields or forest there). */
     public boolean inTown(float x, float z, float margin) {
-        for (com.harlequinxd.drivehard.core.road.Town t : roads.towns) if (t.grid != null && t.contains(x, z, margin)) return true;
+        for (com.harlequinxd.drivehard.core.road.Town t : roads.towns) if (t.grid != null && t.built(x, z, margin)) return true;
         return false;
     }
 
@@ -544,16 +611,32 @@ public final class Countryside implements java.io.Serializable {
         boolean town = t.size == com.harlequinxd.drivehard.core.road.Town.Size.TOWN;
         int ci = (t.gx.length - 1) / 2, cj = (t.gz.length - 1) / 2;   // centre node: blocks ci-1..ci, cj-1..cj touch it
         float edge = RoadClass.TOWN.halfWidth() + 0.6f;
+        // the shrine stands on the highest ground on the edge of town, looking over it
+        int shrineI = -1, shrineJ = -1;
+        float shrineH = -Float.MAX_VALUE;
+        for (int bj = 0; bj < nbz; bj++)
+            for (int bi = 0; bi < nbx; bi++) {
+                if (ring(bi, bj, ci, cj, nbx, nbz) < 0.55f || !t.street(bi, bj + 1, true)) continue;
+                float h = terrain.natural((t.gx[bi] + t.gx[bi + 1]) * 0.5f, (t.gz[bj] + t.gz[bj + 1]) * 0.5f)
+                        + Noise.rnd(bi, bj, seed + 77) * 2f;
+                if (h > shrineH) { shrineH = h; shrineI = bi; shrineJ = bj; }
+            }
         for (int bj = 0; bj < nbz; bj++)
             for (int bi = 0; bi < nbx; bi++) {
                 float bx0 = t.gx[bi] + edge, bx1 = t.gx[bi + 1] - edge, bz0 = t.gz[bj] + edge, bz1 = t.gz[bj + 1] - edge;
                 float rowD = (bz1 - bz0) * 0.5f;
+                // denser in the middle: more small apartment blocks there, vegetable plots at the edge
+                rowEdge = ring(bi, bj, ci, cj, nbx, nbz);
                 // rows face the streets along the block's north and south sides; a street left off
                 // a hillside leaves its row empty
                 boolean nOK = t.street(bi, bj, true), sOK = t.street(bi, bj + 1, true);
                 if (!nOK && !sOK) continue;
                 String role = blockRole(town, bi, bj, ci, cj, nbx, nbz, t.id);
+                if (role.equals("shrine")) role = "houses";
+                if (bi == shrineI && bj == shrineJ) role = "shrine";
                 if (!nOK || !sOK || !t.street(bi, bj, false) || !t.street(bi + 1, bj, false)) role = "houses";
+                // the shopping street: shops face each other along the main street through the centre
+                if (town && role.equals("houses") && Math.abs(bi + 0.5f - ci) <= 3.5f && (bj == cj - 1 || bj == cj)) role = "high_street";
                 switch (role) {
                     case "civic":
                         civicPart(TOWN_HALL, bx0, bz0, bx1, bz0 + rowD, 0, lib.concrete, 0.5f, 52f, 34f, rnd);
@@ -575,13 +658,17 @@ public final class Countryside implements java.io.Serializable {
                         civicPart(SHRINE, bx0, bz1 - rowD, bx1, bz1, 1, lib.gravel, 0.5f, 56f, Math.min(rowD, 56f), rnd);
                         houseRow(bx0, bz0, bx1, bz0 + rowD, 0, rnd, true);
                         break;
+                    case "high_street":
+                        if (bj == cj) { shopRow(bx0, bz0, bx1, bz0 + rowD, 0, rnd); houseRow(bx0, bz1 - rowD, bx1, bz1, 1, rnd, true); }
+                        else { houseRow(bx0, bz0, bx1, bz0 + rowD, 0, rnd, true); shopRow(bx0, bz1 - rowD, bx1, bz1, 1, rnd); }
+                        break;
                     case "village_centre":
                         shopRow(bx0, bz0, bx1 - 14f, bz0 + rowD, 0, rnd);
                         civic(POST, bx1 - 14f, bz0, bx1, bz0 + rowD, 0, lib.concrete, rnd);
                         houseRow(bx0, bz1 - rowD, bx1, bz1, 1, rnd, false);
                         break;
                     default:
-                        boolean gas = nOK && role.equals("gas");
+                        boolean gas = nOK && role.equals("gas") && !roadsideGas.contains(t.id);
                         boolean kon = nOK && role.equals("konbini");
                         float cut = bx0;
                         if (gas) { civic(GAS, bx0, bz0, bx0 + 26f, bz0 + rowD, 0, lib.concrete, rnd); cut = bx0 + 26f; }
@@ -592,6 +679,16 @@ public final class Countryside implements java.io.Serializable {
                 }
             }
     }
+
+    /** How far block (bi, bj) is from the town centre: 0 in the middle, 1 on the edge. */
+    private static float ring(int bi, int bj, int ci, int cj, int nbx, int nbz) {
+        return Math.min(1f, Math.max(Math.abs(bi + 0.5f - ci) / (nbx * 0.5f), Math.abs(bj + 0.5f - cj) / (nbz * 0.5f)));
+    }
+
+    /** Where the rows being laid out are, from the centre (0) to the edge of town (1). */
+    private transient float rowEdge;
+    /** Towns whose petrol station is out on the road in (so not on a block in town). */
+    private final transient HashSet<Integer> roadsideGas = new HashSet<>();
 
     private static String blockRole(boolean town, int bi, int bj, int ci, int cj, int nbx, int nbz, int id) {
         if (town) {
@@ -627,7 +724,17 @@ public final class Countryside implements java.io.Serializable {
             st.face = face;
             st.seed = rnd.nextInt();
             st.rx = Float.NaN;
-            if (apartments && rnd.nextFloat() < 0.07f && w > 12f) {
+            float vacant = Math.max(0f, rowEdge - 0.7f) * 0.6f;
+            if (rnd.nextFloat() < vacant) {
+                // a vegetable plot between the houses where the town thins out
+                st.kind = FIELD;
+                st.ground = new ArrayList<>();
+                st.ground.add(new float[]{lx0 + 0.8f, z0 + 1.5f, lx1 - 0.8f, z1 - 1f, rnd.nextBoolean() ? lib.cabbage : lib.soil});
+                add(st);
+                previous = null;
+                continue;
+            }
+            if (apartments && rnd.nextFloat() < 0.02f + 0.16f * (1f - rowEdge) * (1f - rowEdge) && w > 12f) {
                 st.kind = APAATO;
                 st.ground = new ArrayList<>();
                 // a row of bays between the street and the building (set back 6 m), driven into from the street
@@ -790,6 +897,8 @@ public final class Countryside implements java.io.Serializable {
                 if (h != null) new TownGen(city, lib, gb, r, ch).harbour(h[0], h[1], h[2], h[3], h[4], h[5]);
                 break;
             }
+            case FIELD:
+                break;
             case TOWN_HALL: case POST: case CLINIC: case SUPERMARKET: case SCHOOL: case SHRINE: case GAS:
                 new TownGen(city, lib, gb, r, ch).build(s.kind, s.x0, s.z0, s.x1, s.z1, s.face);
                 break;
