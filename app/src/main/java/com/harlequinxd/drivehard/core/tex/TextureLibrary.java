@@ -186,7 +186,7 @@ public final class TextureLibrary implements java.io.Serializable {
     public int crateYellow, crateRed, bin, cardboard, gasBottle;
     /** Road furniture: direction boards, speed limits (40, 50), bus stop plate, curve mirror. */
     public int[] dirSign = new int[3];
-    public int speed40, speed50, busStop, curveMirror, paintOrange;
+    public int speed40, speed50, busStop, curveMirror, paintOrange, signOnsen;
     public int fence, signTownOffice, signPost, signSuper, signSchool, signClinic, signGas, schoolWall, superWall, canopy, field;
 
     private void houseTextures(int seed) {
@@ -280,6 +280,7 @@ public final class TextureLibrary implements java.io.Serializable {
         busStop = add(RoadSignTextures.busStop(seed + 3467));
         curveMirror = add(RoadSignTextures.mirror(seed + 3468));
         paintOrange = add(solid(0xFFE0701E, seed + 3469));
+        signOnsen = add(TownTextures.sign("ONSEN", 0xB8202A, 0xFFF4E8, seed + 3470));
         schoolWall = add(TownTextures.schoolFacade(seed + 3406));
         superWall = add(TownTextures.superFront(seed + 3407));
         canopy = add(TownTextures.canopy(seed + 3408));

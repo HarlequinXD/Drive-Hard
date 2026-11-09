@@ -113,6 +113,11 @@ final class TownGen {
         return Math.max(Math.max(t.height(b[0], b[1]), t.height(b[2], b[1])), Math.max(t.height(b[0], b[3]), t.height(b[2], b[3])));
     }
 
+    /** The hot-spring inn's red sign on its roof. */
+    void onsenSign(float[] b, int face) {
+        roofSign(b, face, base(b) + 4.6f + 3 * 3.2f + 0.8f, lib.signOnsen, Math.min(9f, b[2] - b[0] - 1f));
+    }
+
     /** A name board standing on the roof at the street edge, lettered both sides. */
     private void roofSign(float[] b, int face, float y, int tex, float w) {
         float cx = (b[0] + b[2]) * 0.5f, z = face == 0 ? b[1] + 0.6f : b[3] - 0.6f;

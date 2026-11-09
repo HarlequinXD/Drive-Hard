@@ -9,6 +9,15 @@ package com.harlequinxd.drivehard.core.road;
 public final class Town implements java.io.Serializable {
     public enum Size { HAMLET, VILLAGE, TOWN }
 
+    /**
+     * What a settlement lives on, which shows in what it's built of: fishing ports have net sheds
+     * among the houses, hot-spring towns an inn in the centre, farming villages vegetable plots and
+     * greenhouses, commuter towns near the city apartment blocks, market towns a bit of everything.
+     */
+    public enum Character { FISHING, ONSEN, FARMING, COMMUTER, MARKET }
+
+    public Character character = Character.MARKET;
+
     public final int id;
     public final String name;
     public final Region region;

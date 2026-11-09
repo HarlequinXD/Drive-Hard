@@ -191,7 +191,7 @@ public final class MapAudit {
     // ------------------------------------------------------------------ buildings
 
     private static final String[] KIND = {"farm", "house", "apartment", "convenience store", "lot", "town hall", "post office", "clinic",
-            "shop", "supermarket", "school", "shrine", "petrol station", "convenience store", "harbour", "vegetable plot"};
+            "shop", "supermarket", "school", "shrine", "petrol station", "convenience store", "harbour", "vegetable plot", "work shed", "greenhouse", "inn"};
 
     private void sites() {
         List<Countryside.Site> all = new ArrayList<>();

@@ -800,6 +800,15 @@ public final class RoadNetwork implements java.io.Serializable {
         cityConnectors();
         // 6. fishing harbours below the coastal towns
         for (Town t : towns) if (t.coastal || t.spur) harbour(t);
+        // 7. what each settlement lives on
+        for (Town t : towns) {
+            float h = terrain.natural(t.centre.x, t.centre.z), city = terrain.cityDistance(t.centre.x, t.centre.z);
+            if (t.coastal || t.spur) t.character = Town.Character.FISHING;
+            else if (t.exitTown || city < 32000f) t.character = Town.Character.COMMUTER;
+            else if (h > 70f && t.size != Town.Size.HAMLET) t.character = Town.Character.ONSEN;
+            else if (t.size == Town.Size.TOWN) t.character = Town.Character.MARKET;
+            else t.character = Town.Character.FARMING;
+        }
     }
 
     /** Harbours: {quay x, quay z, seaward x, seaward z (unit, along an axis), coast x, coast z, town id}. */

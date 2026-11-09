@@ -44,7 +44,11 @@ public final class Countryside implements java.io.Serializable {
     static final int FARM = 0, HOUSE = 1, APAATO = 2, KONBINI = 3, LOT = 4, TOWN_HALL = 5, POST = 6, CLINIC = 7, SHOP = 8,
             SUPERMARKET = 9, SCHOOL = 10, SHRINE = 11, GAS = 12, TOWN_KONBINI = 13, HARBOUR = 14,
             /** A vacant lot farmed as a vegetable plot (towns thin out into fields at their edges). */
-            FIELD = 15;
+            FIELD = 15,
+            /** A fisherman's net shed or a farmer's greenhouse on a town lot. */
+            WORKSHED = 16, LOT_GREENHOUSE = 17,
+            /** The hot-spring inn in the centre of an onsen town. */
+            RYOKAN = 18;
 
     /** A building site: footprint, kind, the side facing the road (0=N,1=S,2=W,3=E), driveway end. */
     static final class Site implements java.io.Serializable {
@@ -611,6 +615,7 @@ public final class Countryside implements java.io.Serializable {
         boolean town = t.size == com.harlequinxd.drivehard.core.road.Town.Size.TOWN;
         int ci = (t.gx.length - 1) / 2, cj = (t.gz.length - 1) / 2;   // centre node: blocks ci-1..ci, cj-1..cj touch it
         float edge = RoadClass.TOWN.halfWidth() + 0.6f;
+        character = t.character;
         // the shrine stands on the highest ground on the edge of town, looking over it
         int shrineI = -1, shrineJ = -1;
         float shrineH = -Float.MAX_VALUE;
@@ -644,6 +649,16 @@ public final class Countryside implements java.io.Serializable {
                         civicPart(CLINIC, (bx0 + bx1) * 0.5f, bz1 - rowD, bx1, bz1, 1, lib.concrete, 0f, 24f, 22f, rnd);
                         break;
                     case "shops":
+                        if (t.character == com.harlequinxd.drivehard.core.road.Town.Character.ONSEN) {
+                            // the inn takes the middle of the row, with shops either side
+                            float mx = (bx0 + bx1) * 0.5f;
+                            if (civic(RYOKAN, mx - 20f, bz0, mx + 20f, bz0 + rowD, 0, lib.pavers, rnd)) {
+                                shopRow(bx0, bz0, mx - 20f, bz0 + rowD, 0, rnd);
+                                shopRow(mx + 20f, bz0, bx1, bz0 + rowD, 0, rnd);
+                                shopRow(bx0, bz1 - rowD, bx1, bz1, 1, rnd);
+                                break;
+                            }
+                        }
                         shopRow(bx0, bz0, bx1, bz0 + rowD, 0, rnd);
                         shopRow(bx0, bz1 - rowD, bx1, bz1, 1, rnd);
                         break;
@@ -687,6 +702,8 @@ public final class Countryside implements java.io.Serializable {
 
     /** Where the rows being laid out are, from the centre (0) to the edge of town (1). */
     private transient float rowEdge;
+    /** The character of the town being laid out. */
+    private transient com.harlequinxd.drivehard.core.road.Town.Character character = com.harlequinxd.drivehard.core.road.Town.Character.MARKET;
     /** Towns whose petrol station is out on the road in (so not on a block in town). */
     private final transient HashSet<Integer> roadsideGas = new HashSet<>();
 
@@ -724,7 +741,21 @@ public final class Countryside implements java.io.Serializable {
             st.face = face;
             st.seed = rnd.nextInt();
             st.rx = Float.NaN;
-            float vacant = Math.max(0f, rowEdge - 0.7f) * 0.6f;
+            com.harlequinxd.drivehard.core.road.Town.Character tc = character;
+            boolean farming = tc == com.harlequinxd.drivehard.core.road.Town.Character.FARMING;
+            boolean commuter = tc == com.harlequinxd.drivehard.core.road.Town.Character.COMMUTER;
+            float vacant = commuter ? 0f : Math.max(0f, rowEdge - (farming ? 0.45f : 0.7f)) * (farming ? 0.8f : 0.6f);
+            // fishing ports keep net sheds among the houses, farm villages greenhouses
+            float work = tc == com.harlequinxd.drivehard.core.road.Town.Character.FISHING ? 0.08f : farming ? 0.05f * rowEdge : 0f;
+            if (rnd.nextFloat() < work) {
+                st.kind = farming ? LOT_GREENHOUSE : WORKSHED;
+                st.ground = new ArrayList<>();
+                float[] yd = local(st, 0f, 0f, w, 4f);
+                st.ground.add(new float[]{yd[0], yd[1], yd[2], yd[3], lib.gravel});
+                add(st);
+                previous = null;
+                continue;
+            }
             if (rnd.nextFloat() < vacant) {
                 // a vegetable plot between the houses where the town thins out
                 st.kind = FIELD;
@@ -734,7 +765,7 @@ public final class Countryside implements java.io.Serializable {
                 previous = null;
                 continue;
             }
-            if (apartments && rnd.nextFloat() < 0.02f + 0.16f * (1f - rowEdge) * (1f - rowEdge) && w > 12f) {
+            if (apartments && rnd.nextFloat() < (0.02f + 0.16f * (1f - rowEdge) * (1f - rowEdge)) * (commuter ? 2.5f : 1f) && w > 12f) {
                 st.kind = APAATO;
                 st.ground = new ArrayList<>();
                 // a row of bays between the street and the building (set back 6 m), driven into from the street
@@ -882,9 +913,11 @@ public final class Countryside implements java.io.Serializable {
                 new BuildingGen(city, lib, gb, r, ch).lotHouse(false, s.design, s.x0, s.z0, s.x1, s.z1, s.face,
                         s.westNeighbor);
                 garden(ch, s, r);
+                if (s.groundPacked != null) details(ch, gb, s, r);
                 break;
             case SHOP:
                 new BuildingGen(city, lib, gb, r, ch).build(BuildingGen.Type.SHOPHOUSE, s.x0, s.z0, s.x1, s.z1, street, street, city.shopsSuburb);
+                details(ch, gb, s, r);
                 break;
             case TOWN_KONBINI:
                 new BuildingGen(city, lib, gb, r, ch).build(BuildingGen.Type.KONBINI, s.x0 + 3f, s.face == 0 ? s.z0 + 7f : s.z0 + 1f,
@@ -899,6 +932,19 @@ public final class Countryside implements java.io.Serializable {
             }
             case FIELD:
                 break;
+            case WORKSHED: case LOT_GREENHOUSE: {
+                float w = s.face < 2 ? s.x1 - s.x0 : s.z1 - s.z0, d = s.face < 2 ? s.z1 - s.z0 : s.x1 - s.x0;
+                float[] b = local(s, 1f, 4f, w - 1f, Math.min(d - 1f, 4f + (s.kind == WORKSHED ? 9f : 14f)));
+                new BuildingGen(city, lib, gb, r, ch).build(s.kind == WORKSHED ? BuildingGen.Type.SHED : BuildingGen.Type.GREENHOUSE,
+                        b[0], b[1], b[2], b[3], street, new boolean[4], city.shopsSuburb);
+                break;
+            }
+            case RYOKAN: {
+                float[] b = local(s, 2f, 6f, (s.face < 2 ? s.x1 - s.x0 : s.z1 - s.z0) - 2f, Math.min(s.face < 2 ? s.z1 - s.z0 : s.x1 - s.x0, 24f) - 1f);
+                new BuildingGen(city, lib, gb, r, ch).build(BuildingGen.Type.MANSION, b[0], b[1], b[2], b[3], street, new boolean[4], city.shopsSuburb);
+                new TownGen(city, lib, gb, r, ch).onsenSign(b, s.face);
+                break;
+            }
             case TOWN_HALL: case POST: case CLINIC: case SUPERMARKET: case SCHOOL: case SHRINE: case GAS:
                 new TownGen(city, lib, gb, r, ch).build(s.kind, s.x0, s.z0, s.x1, s.z1, s.face);
                 break;
@@ -963,6 +1009,68 @@ public final class Countryside implements java.io.Serializable {
         city.plantAtTerrain(ch, Flora.BAMBOO, bp[0], bp[1]);
         float[] sp = local(s, w * 0.5f - 7f, 3f, w * 0.5f - 7f, 3f);
         city.plantAtTerrain(ch, r.nextBoolean() ? Flora.CAMELLIA : Flora.HYDRANGEA, sp[0], sp[1]);
+    }
+
+    /**
+     * The small things on a town street: a drinks vending machine at the front corner of the odd
+     * house and many shops, potted plants by shop fronts, a laundry pole in the back garden.
+     */
+    private void details(Chunk ch, GeoBuilder gb, Site s, Random r) {
+        float w = s.face < 2 ? s.x1 - s.x0 : s.z1 - s.z0, d = s.face < 2 ? s.z1 - s.z0 : s.x1 - s.x0;
+        boolean shop = s.kind == SHOP;
+        gb.begin(false);
+        if (r.nextFloat() < (shop ? 0.3f : 0.06f)) {
+            // shops stand at the pavement: the machine goes just in front, against the frontage
+            float v0 = shop ? -0.75f : 0.3f;
+            float[] b = local(s, w - 1.25f, Math.max(0f, v0), w - 0.25f, Math.max(0f, v0) + 0.7f);
+            if (shop) b = shift(s, b, -0.75f);
+            float y = terrain.height((b[0] + b[2]) * 0.5f, (b[1] + b[3]) * 0.5f);
+            int tex = lib.vending[r.nextInt(lib.vending.length)];
+            gb.box(b[0], y, b[1], b[2], y + 1.8f, b[3], tex, lib.paintWhite, 1f, 1f, L_OBJECT, 0f, 0);
+            ch.boxes.add(new com.harlequinxd.drivehard.core.game.Box(b[0], y - 1f, b[1], b[2], y + 1.8f, b[3]));
+        }
+        if (shop && r.nextFloat() < 0.6f) {
+            for (int k = 0; k < 2; k++) {
+                float u = 0.8f + k * (w - 2.6f) * 0.5f;
+                float[] b = shift(s, local(s, u, 0f, u + 0.5f, 0.5f), -0.6f);
+                float y = terrain.height(b[0], b[1]);
+                gb.box(b[0], y, b[1], b[2], y + 0.45f, b[3], lib.planter, lib.planter, 1f, 1f, L_OBJECT, 0f, Geo.FLAG_DETAIL);
+                city.plantAtTerrain(ch, k == 0 ? Flora.BOXWOOD : Flora.AZALEA, (b[0] + b[2]) * 0.5f, (b[1] + b[3]) * 0.5f);
+            }
+        }
+        if (!shop && d > 18f && r.nextFloat() < 0.45f) {
+            // two posts, a bar, the washing hanging out
+            float u0 = w * 0.3f, u1 = w * 0.3f + 2.6f, v = d - 3f;
+            float[] a = local(s, u0, v, u0, v), b = local(s, u1, v, u1, v);
+            float ya = terrain.height(a[0], a[1]), yb = terrain.height(b[0], b[1]);
+            gb.box(a[0] - 0.04f, ya, a[1] - 0.04f, a[0] + 0.04f, ya + 1.9f, a[1] + 0.04f, lib.pole, lib.pole, 1f, 1f, L_OBJECT, 0f, Geo.FLAG_DETAIL);
+            gb.box(b[0] - 0.04f, yb, b[1] - 0.04f, b[0] + 0.04f, yb + 1.9f, b[1] + 0.04f, lib.pole, lib.pole, 1f, 1f, L_OBJECT, 0f, Geo.FLAG_DETAIL);
+            float top = Math.max(ya, yb) + 1.85f;
+            gb.box(Math.min(a[0], b[0]) - 0.02f, top - 0.03f, Math.min(a[1], b[1]) - 0.02f, Math.max(a[0], b[0]) + 0.02f, top + 0.03f, Math.max(a[1], b[1]) + 0.02f,
+                    lib.pole, lib.pole, 1f, 1f, L_OBJECT, 0f, Geo.FLAG_DETAIL);
+            int[] cloth = {lib.paintWhite, lib.paintRed, lib.paintYellow, lib.paintWhite};
+            float[] q = new float[12], uv = {0, 1, 1, 1, 1, 0, 0, 0}, lt = {0.9f, 0.9f, 1f, 1f};
+            for (int k = 0; k < 4; k++) {
+                if (r.nextFloat() < 0.25f) continue;
+                float t0 = 0.08f + k * 0.23f, t1 = t0 + 0.17f;
+                float x0 = a[0] + (b[0] - a[0]) * t0, z0 = a[1] + (b[1] - a[1]) * t0, x1 = a[0] + (b[0] - a[0]) * t1, z1 = a[1] + (b[1] - a[1]) * t1;
+                float hang = 0.5f + r.nextFloat() * 0.35f;
+                q[0] = x0; q[1] = top - hang; q[2] = z0; q[3] = x1; q[4] = top - hang; q[5] = z1;
+                q[6] = x1; q[7] = top; q[8] = z1; q[9] = x0; q[10] = top; q[11] = z0;
+                gb.quad(q, uv, lt, cloth[r.nextInt(cloth.length)], L_OBJECT, Geo.FLAG_DETAIL, 0f, true);
+            }
+        }
+        gb.end();
+    }
+
+    /** A rectangle moved {@code dv} metres away from the street (negative: toward it, onto the pavement). */
+    private static float[] shift(Site s, float[] b, float dv) {
+        switch (s.face) {
+            case 0: return new float[]{b[0], b[1] + dv, b[2], b[3] + dv};
+            case 1: return new float[]{b[0], b[1] - dv, b[2], b[3] - dv};
+            case 2: return new float[]{b[0] + dv, b[1], b[2] + dv, b[3]};
+            default: return new float[]{b[0] - dv, b[1], b[2] - dv, b[3]};
+        }
     }
 
     private void garden(Chunk ch, Site s, Random r) {
