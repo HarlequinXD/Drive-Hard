@@ -184,6 +184,9 @@ public final class TextureLibrary implements java.io.Serializable {
     public int dirt, roadEdge, gravelTrack, dirtTrack, aircon, airconSide, balconyFront, balconySlab, powerLines;
     /** Alley clutter: beer crates, rubbish bins, cardboard, gas bottles. */
     public int crateYellow, crateRed, bin, cardboard, gasBottle;
+    /** Road furniture: direction boards, speed limits (40, 50), bus stop plate, curve mirror. */
+    public int[] dirSign = new int[3];
+    public int speed40, speed50, busStop, curveMirror, paintOrange;
     public int fence, signTownOffice, signPost, signSuper, signSchool, signClinic, signGas, schoolWall, superWall, canopy, field;
 
     private void houseTextures(int seed) {
@@ -271,6 +274,12 @@ public final class TextureLibrary implements java.io.Serializable {
         signSchool = add(TownTextures.sign("SCHOOL", 0xF4F2EC, 0x2A4A2A, seed + 3403));
         signClinic = add(TownTextures.sign("CLINIC", 0xFFFFFF, 0x2A7A4A, seed + 3404));
         signGas = add(TownTextures.sign("GAS", 0x1A5AB0, 0xFFFFFF, seed + 3405));
+        for (int i = 0; i < dirSign.length; i++) dirSign[i] = add(RoadSignTextures.direction(seed + 3460 + i));
+        speed40 = add(RoadSignTextures.speed(40, seed + 3465));
+        speed50 = add(RoadSignTextures.speed(50, seed + 3466));
+        busStop = add(RoadSignTextures.busStop(seed + 3467));
+        curveMirror = add(RoadSignTextures.mirror(seed + 3468));
+        paintOrange = add(solid(0xFFE0701E, seed + 3469));
         schoolWall = add(TownTextures.schoolFacade(seed + 3406));
         superWall = add(TownTextures.superFront(seed + 3407));
         canopy = add(TownTextures.canopy(seed + 3408));

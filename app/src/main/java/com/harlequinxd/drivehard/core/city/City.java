@@ -392,6 +392,7 @@ public final class City extends World implements java.io.Serializable {
             }
         // a fresh mesh builder per chunk: chunks are generated on several threads
         new RoadMesh(roads, lib, terrain).generate(ch, gb, cx, cz, x0, z0, x1, z1);
+        new RoadFurniture(this, ch, gb).build(cx, cz, x0, z0, x1, z1);
         countryside.generate(ch, gb, cx, cz);
         countryside.fences(ch, gb, x0, z0, x1, z1);
         gb.end();
