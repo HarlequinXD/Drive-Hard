@@ -45,14 +45,13 @@ public final class City extends World implements java.io.Serializable {
     public final TrafficLights traffic;
     public transient ChunkManager chunks;
 
-    public final int nbx = 100, nbz = 100;
-    public final float[] rx0 = new float[nbx + 1], rx1 = new float[nbx + 1];
-    public final float[] rz0 = new float[nbz + 1], rz1 = new float[nbz + 1];
-    public final boolean[] avenueX = new boolean[nbx + 1], avenueZ = new boolean[nbz + 1];
-    public float cityX0, cityX1, cityZ0, cityZ1;
+    /** The island's cities; the first is the main one on the east coast (the player starts there). */
+    public final List<Metro> metros = new ArrayList<>();
+    /** The main city. */
+    public final Metro main;
+    /** How big the island is and how many cities it has. */
+    public final com.harlequinxd.drivehard.core.WorldSpec spec;
     public float spawnX, spawnZ;
-    /** The central block row and column. */
-    public final int jCentre = nbz / 2, iCentre = nbx / 2;
     /** Every road on the island as a spline graph (city grid included). */
     public final RoadNetwork roads;
     public final Countryside countryside;
@@ -63,18 +62,27 @@ public final class City extends World implements java.io.Serializable {
     public City(TextureLibrary lib, long seed, com.harlequinxd.drivehard.core.Game.Progress progress) {
         this.lib = lib;
         this.seed = seed;
+        spec = com.harlequinxd.drivehard.core.WorldSpec.of(seed);
         if (progress != null) progress.step("Laying out the city blocks", 0f);
-        layout(new Random(seed));
+        main = new Metro(0, NAME, true, spec.size.mainBlocks, 0f, 0f, new Random(seed));
+        metros.add(main);
         if (progress != null) progress.step("Shaping hills, rivers and coast", 0.02f);
-        terrain = new Terrain((int) seed, cityX0, cityZ0, cityX1, cityZ1);
+        terrain = new Terrain((int) seed, spec.size.islandSize, main.cityX0, main.cityZ0, main.cityX1, main.cityZ1);
+        placeCities(new Random(seed * 53L + 11));
         if (progress != null) progress.step("Founding the suburbs", 0.20f);
-        footprint(new Random(seed * 31L + 7));
-        traffic = new TrafficLights(nbx + 1, (int) seed);
+        for (Metro m : metros) {
+            m.footprint(new Random(seed * 31L + 7 + m.index * 101L));
+            m.pruneIslands();
+            m.pickSpawn();
+            suburbs.addAll(m.suburbs);
+        }
+        traffic = new TrafficLights(1024, (int) seed);
         if (progress != null) progress.step("Surveying highways and country roads", 0.25f);
         roads = new RoadNetwork(this, terrain, seed);
         if (progress != null) progress.step("Naming towns and suburbs", 0.85f);
         terrain.roads = roads;
         for (Suburb sb : suburbs) sb.name = roads.newPlaceName();
+        for (Metro m : metros) if (m != main) m.name = roads.newPlaceName() + " City";
         shopsCentral = shopSet("CAFE", "BAKERY", "CAKES", "FASHION", "SHOES", "ELECTRONICS", "BOOKS", "BANK", "TRAVEL",
                 "DRUG", "SUSHI", "TEMPURA", "KISSATEN", "MEGANE", "PHOTO", "STATIONERY", "TEA", "WAGASHI", "CLINIC");
         shopsEnt = shopSet("IZAKAYA", "YAKITORI", "BAR", "SNACK", "CLUB", "KARAOKE", "GAME CENTER", "MAHJONG", "RAMEN",
@@ -92,17 +100,62 @@ public final class City extends World implements java.io.Serializable {
         if (progress != null) progress.step("Painting road markings", 0.94f);
         chunks = new ChunkManager(this);
         minX = terrain.islandX0 - 9000; maxX = terrain.islandX1 + 3000; minZ = terrain.islandZ0 - 9000; maxZ = terrain.islandZ1 + 9000;
-        // start downtown: on the sidewalk of the central avenue, beside the most central built-up block
-        int bi = iCentre, bj = jCentre;
-        float bestD = Float.MAX_VALUE;
-        for (int j = 0; j < nbz; j++)
-            for (int i = 0; i < nbx; i++) {
-                if (!blockActive(i, j)) continue;
-                float d = (i - iCentre) * (i - iCentre) + (j - jCentre) * (j - jCentre);
-                if (d < bestD) { bestD = d; bi = i; bj = j; }
+        // start downtown in the main city
+        spawnX = main.spawnX;
+        spawnZ = main.spawnZ;
+    }
+
+    /**
+     * The other cities: on broad, gentle, low ground well inland (rivers' plains and basins), far
+     * from the main city and from each other. A site that won't take a full grid gets a smaller
+     * one; MEGA islands get at least three cities in all.
+     */
+    private void placeCities(Random r) {
+        int want = spec.size.cities - 1;
+        float size = spec.size.islandSize;
+        int[] tryBlocks = {spec.size.otherBlocks(), spec.size.otherBlocks() * 3 / 4, spec.size.otherBlocks() / 2};
+        for (int blocks : tryBlocks) {
+            if (metros.size() > want) break;
+            float half = blocks * 148f * 0.5f;
+            float step = Math.max(1500f, size / 40f);
+            List<float[]> cand = new ArrayList<>();
+            for (float z = terrain.islandZ0 + half + 2000f; z < terrain.islandZ1 - half - 2000f; z += step)
+                for (float x = terrain.islandX0 + half + 2000f; x < terrain.islandX1 - half - 2000f; x += step) {
+                    float sc = siteScore(x, z, half);
+                    if (sc > 0f) cand.add(new float[]{x, z, sc + r.nextFloat() * 0.15f});
+                }
+            cand.sort((A, B) -> Float.compare(B[2], A[2]));
+            for (float[] c : cand) {
+                if (metros.size() > want) break;
+                boolean ok = true;
+                for (Metro m : metros) {
+                    float mx = (m.cityX0 + m.cityX1) * 0.5f, mz = (m.cityZ0 + m.cityZ1) * 0.5f;
+                    float need = Math.max(size * 0.22f, (m.cityX1 - m.cityX0) * 0.5f + half + 9000f);
+                    if (Math.hypot(mx - c[0], mz - c[1]) < need) { ok = false; break; }
+                }
+                if (!ok) continue;
+                Metro m = new Metro(metros.size(), "City " + metros.size(), false, blocks, c[0] - half, c[1] - half, new Random(seed * 7L + metros.size()));
+                metros.add(m);
+                terrain.addCity(m.cityX0, m.cityZ0, m.cityX1, m.cityZ1);
             }
-        spawnX = rx1[bi] + SIDEWALK * 0.5f;
-        spawnZ = (rz1[bj] + rz0[bj + 1]) * 0.5f;
+        }
+    }
+
+    /** How well a city of half-size {@code half} would sit at (x, z): 0 if it can't. */
+    private float siteScore(float x, float z, float half) {
+        float lo = Float.MAX_VALUE, hi = -Float.MAX_VALUE;
+        for (int j = -2; j <= 2; j++)
+            for (int i = -2; i <= 2; i++) {
+                float px = x + i * half * 0.5f, pz = z + j * half * 0.5f;
+                if (terrain.coastOver(px, pz) > -1500f) return 0f;
+                float h = terrain.natural(px, pz);
+                lo = Math.min(lo, h);
+                hi = Math.max(hi, h);
+            }
+        if (lo < 3f || hi > 220f) return 0f;
+        float relief = (hi - lo) / (half * 2f);
+        if (relief > 0.05f) return 0f;
+        return 1f / (1f + relief * 60f) * (1f - hi / 400f);
     }
 
     /** Island read back from the game data cache: the chunk streamer starts empty. */
@@ -122,25 +175,475 @@ public final class City extends World implements java.io.Serializable {
         return a;
     }
 
-    private void layout(Random rnd) {
-        float x = 0;
-        for (int i = 0; i <= nbx; i++) {
-            avenueX[i] = i % 8 == 0 && i != nbx;
-            rx0[i] = x;
-            x += avenueX[i] ? 22f : 13f;
-            rx1[i] = x;
-            if (i < nbx) x += 118 + 4 * rnd.nextInt(9);
+
+
+    // ------------------------------------------------------------------ the cities
+
+    /** The city whose grid covers (x, z) (with a margin), or null. */
+    public Metro metroAt(float x, float z, float margin) {
+        for (int i = 0; i < metros.size(); i++) {
+            Metro m = metros.get(i);
+            if (x >= m.cityX0 - margin && x <= m.cityX1 + margin && z >= m.cityZ0 - margin && z <= m.cityZ1 + margin) return m;
         }
-        float z = 0;
-        for (int j = 0; j <= nbz; j++) {
-            avenueZ[j] = j % 9 == 0;
-            rz0[j] = z;
-            z += avenueZ[j] ? 22f : 13f;
-            rz1[j] = z;
-            if (j < nbz) z += j == nbz / 2 ? 136 : 118 + 4 * rnd.nextInt(9);
+        return null;
+    }
+
+    /** The suburb at (x, z), or null (a city centre, or countryside). */
+    public Suburb suburbAt(float x, float z) {
+        Metro m = metroAt(x, z, 3000f);
+        return m == null ? null : m.suburbAt(x, z);
+    }
+
+    /** True where the ground belongs to a city: a built-up block, or a street beside one. */
+    public boolean urban(float x, float z) {
+        for (int i = 0; i < metros.size(); i++) {
+            Metro m = metros.get(i);
+            if (x >= m.cityX0 && x <= m.cityX1 && z >= m.cityZ0 && z <= m.cityZ1) return m.urban(x, z);
         }
-        cityX0 = rx0[0]; cityX1 = rx1[nbx];
-        cityZ0 = rz0[0]; cityZ1 = rz1[nbz];
+        return false;
+    }
+
+    /** Sidewalks/blocks and avenue medians sit one curb height above the road. */
+    public boolean isRaised(float x, float z) {
+        if (CURB == 0f) return false;
+        Metro m = metroAt(x, z, 0f);
+        return m != null && m.isRaised(x, z);
+    }
+
+    /** The city nearest (x, z). */
+    public Metro nearestMetro(float x, float z) {
+        Metro best = main;
+        float bd = Float.MAX_VALUE;
+        for (Metro m : metros) {
+            float d = (float) Math.hypot((m.cityX0 + m.cityX1) * 0.5f - x, (m.cityZ0 + m.cityZ1) * 0.5f - z);
+            if (d < bd) { bd = d; best = m; }
+        }
+        return best;
+    }
+
+    /**
+     * One city's street grid: blocks between streets, avenues every few blocks, the built-up
+     * outline shaped by the seed, suburbs on the outskirts. The main city lies on the east coast
+     * with the beach along its east edge; the others stand inland.
+     */
+    public final class Metro implements java.io.Serializable {
+        public final int index;
+        public String name;
+        /** On the coast (its east edge is the beach and the seaside blocks). */
+        public final boolean coastal;
+        public final int nbx, nbz;
+        public final float[] rx0, rx1, rz0, rz1;
+        public final boolean[] avenueX, avenueZ;
+        public float cityX0, cityX1, cityZ0, cityZ1;
+        /** The central block row and column. */
+        public final int jCentre, iCentre;
+        /** Blocks that are built up (inside the seed-shaped city outline). */
+        private boolean[] active;
+        /** Blocks of the city grid inside the outline (built up or the green land between suburbs). */
+        private boolean[] inside;
+        public final List<Suburb> suburbs = new ArrayList<>();
+        /** Street medians and the promenade, bucketed by 256 m cells for quick lookup. */
+        private transient java.util.Map<Long, List<float[]>> streetPaint;
+        private transient java.util.concurrent.ConcurrentHashMap<Integer, List<float[]>> blockPaint;
+        /** Beside the most central built-up block (the start, fast travel, the map label). */
+        public float spawnX, spawnZ;
+
+        Metro(int index, String name, boolean coastal, int blocks, float ox, float oz, Random rnd) {
+            this.index = index;
+            this.name = name;
+            this.coastal = coastal;
+            nbx = nbz = blocks;
+            rx0 = new float[nbx + 1]; rx1 = new float[nbx + 1];
+            rz0 = new float[nbz + 1]; rz1 = new float[nbz + 1];
+            avenueX = new boolean[nbx + 1]; avenueZ = new boolean[nbz + 1];
+            jCentre = nbz / 2; iCentre = nbx / 2;
+            layout(rnd, ox, oz);
+        }
+
+        /** Signal controller of grid intersection (i, j). */
+        public int signal(int i, int j) { return (index << 20) | (j << 10) | i; }
+
+        public boolean overlaps(float x0, float z0, float x1, float z1, float margin) {
+            return x1 >= cityX0 - margin && x0 <= cityX1 + margin && z1 >= cityZ0 - margin && z0 <= cityZ1 + margin;
+        }
+
+        /** Within {@code margin} metres of this city's ground (a few samples). */
+        public boolean nearUrban(float x, float z, float margin) {
+            return urban(x, z) || urban(x - margin, z) || urban(x + margin, z) || urban(x, z - margin) || urban(x, z + margin);
+        }
+
+        /**
+         * Drops built-up blocks whose streets don't join the rest of the city (a stray block left
+         * standing alone in the fields by the outline's wobble).
+         */
+        void pruneIslands() {
+            int nx = nbx + 1, nz = nbz + 1;
+            int[] comp = new int[nx * nz];
+            java.util.Arrays.fill(comp, -1);
+            int[] size = new int[nx * nz];
+            int[] stack = new int[nx * nz];
+            int nc = 0;
+            for (int s0 = 0; s0 < nx * nz; s0++) {
+                if (comp[s0] >= 0) continue;
+                int sp = 0;
+                stack[sp++] = s0;
+                comp[s0] = nc;
+                while (sp > 0) {
+                    int k = stack[--sp], i = k % nx, j = k / nx;
+                    size[nc]++;
+                    if (i + 1 < nx && ewStreet(i, j) && comp[k + 1] < 0) { comp[k + 1] = nc; stack[sp++] = k + 1; }
+                    if (i > 0 && ewStreet(i - 1, j) && comp[k - 1] < 0) { comp[k - 1] = nc; stack[sp++] = k - 1; }
+                    if (j + 1 < nz && nsStreet(i, j) && comp[k + nx] < 0) { comp[k + nx] = nc; stack[sp++] = k + nx; }
+                    if (j > 0 && nsStreet(i, j - 1) && comp[k - nx] < 0) { comp[k - nx] = nc; stack[sp++] = k - nx; }
+                }
+                nc++;
+            }
+            int big = 0;
+            for (int c = 1; c < nc; c++) if (size[c] > size[big]) big = c;
+            for (int j = 0; j < nbz; j++)
+                for (int i = 0; i < nbx; i++) {
+                    if (!active[j * nbx + i]) continue;
+                    int k = j * nx + i;
+                    if (comp[k] != big && comp[k + 1] != big && comp[k + nx] != big && comp[k + nx + 1] != big) active[j * nbx + i] = false;
+                }
+        }
+
+        /** Beside the most central built-up block: the middle of its east sidewalk. */
+        void pickSpawn() {
+            int bi = iCentre, bj = jCentre;
+            float bestD = Float.MAX_VALUE;
+            for (int j = 0; j < nbz; j++)
+                for (int i = 0; i < nbx; i++) {
+                    if (!blockActive(i, j)) continue;
+                    float d = (i - iCentre) * (i - iCentre) + (j - jCentre) * (j - jCentre);
+                    if (d < bestD) { bestD = d; bi = i; bj = j; }
+                }
+            spawnX = rx1[bi] + SIDEWALK * 0.5f;
+            spawnZ = (rz1[bj] + rz0[bj + 1]) * 0.5f;
+        }
+
+        /** This city's streets, signals and blocks in the chunk. */
+        void generate(Chunk ch, GeoBuilder gb, float x0, float z0, float x1, float z1) {
+            for (int i = 0; i <= nbx; i++)
+                for (int j = 0; j < nbz; j++) {
+                    float mx = (rx0[i] + rx1[i]) * 0.5f, mz = (rz1[j] + rz0[j + 1]) * 0.5f;
+                    if (nsStreet(i, j) && in(mx, mz, x0, z0, x1, z1)) {
+                        gb.begin(false);
+                        roadSegment(ch, gb, true, rx0[i], rx1[i], rz1[j], rz0[j + 1], avenueX[i]);
+                        gb.end();
+                    }
+                }
+            for (int j = 0; j <= nbz; j++)
+                for (int i = 0; i < nbx; i++) {
+                    float mx = (rx1[i] + rx0[i + 1]) * 0.5f, mz = (rz0[j] + rz1[j]) * 0.5f;
+                    if (ewStreet(i, j) && in(mx, mz, x0, z0, x1, z1)) {
+                        gb.begin(false);
+                        roadSegment(ch, gb, false, rz0[j], rz1[j], rx1[i], rx0[i + 1], avenueZ[j]);
+                        gb.end();
+                    }
+                }
+            for (int j = 0; j <= nbz; j++)
+                for (int i = 0; i <= nbx; i++) {
+                    float mx = (rx0[i] + rx1[i]) * 0.5f, mz = (rz0[j] + rz1[j]) * 0.5f;
+                    if (urban(mx, mz) && in(mx, mz, x0, z0, x1, z1)) signals(ch, i, j);
+                }
+            for (int j = 0; j < nbz; j++)
+                for (int i = 0; i < nbx; i++) {
+                    float mx = (rx1[i] + rx0[i + 1]) * 0.5f, mz = (rz1[j] + rz0[j + 1]) * 0.5f;
+                    if (in(mx, mz, x0, z0, x1, z1)) block(ch, gb, i, j);
+                }
+        }
+
+        private void layout(Random rnd, float ox, float oz) {
+            float x = ox;
+            for (int i = 0; i <= nbx; i++) {
+                avenueX[i] = i % 8 == 0 && i != nbx;
+                rx0[i] = x;
+                x += avenueX[i] ? 22f : 13f;
+                rx1[i] = x;
+                if (i < nbx) x += 118 + 4 * rnd.nextInt(9);
+            }
+            float z = oz;
+            for (int j = 0; j <= nbz; j++) {
+                avenueZ[j] = j % 9 == 0;
+                rz0[j] = z;
+                z += avenueZ[j] ? 22f : 13f;
+                rz1[j] = z;
+                if (j < nbz) z += j == nbz / 2 ? 136 : 118 + 4 * rnd.nextInt(9);
+            }
+            cityX0 = rx0[0]; cityX1 = rx1[nbx];
+            cityZ0 = rz0[0]; cityZ1 = rz1[nbz];
+        }
+
+        /** Distance from the centre in units of the grid's half size (0 centre, about 1 at the outline). */
+        private float radial(float x, float z) {
+            float dx = (x - (cityX0 + cityX1) * 0.5f) / ((cityX1 - cityX0) * 0.5f);
+            float dz = (z - (cityZ0 + cityZ1) * 0.5f) / ((cityZ1 - cityZ0) * 0.5f);
+            return (float) Math.hypot(dx, dz);
+        }
+
+        /**
+         * A realistic city: a dense core a few km across, then suburbs spread over the outskirts,
+         * each a cluster of blocks with fields and woods between them, joined by the avenues.
+         */
+        private void footprint(Random r) {
+            float half = Math.min(cityX1 - cityX0, cityZ1 - cityZ0) * 0.5f;
+            // suburb centres: spaced out over the ring outside the core (inside the outline)
+            for (int tries = 0; tries < 4000 && suburbs.size() < 26; tries++) {
+                float x = cityX0 + r.nextFloat() * (cityX1 - cityX0), z = cityZ0 + r.nextFloat() * (cityZ1 - cityZ0);
+                float rad = radial(x, z);
+                if (rad < CORE + 0.08f || terrain.cityDistance(x, z) > 0f) continue;
+                float rr = half * (0.11f + r.nextFloat() * 0.07f);
+                boolean ok = true;
+                for (Suburb o : suburbs) if (Math.hypot(o.x - x, o.z - z) < (o.r + rr) * 1.25f) { ok = false; break; }
+                if (ok) suburbs.add(new Suburb(x, z, rr));
+            }
+            active = new boolean[nbx * nbz];
+            inside = new boolean[nbx * nbz];
+            for (int j = 0; j < nbz; j++)
+                for (int i = 0; i < nbx; i++) {
+                    float cx = (rx1[i] + rx0[i + 1]) * 0.5f, cz = (rz1[j] + rz0[j + 1]) * 0.5f;
+                    boolean in = terrain.cityDistance(cx, cz) <= 0f;
+                    inside[j * nbx + i] = in;
+                    if (!in) continue;
+                    if (radial(cx, cz) < CORE + 0.05f * (float) Math.sin(i * 0.7f + j * 1.3f)) { active[j * nbx + i] = true; continue; }
+                    for (Suburb sb : suburbs) {
+                        float d = (float) Math.hypot(sb.x - cx, sb.z - cz);
+                        float wobble = 1f + 0.18f * (float) Math.sin(Math.atan2(cz - sb.z, cx - sb.x) * 3f + sb.x * 0.001f);
+                        if (d < sb.r * wobble) { active[j * nbx + i] = true; break; }
+                    }
+                }
+            // each suburb's label sits on a street corner near its middle
+            for (Suburb sb : suburbs) {
+                int bi = 0, bj = 0;
+                float best = Float.MAX_VALUE;
+                for (int j = 0; j <= nbz; j++)
+                    for (int i = 0; i <= nbx; i++) {
+                        float x = (rx0[i] + rx1[i]) * 0.5f, z = (rz0[j] + rz1[j]) * 0.5f;
+                        float d = (x - sb.x) * (x - sb.x) + (z - sb.z) * (z - sb.z);
+                        if (d < best && (blockActive(i, j) || blockActive(i - 1, j) || blockActive(i, j - 1) || blockActive(i - 1, j - 1))) {
+                            best = d; bi = i; bj = j;
+                        }
+                    }
+                sb.sx = (rx0[bi] + rx1[bi]) * 0.5f;
+                sb.sz = (rz0[bj] + rz1[bj]) * 0.5f;
+            }
+        }
+
+        /** The suburb at (x, z), or null (the core, or countryside). */
+        public Suburb suburbAt(float x, float z) {
+            if (radial(x, z) < CORE + 0.06f) return null;
+            Suburb best = null;
+            float bd = Float.MAX_VALUE;
+            for (Suburb sb : suburbs) {
+                float d = (float) Math.hypot(sb.x - x, sb.z - z) / sb.r;
+                if (d < bd) { bd = d; best = sb; }
+            }
+            return bd < 1.35f ? best : null;
+        }
+
+        private boolean insideGrid(int i, int j) { return i >= 0 && j >= 0 && i < nbx && j < nbz && inside[j * nbx + i]; }
+
+        public boolean blockActive(int i, int j) {
+            return i >= 0 && j >= 0 && i < nbx && j < nbz && active[j * nbx + i];
+        }
+
+        /** N-S street segment at road column i along block row j: exists if a built-up block is beside it. */
+        public boolean nsStreet(int i, int j) {
+            // avenues run on through the green land between suburbs and join them up
+            return blockActive(i - 1, j) || blockActive(i, j) || (avenueX[i] && (insideGrid(i - 1, j) || insideGrid(i, j)));
+        }
+
+        /** E-W street segment at road row j along block column i. */
+        public boolean ewStreet(int i, int j) {
+            return blockActive(i, j - 1) || blockActive(i, j) || (avenueZ[j] && (insideGrid(i, j - 1) || insideGrid(i, j)));
+        }
+
+        /**
+         * True where the ground belongs to the city: a built-up block, or a street beside one. The
+         * city's grid rectangle is much larger than its outline; outside the outline it is countryside.
+         */
+        public boolean urban(float x, float z) {
+            if (x < cityX0 || x > cityX1 || z < cityZ0 || z > cityZ1) return false;
+            int sx = slot(x, rx0, rx1, nbx), sz = slot(z, rz0, rz1, nbz);
+            if (sx >= 0 && sx >= nbx || sz >= 0 && sz >= nbz) return false;
+            if (sx >= 0 && sz >= 0) return blockActive(sx, sz);
+            if (sx < 0 && sz >= 0) return nsStreet(-sx - 1, sz);
+            if (sx >= 0) return ewStreet(sx, -sz - 1);
+            int i = -sx - 1, j = -sz - 1;
+            return nsStreet(i, j - 1) || nsStreet(i, j) || ewStreet(i - 1, j) || ewStreet(i, j);
+        }
+
+        /** Sidewalks/blocks and avenue medians sit one curb height above the road. */
+        public boolean isRaised(float x, float z) {
+            if (CURB == 0f) return false;
+            if (!urban(x, z)) return false;
+            int bi = -1, bj = -1;
+            for (int i = 0; i < nbx; i++) if (x > rx1[i] && x < rx0[i + 1]) { bi = i; break; }
+            for (int j = 0; j < nbz; j++) if (z > rz1[j] && z < rz0[j + 1]) { bj = j; break; }
+            if (bi >= 0 && bj >= 0) return true;
+            if (bi < 0 && bj >= 0) {   // on a N-S road
+                for (int i = 0; i <= nbx; i++) {
+                    if (!avenueX[i]) continue;
+                    float c = (rx0[i] + rx1[i]) * 0.5f;
+                    if (Math.abs(x - c) <= 1.2f && z > rz1[bj] + 6f && z < rz0[bj + 1] - 6f) return true;
+                }
+            }
+            if (bj < 0 && bi >= 0) {   // on an E-W road
+                for (int j = 0; j <= nbz; j++) {
+                    if (!avenueZ[j]) continue;
+                    float c = (rz0[j] + rz1[j]) * 0.5f;
+                    if (Math.abs(z - c) <= 1.2f && x > rx1[bi] + 6f && x < rx0[bi + 1] - 6f) return true;
+                }
+            }
+            return false;
+        }
+
+        private synchronized java.util.Map<Long, List<float[]>> streetPaint() {
+            if (streetPaint != null) return streetPaint;
+            List<float[]> out = new ArrayList<>();
+            GeoBuilder gb = new GeoBuilder(terrain, new Chunk(0, 0));
+            gb.dry = true;
+            gb.paint = out;
+            Chunk dummy = new Chunk(0, 0);
+            for (int i = 0; i <= nbx; i++)
+                for (int j = 0; j < nbz; j++)
+                    if (nsStreet(i, j)) roadSegment(dummy, gb, true, rx0[i], rx1[i], rz1[j], rz0[j + 1], avenueX[i]);
+            for (int j = 0; j <= nbz; j++)
+                for (int i = 0; i < nbx; i++)
+                    if (ewStreet(i, j)) roadSegment(dummy, gb, false, rz0[j], rz1[j], rx1[i], rx0[i + 1], avenueZ[j]);
+            // the seaside promenade beside the city's east edge
+            out.add(new float[]{cityX1 + 10f, cityZ0, cityX1 + 15f, cityZ1, lib.pavers, 2f, 2f});
+            java.util.Map<Long, List<float[]>> map = new java.util.HashMap<>();
+            for (float[] r : out)
+                for (int j = (int) Math.floor(r[1] / 256f); j <= (int) Math.floor(r[3] / 256f); j++)
+                    for (int i = (int) Math.floor(r[0] / 256f); i <= (int) Math.floor(r[2] / 256f); i++)
+                        map.computeIfAbsent(paintCell(i, j), k -> new ArrayList<>()).add(r);
+            streetPaint = map;
+            blockPaint = new java.util.concurrent.ConcurrentHashMap<>();
+            return map;
+        }
+
+        /**
+         * Ground cover painted into the terrain in this rectangle: sidewalks, lots, parks, car parks,
+         * plazas, medians and the promenade, each {x0, z0, x1, z1, texture, uScale, vScale}. A block's
+         * areas come from a dry run of its generator (same seed, no geometry), cached.
+         */
+        void groundPaint(float x0, float z0, float x1, float z1, List<float[]> out) {
+            if (x1 < cityX0 - 30f || x0 > cityX1 + 30f || z1 < cityZ0 || z0 > cityZ1) return;
+            java.util.Map<Long, List<float[]>> sp = streetPaint();
+            java.util.Set<float[]> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+            for (int cj = (int) Math.floor(z0 / 256f); cj <= (int) Math.floor(z1 / 256f); cj++)
+                for (int ci = (int) Math.floor(x0 / 256f); ci <= (int) Math.floor(x1 / 256f); ci++) {
+                    List<float[]> l = sp.get(paintCell(ci, cj));
+                    if (l == null) continue;
+                    for (float[] r : l) if (r[2] > x0 && r[0] < x1 && r[3] > z0 && r[1] < z1 && seen.add(r)) out.add(r);
+                }
+            for (int j = 0; j < nbz; j++) {
+                if (rz0[j + 1] < z0 || rz1[j] > z1) continue;
+                for (int i = 0; i < nbx; i++) {
+                    if (rx0[i + 1] < x0 || rx1[i] > x1) continue;
+                    if (!blockActive(i, j)) continue;
+                    final int bi = i, bj = j;
+                    List<float[]> list = blockPaint.computeIfAbsent(j * nbx + i, k -> {
+                        List<float[]> l = new ArrayList<>();
+                        GeoBuilder gb = new GeoBuilder(terrain, new Chunk(0, 0));
+                        gb.dry = true;
+                        gb.paint = l;
+                        block(new Chunk(0, 0), gb, bi, bj);
+                        return l;
+                    });
+                    for (float[] r : list) if (r[2] > x0 && r[0] < x1 && r[3] > z0 && r[1] < z1) out.add(r);
+                }
+            }
+        }
+
+        private void signals(Chunk ch, int i, int j) {
+            float cx = (rx0[i] + rx1[i]) * 0.5f, cz = (rz0[j] + rz1[j]) * 0.5f;
+            float hx = (rx1[i] - rx0[i]) * 0.5f, hz = (rz1[j] - rz0[j]) * 0.5f;
+            int id = signal(i, j);
+            int[][] dirs = {{0, 1}, {0, -1}, {1, 0}, {-1, 0}};
+            for (int[] d : dirs) {
+                boolean ns = d[0] == 0;
+                // edge approaches that come from outside the city have no road behind them
+                if (ns && ((d[1] > 0 && j == 0) || (d[1] < 0 && j == nbz))) continue;
+                if (!ns && ((d[0] > 0 && i == 0) || (d[0] < 0 && i == nbx))) continue;
+                float along = ns ? hz : hx, across = ns ? hx : hz;
+                float lxv = d[1], lzv = -d[0];                       // left of travel (traffic keeps left)
+                float px = cx + d[0] * (along + 1.3f) + lxv * (across + 1.3f);   // far-left corner, Japanese style
+                float pz = cz + d[1] * (along + 1.3f) + lzv * (across + 1.3f);
+                float yaw = (float) Math.atan2(-d[0], -d[1]);         // signal faces oncoming traffic
+                float y = terrain.height(px, pz) + CURB;
+                ch.sprite(Chunk.SPRITE_SIGNAL, id * 2 + (ns ? 1 : 0), px, y, pz, yaw);
+                ch.boxes.add(new Box(px - 0.2f, y - 1f, pz - 0.2f, px + 0.2f, y + 6f, pz + 0.2f));
+            }
+        }
+
+        public Zone zone(int i, int j) {
+            float dx = (i - iCentre) / (nbx * 0.5f);
+            float dz = (j - jCentre) / (nbz * 0.5f);
+            float radius = (float) Math.hypot(dx, dz);
+            if (radius < 0.05f) return Zone.CENTRAL;
+            if (radius < 0.10f) return Zone.ENTERTAINMENT;
+            if (radius < CORE - 0.04f) return Zone.MIXED;
+            if (coastal && i >= nbx - 3) return Zone.SEASIDE;
+            return Zone.SUBURB;
+        }
+
+        private boolean isFireBlock(int i, int j) {
+            return (i == 2 && j == 2) || (i == nbx - 3 && j == nbz - 3);
+        }
+
+        private void block(Chunk ch, GeoBuilder gb, int i, int j) {
+            if (!blockActive(i, j)) return;
+            Random rnd = new Random(seed * 1000003L + i * 7919L + j * 104729L);
+            float bx0 = rx1[i], bx1 = rx0[i + 1], bz0 = rz1[j], bz1 = rz0[j + 1];
+            float s = SIDEWALK;
+            gb.begin(false);
+            curbs(gb, bx0, bz0, bx1, bz1);
+            int sw = lib.sidewalk;
+            gb.floorAreaT(bx0, bz0, bx1, bz0 + s, CURB, sw, 2f, 2f, L_RAISED, 8f, 0, 0f);
+            gb.floorAreaT(bx0, bz1 - s, bx1, bz1, CURB, sw, 2f, 2f, L_RAISED, 8f, 0, 0f);
+            gb.floorAreaT(bx0, bz0 + s, bx0 + s, bz1 - s, CURB, sw, 2f, 2f, L_RAISED, 8f, 0, 0f);
+            gb.floorAreaT(bx1 - s, bz0 + s, bx1, bz1 - s, CURB, sw, 2f, 2f, L_RAISED, 8f, 0, 0f);
+
+            Zone zone = zone(i, j);
+            Ctx c = new Ctx(ch, gb, rnd);
+            streetFurniture(c, bx0, bz0, bx1, bz1, zone);
+            float ix0 = bx0 + s, ix1 = bx1 - s, iz0 = bz0 + s, iz1 = bz1 - s;
+            float depth = iz1 - iz0;
+            // lots are only as deep as the buildings of the area need; a deep block keeps a courtyard
+            // in the middle (gardens, a park or car parks) instead of 60 m long buildings
+            float rowMax;
+            switch (zone) {
+                case CENTRAL: rowMax = 34f; break;
+                case ENTERTAINMENT: rowMax = 20f; break;
+                case SEASIDE: rowMax = 28f; break;
+                case SUBURB: rowMax = 22f; break;
+                default: rowMax = 24f; break;
+            }
+            boolean twoRows = depth >= 30f;
+            if (!twoRows) {
+                lotRow(c, ix0, iz0, ix1, iz1, true, true, zone, isFireBlock(i, j), i == iCentre && j == jCentre + 1);
+            } else {
+                float half = depth * (0.45f + rnd.nextFloat() * 0.1f);
+                float dn = Math.min(rowMax, half), ds = Math.min(rowMax, depth - half);
+                lotRow(c, ix0, iz0, ix1, iz0 + dn, true, false, zone, isFireBlock(i, j), i == iCentre && j == jCentre + 1);
+                lotRow(c, ix0, iz1 - ds, ix1, iz1, false, true, zone, false, false);
+                float m0 = iz0 + dn, m1 = iz1 - ds, mid = m1 - m0;
+                if (mid >= 2f * 12f + 5f) {
+                    // a deep block gets a back lane through the middle with buildings facing it
+                    float lane0 = (m0 + m1) * 0.5f - 2.5f, lane1 = lane0 + 5f;
+                    float inner = Math.min(rowMax, lane0 - m0);
+                    gb.floorAreaT(ix0, lane0, ix1, lane1, CURB, lib.asphaltPatched, 2f, 2f, L_RAISED, 8f, 0, 0f);
+                    lotRow(c, ix0, lane0 - inner, ix1, lane0, false, true, zone, false, false);
+                    lotRow(c, ix0, lane1, ix1, lane1 + inner, true, false, zone, false, false);
+                    if (lane0 - inner - m0 > 4f) courtyard(c, ix0, m0, ix1, lane0 - inner, zone);
+                    if (m1 - (lane1 + inner) > 4f) courtyard(c, ix0, lane1 + inner, ix1, m1, zone);
+                } else if (mid > 4f) courtyard(c, ix0, m0, ix1, m1, zone);
+            }
+            gb.end();
+        }
     }
 
     // ------------------------------------------------------------------ World (collision)
@@ -153,10 +656,6 @@ public final class City extends World implements java.io.Serializable {
 
     // ------------------------------------------------------------------ the urban footprint
 
-    /** Blocks that are built up (inside the seed-shaped city outline). */
-    private boolean[] active;
-    /** Blocks of the city grid inside the outline (built up or the green land between suburbs). */
-    private boolean[] inside;
 
     /** A named suburb: a cluster of residential blocks on the outskirts, with green land around it. */
     public static final class Suburb implements java.io.Serializable {
@@ -167,93 +666,17 @@ public final class City extends World implements java.io.Serializable {
         Suburb(float x, float z, float r) { this.x = x; this.z = z; this.r = r; }
     }
 
+    /** Every city's suburbs. */
     public final List<Suburb> suburbs = new ArrayList<>();
     /** Normalised distance from the centre beyond which the city is suburbs. */
     public static final float CORE = 0.24f;
 
-    /** Distance from the centre in units of the grid's half size (0 centre, about 1 at the outline). */
-    private float radial(float x, float z) {
-        float dx = (x - (cityX0 + cityX1) * 0.5f) / ((cityX1 - cityX0) * 0.5f);
-        float dz = (z - (cityZ0 + cityZ1) * 0.5f) / ((cityZ1 - cityZ0) * 0.5f);
-        return (float) Math.hypot(dx, dz);
-    }
 
-    /**
-     * A realistic city: a dense core a few km across, then suburbs spread over the outskirts,
-     * each a cluster of blocks with fields and woods between them, joined by the avenues.
-     */
-    private void footprint(Random r) {
-        float half = Math.min(cityX1 - cityX0, cityZ1 - cityZ0) * 0.5f;
-        // suburb centres: spaced out over the ring outside the core (inside the outline)
-        for (int tries = 0; tries < 4000 && suburbs.size() < 26; tries++) {
-            float x = cityX0 + r.nextFloat() * (cityX1 - cityX0), z = cityZ0 + r.nextFloat() * (cityZ1 - cityZ0);
-            float rad = radial(x, z);
-            if (rad < CORE + 0.08f || terrain.cityDistance(x, z) > 0f) continue;
-            float rr = half * (0.11f + r.nextFloat() * 0.07f);
-            boolean ok = true;
-            for (Suburb o : suburbs) if (Math.hypot(o.x - x, o.z - z) < (o.r + rr) * 1.25f) { ok = false; break; }
-            if (ok) suburbs.add(new Suburb(x, z, rr));
-        }
-        active = new boolean[nbx * nbz];
-        inside = new boolean[nbx * nbz];
-        for (int j = 0; j < nbz; j++)
-            for (int i = 0; i < nbx; i++) {
-                float cx = (rx1[i] + rx0[i + 1]) * 0.5f, cz = (rz1[j] + rz0[j + 1]) * 0.5f;
-                boolean in = terrain.cityDistance(cx, cz) <= 0f;
-                inside[j * nbx + i] = in;
-                if (!in) continue;
-                if (radial(cx, cz) < CORE + 0.05f * (float) Math.sin(i * 0.7f + j * 1.3f)) { active[j * nbx + i] = true; continue; }
-                for (Suburb sb : suburbs) {
-                    float d = (float) Math.hypot(sb.x - cx, sb.z - cz);
-                    float wobble = 1f + 0.18f * (float) Math.sin(Math.atan2(cz - sb.z, cx - sb.x) * 3f + sb.x * 0.001f);
-                    if (d < sb.r * wobble) { active[j * nbx + i] = true; break; }
-                }
-            }
-        // each suburb's label sits on a street corner near its middle
-        for (Suburb sb : suburbs) {
-            int bi = 0, bj = 0;
-            float best = Float.MAX_VALUE;
-            for (int j = 0; j <= nbz; j++)
-                for (int i = 0; i <= nbx; i++) {
-                    float x = (rx0[i] + rx1[i]) * 0.5f, z = (rz0[j] + rz1[j]) * 0.5f;
-                    float d = (x - sb.x) * (x - sb.x) + (z - sb.z) * (z - sb.z);
-                    if (d < best && (blockActive(i, j) || blockActive(i - 1, j) || blockActive(i, j - 1) || blockActive(i - 1, j - 1))) {
-                        best = d; bi = i; bj = j;
-                    }
-                }
-            sb.sx = (rx0[bi] + rx1[bi]) * 0.5f;
-            sb.sz = (rz0[bj] + rz1[bj]) * 0.5f;
-        }
-    }
 
-    /** The suburb at (x, z), or null (the core, or countryside). */
-    public Suburb suburbAt(float x, float z) {
-        if (radial(x, z) < CORE + 0.06f) return null;
-        Suburb best = null;
-        float bd = Float.MAX_VALUE;
-        for (Suburb sb : suburbs) {
-            float d = (float) Math.hypot(sb.x - x, sb.z - z) / sb.r;
-            if (d < bd) { bd = d; best = sb; }
-        }
-        return bd < 1.35f ? best : null;
-    }
 
-    private boolean insideGrid(int i, int j) { return i >= 0 && j >= 0 && i < nbx && j < nbz && inside[j * nbx + i]; }
 
-    public boolean blockActive(int i, int j) {
-        return i >= 0 && j >= 0 && i < nbx && j < nbz && active[j * nbx + i];
-    }
 
-    /** N-S street segment at road column i along block row j: exists if a built-up block is beside it. */
-    public boolean nsStreet(int i, int j) {
-        // avenues run on through the green land between suburbs and join them up
-        return blockActive(i - 1, j) || blockActive(i, j) || (avenueX[i] && (insideGrid(i - 1, j) || insideGrid(i, j)));
-    }
 
-    /** E-W street segment at road row j along block column i. */
-    public boolean ewStreet(int i, int j) {
-        return blockActive(i, j - 1) || blockActive(i, j) || (avenueZ[j] && (insideGrid(i, j - 1) || insideGrid(i, j)));
-    }
 
     /** Position along an axis: block index (>= 0) or -(road index) - 1, given road start/end arrays. */
     private static int slot(float v, float[] r0, float[] r1, int n) {
@@ -262,20 +685,6 @@ public final class City extends World implements java.io.Serializable {
         return v < r1[lo] ? -lo - 1 : lo;
     }
 
-    /**
-     * True where the ground belongs to the city: a built-up block, or a street beside one. The
-     * city's grid rectangle is much larger than its outline; outside the outline it is countryside.
-     */
-    public boolean urban(float x, float z) {
-        if (x < cityX0 || x > cityX1 || z < cityZ0 || z > cityZ1) return false;
-        int sx = slot(x, rx0, rx1, nbx), sz = slot(z, rz0, rz1, nbz);
-        if (sx >= 0 && sx >= nbx || sz >= 0 && sz >= nbz) return false;
-        if (sx >= 0 && sz >= 0) return blockActive(sx, sz);
-        if (sx < 0 && sz >= 0) return nsStreet(-sx - 1, sz);
-        if (sx >= 0) return ewStreet(sx, -sz - 1);
-        int i = -sx - 1, j = -sz - 1;
-        return nsStreet(i, j - 1) || nsStreet(i, j) || ewStreet(i - 1, j) || ewStreet(i, j);
-    }
 
     /** Within {@code margin} metres of the city's ground (a few samples). */
     public boolean nearUrban(float x, float z, float margin) {
@@ -323,30 +732,6 @@ public final class City extends World implements java.io.Serializable {
         return terrain.coastOver(x, z) > SWIM_REACH;
     }
 
-    /** Sidewalks/blocks and avenue medians sit one curb height above the road. */
-    public boolean isRaised(float x, float z) {
-        if (CURB == 0f) return false;
-        if (!urban(x, z)) return false;
-        int bi = -1, bj = -1;
-        for (int i = 0; i < nbx; i++) if (x > rx1[i] && x < rx0[i + 1]) { bi = i; break; }
-        for (int j = 0; j < nbz; j++) if (z > rz1[j] && z < rz0[j + 1]) { bj = j; break; }
-        if (bi >= 0 && bj >= 0) return true;
-        if (bi < 0 && bj >= 0) {   // on a N-S road
-            for (int i = 0; i <= nbx; i++) {
-                if (!avenueX[i]) continue;
-                float c = (rx0[i] + rx1[i]) * 0.5f;
-                if (Math.abs(x - c) <= 1.2f && z > rz1[bj] + 6f && z < rz0[bj + 1] - 6f) return true;
-            }
-        }
-        if (bj < 0 && bi >= 0) {   // on an E-W road
-            for (int j = 0; j <= nbz; j++) {
-                if (!avenueZ[j]) continue;
-                float c = (rz0[j] + rz1[j]) * 0.5f;
-                if (Math.abs(z - c) <= 1.2f && x > rx1[bi] + 6f && x < rx0[bi + 1] - 6f) return true;
-            }
-        }
-        return false;
-    }
 
     // ------------------------------------------------------------------ chunk generation
 
@@ -363,34 +748,7 @@ public final class City extends World implements java.io.Serializable {
         promenadePath(gb, x0, z0, x1, z1);
         gb.end();
 
-        for (int i = 0; i <= nbx; i++)
-            for (int j = 0; j < nbz; j++) {
-                float mx = (rx0[i] + rx1[i]) * 0.5f, mz = (rz1[j] + rz0[j + 1]) * 0.5f;
-                if (nsStreet(i, j) && in(mx, mz, x0, z0, x1, z1)) {
-                    gb.begin(false);
-                    roadSegment(ch, gb, true, rx0[i], rx1[i], rz1[j], rz0[j + 1], avenueX[i]);
-                    gb.end();
-                }
-            }
-        for (int j = 0; j <= nbz; j++)
-            for (int i = 0; i < nbx; i++) {
-                float mx = (rx1[i] + rx0[i + 1]) * 0.5f, mz = (rz0[j] + rz1[j]) * 0.5f;
-                if (ewStreet(i, j) && in(mx, mz, x0, z0, x1, z1)) {
-                    gb.begin(false);
-                    roadSegment(ch, gb, false, rz0[j], rz1[j], rx1[i], rx0[i + 1], avenueZ[j]);
-                    gb.end();
-                }
-            }
-        for (int j = 0; j <= nbz; j++)
-            for (int i = 0; i <= nbx; i++) {
-                float mx = (rx0[i] + rx1[i]) * 0.5f, mz = (rz0[j] + rz1[j]) * 0.5f;
-                if (urban(mx, mz) && in(mx, mz, x0, z0, x1, z1)) signals(ch, i, j);
-            }
-        for (int j = 0; j < nbz; j++)
-            for (int i = 0; i < nbx; i++) {
-                float mx = (rx1[i] + rx0[i + 1]) * 0.5f, mz = (rz1[j] + rz0[j + 1]) * 0.5f;
-                if (in(mx, mz, x0, z0, x1, z1)) block(ch, gb, i, j);
-            }
+        for (Metro m : metros) if (m.overlaps(x0, z0, x1, z1, 40f)) m.generate(ch, gb, x0, z0, x1, z1);
         // a fresh mesh builder per chunk: chunks are generated on several threads
         new RoadMesh(roads, lib, terrain).generate(ch, gb, cx, cz, x0, z0, x1, z1);
         new RoadFurniture(this, ch, gb).build(cx, cz, x0, z0, x1, z1);
@@ -415,7 +773,7 @@ public final class City extends World implements java.io.Serializable {
                 float sc = t == lib.cabbage || t == lib.soil ? 8f : 2f;    // crops at field scale
                 paint.add(new float[]{a, b, c, d, t, sc, sc, f});
             });
-            groundPaint(x0, z0, x1, z1, paint);
+            for (Metro m : metros) m.groundPaint(x0, z0, x1, z1, paint);
             new GroundPaint(this).paint(ch.ground, gb, grid, paint);
         }
         ch.finish();
@@ -424,70 +782,10 @@ public final class City extends World implements java.io.Serializable {
 
     // ------------------------------------------------------------------ painted city ground
 
-    /** Street medians and the promenade, bucketed by 256 m cells for quick lookup. */
-    private transient java.util.Map<Long, List<float[]>> streetPaint;
-    private transient java.util.concurrent.ConcurrentHashMap<Integer, List<float[]>> blockPaint;
 
     private static long paintCell(int i, int j) { return ((long) i << 32) ^ (j & 0xFFFFFFFFL); }
 
-    private synchronized java.util.Map<Long, List<float[]>> streetPaint() {
-        if (streetPaint != null) return streetPaint;
-        List<float[]> out = new ArrayList<>();
-        GeoBuilder gb = new GeoBuilder(terrain, new Chunk(0, 0));
-        gb.dry = true;
-        gb.paint = out;
-        Chunk dummy = new Chunk(0, 0);
-        for (int i = 0; i <= nbx; i++)
-            for (int j = 0; j < nbz; j++)
-                if (nsStreet(i, j)) roadSegment(dummy, gb, true, rx0[i], rx1[i], rz1[j], rz0[j + 1], avenueX[i]);
-        for (int j = 0; j <= nbz; j++)
-            for (int i = 0; i < nbx; i++)
-                if (ewStreet(i, j)) roadSegment(dummy, gb, false, rz0[j], rz1[j], rx1[i], rx0[i + 1], avenueZ[j]);
-        // the seaside promenade beside the city's east edge
-        out.add(new float[]{cityX1 + 10f, cityZ0, cityX1 + 15f, cityZ1, lib.pavers, 2f, 2f});
-        java.util.Map<Long, List<float[]>> map = new java.util.HashMap<>();
-        for (float[] r : out)
-            for (int j = (int) Math.floor(r[1] / 256f); j <= (int) Math.floor(r[3] / 256f); j++)
-                for (int i = (int) Math.floor(r[0] / 256f); i <= (int) Math.floor(r[2] / 256f); i++)
-                    map.computeIfAbsent(paintCell(i, j), k -> new ArrayList<>()).add(r);
-        streetPaint = map;
-        blockPaint = new java.util.concurrent.ConcurrentHashMap<>();
-        return map;
-    }
 
-    /**
-     * Ground cover painted into the terrain in this rectangle: sidewalks, lots, parks, car parks,
-     * plazas, medians and the promenade, each {x0, z0, x1, z1, texture, uScale, vScale}. A block's
-     * areas come from a dry run of its generator (same seed, no geometry), cached.
-     */
-    void groundPaint(float x0, float z0, float x1, float z1, List<float[]> out) {
-        if (x1 < cityX0 - 30f || x0 > cityX1 + 30f || z1 < cityZ0 || z0 > cityZ1) return;
-        java.util.Map<Long, List<float[]>> sp = streetPaint();
-        java.util.Set<float[]> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
-        for (int cj = (int) Math.floor(z0 / 256f); cj <= (int) Math.floor(z1 / 256f); cj++)
-            for (int ci = (int) Math.floor(x0 / 256f); ci <= (int) Math.floor(x1 / 256f); ci++) {
-                List<float[]> l = sp.get(paintCell(ci, cj));
-                if (l == null) continue;
-                for (float[] r : l) if (r[2] > x0 && r[0] < x1 && r[3] > z0 && r[1] < z1 && seen.add(r)) out.add(r);
-            }
-        for (int j = 0; j < nbz; j++) {
-            if (rz0[j + 1] < z0 || rz1[j] > z1) continue;
-            for (int i = 0; i < nbx; i++) {
-                if (rx0[i + 1] < x0 || rx1[i] > x1) continue;
-                if (!blockActive(i, j)) continue;
-                final int bi = i, bj = j;
-                List<float[]> list = blockPaint.computeIfAbsent(j * nbx + i, k -> {
-                    List<float[]> l = new ArrayList<>();
-                    GeoBuilder gb = new GeoBuilder(terrain, new Chunk(0, 0));
-                    gb.dry = true;
-                    gb.paint = l;
-                    block(new Chunk(0, 0), gb, bi, bj);
-                    return l;
-                });
-                for (float[] r : list) if (r[2] > x0 && r[0] < x1 && r[3] > z0 && r[1] < z1) out.add(r);
-            }
-        }
-    }
 
     /** The ground tiles (sea-floor heights and water maps) of loaded chunks, flat colours beyond. */
     public com.harlequinxd.drivehard.core.render.Ground.Source groundSource() {
@@ -729,9 +1027,10 @@ public final class City extends World implements java.io.Serializable {
         float h = terrain.height(jx, jz);
         float slope = Math.abs(terrain.height(jx + 2, jz) - terrain.height(jx - 2, jz)) / 4f
                 + Math.abs(terrain.height(jx, jz + 2) - terrain.height(jx, jz - 2)) / 4f;
-        boolean promenade = jx > cityX1 + 2f && jx < cityX1 + 26f && jz > cityZ0 && jz < cityZ1 && urban(cityX1 - 30f, jz);
+        Metro mm = main;
+        boolean promenade = jx > mm.cityX1 + 2f && jx < mm.cityX1 + 26f && jz > mm.cityZ0 && jz < mm.cityZ1 && urban(mm.cityX1 - 30f, jz);
         if (promenade) {
-            boolean onPath = jx > cityX1 + 9f && jx < cityX1 + 16f;
+            boolean onPath = jx > mm.cityX1 + 9f && jx < mm.cityX1 + 16f;
             if (onPath || h < 0.5f) return;
             if (r < 0.34f) plant(ch, Flora.BLACK_PINE, ix, iz, jx, h, jz);
             else if (r < 0.42f) plant(ch, Flora.SAKURA, ix, iz, jx, h, jz);
@@ -833,8 +1132,8 @@ public final class City extends World implements java.io.Serializable {
     }
 
     private void promenadePath(GeoBuilder gb, float x0, float z0, float x1, float z1) {
-        float px0 = cityX1 + 10f, px1 = cityX1 + 15f;
-        float a = Math.max(z0, cityZ0), b = Math.min(z1, cityZ1);
+        float px0 = main.cityX1 + 10f, px1 = main.cityX1 + 15f;
+        float a = Math.max(z0, main.cityZ0), b = Math.min(z1, main.cityZ1);
         float c0 = Math.max(x0, px0), c1 = Math.min(x1, px1);
         if (b <= a || c1 <= c0) return;
         gb.floorAreaT(c0, a, c1, b, 0.04f, lib.pavers, 2f, 2f, L_OBJECT, 8f, 0, -0.6f);
@@ -895,45 +1194,12 @@ public final class City extends World implements java.io.Serializable {
 
     // ------------------------------------------------------------------ traffic signals
 
-    private void signals(Chunk ch, int i, int j) {
-        float cx = (rx0[i] + rx1[i]) * 0.5f, cz = (rz0[j] + rz1[j]) * 0.5f;
-        float hx = (rx1[i] - rx0[i]) * 0.5f, hz = (rz1[j] - rz0[j]) * 0.5f;
-        int id = traffic.id(i, j);
-        int[][] dirs = {{0, 1}, {0, -1}, {1, 0}, {-1, 0}};
-        for (int[] d : dirs) {
-            boolean ns = d[0] == 0;
-            // edge approaches that come from outside the city have no road behind them
-            if (ns && ((d[1] > 0 && j == 0) || (d[1] < 0 && j == nbz))) continue;
-            if (!ns && ((d[0] > 0 && i == 0) || (d[0] < 0 && i == nbx))) continue;
-            float along = ns ? hz : hx, across = ns ? hx : hz;
-            float lxv = d[1], lzv = -d[0];                       // left of travel (traffic keeps left)
-            float px = cx + d[0] * (along + 1.3f) + lxv * (across + 1.3f);   // far-left corner, Japanese style
-            float pz = cz + d[1] * (along + 1.3f) + lzv * (across + 1.3f);
-            float yaw = (float) Math.atan2(-d[0], -d[1]);         // signal faces oncoming traffic
-            float y = terrain.height(px, pz) + CURB;
-            ch.sprite(Chunk.SPRITE_SIGNAL, id * 2 + (ns ? 1 : 0), px, y, pz, yaw);
-            ch.boxes.add(new Box(px - 0.2f, y - 1f, pz - 0.2f, px + 0.2f, y + 6f, pz + 0.2f));
-        }
-    }
 
     // ------------------------------------------------------------------ zones, blocks & lots
 
     public enum Zone { CENTRAL, ENTERTAINMENT, MIXED, SUBURB, SEASIDE }
 
-    public Zone zone(int i, int j) {
-        float dx = (i - iCentre) / (nbx * 0.5f);
-        float dz = (j - jCentre) / (nbz * 0.5f);
-        float radius = (float) Math.hypot(dx, dz);
-        if (radius < 0.05f) return Zone.CENTRAL;
-        if (radius < 0.10f) return Zone.ENTERTAINMENT;
-        if (radius < CORE - 0.04f) return Zone.MIXED;
-        if (i >= nbx - 3) return Zone.SEASIDE;
-        return Zone.SUBURB;
-    }
 
-    private boolean isFireBlock(int i, int j) {
-        return (i == 2 && j == 2) || (i == nbx - 3 && j == nbz - 3);
-    }
 
     private static final class Ctx {
         final Chunk ch;
@@ -942,56 +1208,6 @@ public final class City extends World implements java.io.Serializable {
         Ctx(Chunk ch, GeoBuilder gb, Random rnd) { this.ch = ch; this.gb = gb; this.rnd = rnd; }
     }
 
-    private void block(Chunk ch, GeoBuilder gb, int i, int j) {
-        if (!blockActive(i, j)) return;
-        Random rnd = new Random(seed * 1000003L + i * 7919L + j * 104729L);
-        float bx0 = rx1[i], bx1 = rx0[i + 1], bz0 = rz1[j], bz1 = rz0[j + 1];
-        float s = SIDEWALK;
-        gb.begin(false);
-        curbs(gb, bx0, bz0, bx1, bz1);
-        int sw = lib.sidewalk;
-        gb.floorAreaT(bx0, bz0, bx1, bz0 + s, CURB, sw, 2f, 2f, L_RAISED, 8f, 0, 0f);
-        gb.floorAreaT(bx0, bz1 - s, bx1, bz1, CURB, sw, 2f, 2f, L_RAISED, 8f, 0, 0f);
-        gb.floorAreaT(bx0, bz0 + s, bx0 + s, bz1 - s, CURB, sw, 2f, 2f, L_RAISED, 8f, 0, 0f);
-        gb.floorAreaT(bx1 - s, bz0 + s, bx1, bz1 - s, CURB, sw, 2f, 2f, L_RAISED, 8f, 0, 0f);
-
-        Zone zone = zone(i, j);
-        Ctx c = new Ctx(ch, gb, rnd);
-        streetFurniture(c, bx0, bz0, bx1, bz1, zone);
-        float ix0 = bx0 + s, ix1 = bx1 - s, iz0 = bz0 + s, iz1 = bz1 - s;
-        float depth = iz1 - iz0;
-        // lots are only as deep as the buildings of the area need; a deep block keeps a courtyard
-        // in the middle (gardens, a park or car parks) instead of 60 m long buildings
-        float rowMax;
-        switch (zone) {
-            case CENTRAL: rowMax = 34f; break;
-            case ENTERTAINMENT: rowMax = 20f; break;
-            case SEASIDE: rowMax = 28f; break;
-            case SUBURB: rowMax = 22f; break;
-            default: rowMax = 24f; break;
-        }
-        boolean twoRows = depth >= 30f;
-        if (!twoRows) {
-            lotRow(c, ix0, iz0, ix1, iz1, true, true, zone, isFireBlock(i, j), i == iCentre && j == jCentre + 1);
-        } else {
-            float half = depth * (0.45f + rnd.nextFloat() * 0.1f);
-            float dn = Math.min(rowMax, half), ds = Math.min(rowMax, depth - half);
-            lotRow(c, ix0, iz0, ix1, iz0 + dn, true, false, zone, isFireBlock(i, j), i == iCentre && j == jCentre + 1);
-            lotRow(c, ix0, iz1 - ds, ix1, iz1, false, true, zone, false, false);
-            float m0 = iz0 + dn, m1 = iz1 - ds, mid = m1 - m0;
-            if (mid >= 2f * 12f + 5f) {
-                // a deep block gets a back lane through the middle with buildings facing it
-                float lane0 = (m0 + m1) * 0.5f - 2.5f, lane1 = lane0 + 5f;
-                float inner = Math.min(rowMax, lane0 - m0);
-                gb.floorAreaT(ix0, lane0, ix1, lane1, CURB, lib.asphaltPatched, 2f, 2f, L_RAISED, 8f, 0, 0f);
-                lotRow(c, ix0, lane0 - inner, ix1, lane0, false, true, zone, false, false);
-                lotRow(c, ix0, lane1, ix1, lane1 + inner, true, false, zone, false, false);
-                if (lane0 - inner - m0 > 4f) courtyard(c, ix0, m0, ix1, lane0 - inner, zone);
-                if (m1 - (lane1 + inner) > 4f) courtyard(c, ix0, lane1 + inner, ix1, m1, zone);
-            } else if (mid > 4f) courtyard(c, ix0, m0, ix1, m1, zone);
-        }
-        gb.end();
-    }
 
     // ------------------------------------------------------------------ street furniture
 

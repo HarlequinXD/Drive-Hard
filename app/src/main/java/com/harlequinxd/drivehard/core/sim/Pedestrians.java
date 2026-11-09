@@ -42,6 +42,8 @@ public final class Pedestrians {
         final int nx, nz;
         final boolean signalized;
         final float minX, maxX, minZ, maxZ;
+        /** The city whose grid this is (signalised areas). */
+        City.Metro metro;
 
         WalkArea(float[] x0, float[] x1, float[] z0, float[] z1, boolean signalized) {
             this.x0=x0; this.x1=x1; this.z0=z0; this.z1=z1;
@@ -61,16 +63,18 @@ public final class Pedestrians {
     public Pedestrians(City city, StyleSource styles) {
         this.city = city;
         this.styles = styles;
-        addCityArea();
+        for (City.Metro m : city.metros) addCityArea(m);
         for (Town town : city.roads.towns) if (town.grid != null) addTownArea(town);
     }
 
-    private void addCityArea() {
-        float[] x0=new float[city.nbx], x1=new float[city.nbx];
-        float[] z0=new float[city.nbz], z1=new float[city.nbz];
-        for(int i=0;i<city.nbx;i++) { x0[i]=city.rx1[i]+INSET; x1[i]=city.rx0[i+1]-INSET; }
-        for(int j=0;j<city.nbz;j++) { z0[j]=city.rz1[j]+INSET; z1[j]=city.rz0[j+1]-INSET; }
-        areas.add(new WalkArea(x0,x1,z0,z1,true));
+    private void addCityArea(City.Metro m) {
+        float[] x0=new float[m.nbx], x1=new float[m.nbx];
+        float[] z0=new float[m.nbz], z1=new float[m.nbz];
+        for(int i=0;i<m.nbx;i++) { x0[i]=m.rx1[i]+INSET; x1[i]=m.rx0[i+1]-INSET; }
+        for(int j=0;j<m.nbz;j++) { z0[j]=m.rz1[j]+INSET; z1[j]=m.rz0[j+1]-INSET; }
+        WalkArea a = new WalkArea(x0,x1,z0,z1,true);
+        a.metro = m;
+        areas.add(a);
     }
 
     private void addTownArea(Town town) {
@@ -154,7 +158,7 @@ public final class Pedestrians {
         int firstJ=Math.max(0,bj-1), lastJ=Math.min(area.nz-1,bj+1);
         bi=firstI+rnd.nextInt(lastI-firstI+1);
         bj=firstJ+rnd.nextInt(lastJ-firstJ+1);
-        if (area.signalized && !city.blockActive(bi, bj)) return;      // the city grid outside its outline is countryside
+        if (area.signalized && !area.metro.blockActive(bi, bj)) return;      // the city grid outside its outline is countryside
         float per = perimeter(ai,bi,bj);
         float p = rnd.nextFloat() * per;
         loopPoint(ai,bi,bj,p,lp);
@@ -234,7 +238,7 @@ public final class Pedestrians {
         dx *= q.dir; dz *= q.dir;
         int tbi = q.bi + (int) dx, tbj = q.bj + (int) dz;
         if (tbi < 0 || tbj < 0 || tbi >= area.nx || tbj >= area.nz) return;
-        if (area.signalized && !city.blockActive(tbi, tbj)) return;      // no built-up block across there
+        if (area.signalized && !area.metro.blockActive(tbi, tbj)) return;      // no built-up block across there
         loopPoint(q.area,q.bi,q.bj,cornerP(q.area,q.bi,q.bj,c),lp);
         q.sx = lp[0]; q.sz = lp[1];
         // mirrored corner on the target block
@@ -246,7 +250,7 @@ public final class Pedestrians {
         // the intersection at this corner
         int ii = (c == 1 || c == 2) ? q.bi + 1 : q.bi;
         int jj = (c == 2 || c == 3) ? q.bj + 1 : q.bj;
-        q.sigId = area.signalized ? city.traffic.id(ii, jj) : -1;
+        q.sigId = area.signalized ? area.metro.signal(ii, jj) : -1;
         q.sigNs = dz != 0;      // walking along Z: walk with the N-S traffic phase
         q.tbi = tbi; q.tbj = tbj; q.cornerAfter = tc;
         q.t = 0;

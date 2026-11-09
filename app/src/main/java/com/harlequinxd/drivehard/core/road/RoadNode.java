@@ -20,6 +20,8 @@ public final class RoadNode implements java.io.Serializable {
     public Kind kind;
     /** City grid indices and signal controller id (CITY only). */
     public int ci = -1, cj = -1, signal = -1;
+    /** Which city's grid a CITY node belongs to. */
+    public int metro;
     public int[] edges = new int[0];
     /** Merged away during construction; ignore. */
     public boolean dead;

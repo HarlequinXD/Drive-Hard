@@ -22,7 +22,7 @@ public final class TrafficLights implements java.io.Serializable {
     public int id(int i, int j) { return j * nx + i; }
 
     private float offset(int id) {
-        int i = id % nx, j = id / nx;
+        int i = id & 1023, j = (id >> 10) & 1023;
         // green wave along x plus a little jitter
         return (i * 4.5f + j * 9.0f + Noise.rnd(i, j, seed) * 3f) % CYCLE;
     }

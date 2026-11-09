@@ -84,6 +84,8 @@ public final class MapAudit {
                 // the junction areas at the ends are drawn from the node, not the road
                 float sm = (e.s[i] + e.s[i + 1]) * 0.5f;
                 if (sm < e.clearA + 3f || sm > e.len - e.clearB - 3f) continue;
+                // where it meets a city the ground is the city's, not shaped by the road
+                if (city.nearUrban(mx, mz, 25f)) continue;
                 float g = terrain.exact(mx, mz);
                 float d = my - g;
                 if (Math.abs(d) > 0.45f && i - last > 6) {
@@ -149,10 +151,15 @@ public final class MapAudit {
 
     /** Every settlement can be driven to from the city, and the freeways reach out across the island. */
     private void connectivity() {
+        // how much main road an island this size should have (by its area against the 128 km island)
+        float area = (terrain.islandSize / 128000f) * (terrain.islandSize / 128000f);
         float fw = roads.lengthKm(RoadClass.FREEWAY);
-        if (fw < 50f) add("network", true, terrain.centreX, terrain.centreZ, String.format("only %.0f km of freeway", fw));
+        if (area >= 1f && fw < 50f * area) add("network", true, terrain.centreX, terrain.centreZ, String.format("only %.0f km of freeway", fw));
         float hw = roads.lengthKm(RoadClass.HIGHWAY);
-        if (hw < 150f) add("network", true, terrain.centreX, terrain.centreZ, String.format("only %.0f km of highway", hw));
+        if (hw < 150f * area) add("network", true, terrain.centreX, terrain.centreZ, String.format("only %.0f km of highway", hw));
+        int cities = city.metros.size();
+        if (cities < city.spec.size.minCities())
+            add("network", true, terrain.centreX, terrain.centreZ, cities + " cities, a " + city.spec.size + " island needs " + city.spec.size.minCities());
         int nn = roads.nodes.size();
         int[] comp = new int[nn];
         java.util.Arrays.fill(comp, -1);

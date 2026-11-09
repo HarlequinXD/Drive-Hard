@@ -29,6 +29,7 @@ import com.harlequinxd.drivehard.core.map.MapData;
 import com.harlequinxd.drivehard.core.ui.LoadScreen;
 import com.harlequinxd.drivehard.core.ui.MapView;
 import com.harlequinxd.drivehard.core.ui.MainMenu;
+import com.harlequinxd.drivehard.core.WorldSpec;
 import com.harlequinxd.drivehard.core.GameAudio;
 import com.harlequinxd.drivehard.core.Settings;
 
@@ -168,6 +169,8 @@ public final class DriveHardActivity extends Activity {
         private volatile long gpuErrorUntil;
         GLSurfaceView glView;
         private GlRenderer glRenderer;
+        /** The island the GL renderer has drawn (a new one gets a fresh renderer). */
+        private Game glGame;
         private volatile int screenW, screenH;
         private long lastGlFrame;
         private Thread pacer;
@@ -226,10 +229,10 @@ public final class DriveHardActivity extends Activity {
 
         /** Back: close the travel dialog, then the map or the menu; in game open the menu. */
         boolean back() {
-            if (game == null || travelling) return true;
-            if (screen == Screen.MENU) {
+            if (travelling) return true;
+            if (screen == Screen.MENU || game == null) {
                 MainMenu m = mainMenu;
-                if (m != null && m.onMainPage()) return false;       // leave the game
+                if (m == null || m.onMainPage()) return false;       // leave the game
                 mapOps.add(new float[]{4});
                 return true;
             }
@@ -266,19 +269,20 @@ public final class DriveHardActivity extends Activity {
                 loadScreen = new LoadScreen(W, H);
                 loadScreen.reset("Starting up");
                 postInvalidate();
-                g = new Game(Game.DEFAULT_SEED, loadScreen::set, true);
-                if (!gpu) g.setResolution(W, H);
                 settings = Settings.load(new java.io.File(getFilesDir(), "settings.txt"));
-                g.settings = settings;
-                settings.apply(g);
-                AndroidAudio a = new AndroidAudio(g.audio.mixer);
+                // the island played before maps had sizes is the one to carry on with
+                if (settings.lastSeed == 0L && new java.io.File(getFilesDir(), "settings.txt").isFile()) settings.lastSeed = Game.DEFAULT_SEED;
+                menuAudio = new GameAudio(null);
+                settings.apply(menuAudio);
+                AndroidAudio a = new AndroidAudio(menuAudio.mixer);
                 a.start();
                 if (paused) a.pause();
                 audio = a;
-                mainMenu = new MainMenu(g, settings, true);
-                mainMenu.open();
+                MainMenu menu = new MainMenu(menuAudio, settings, true);
+                mainMenu = menu;
+                describeIsland();
+                menu.open();
                 screen = Screen.MENU;
-                game = g;
                 long previous = System.nanoTime();
                 while (running) {
                     if (paused) {
@@ -289,8 +293,16 @@ public final class DriveHardActivity extends Activity {
                     long now = System.nanoTime();
                     float dt = Math.min(0.05f, (now - previous) / 1_000_000_000f);
                     previous = now;
+                    int[] req = startRequest;
+                    if (req != null) {
+                        startRequest = null;
+                        start(req[0] != 0, req[1]);
+                        previous = System.nanoTime();
+                        continue;
+                    }
+                    g = game;
                     MapData.Label destination = pendingTravel;
-                    if (destination != null) {
+                    if (destination != null && g != null) {
                         pendingTravel = null;
                         travel(g, destination);
                         previous = System.nanoTime();
@@ -303,8 +315,11 @@ public final class DriveHardActivity extends Activity {
                         continue;
                     }
                     // the CPU renderer (no OpenGL ES 3, or the GPU set-up failed)
-                    if (!(g.renderer instanceof SoftRenderer)) { g.setResolution(W, H); settings.apply(g); }
-                    frame(g, dt);
+                    if (screen == Screen.MENU || g == null) menuFrame(dt);
+                    else {
+                        if (!(g.renderer instanceof SoftRenderer)) { g.setResolution(W, H); settings.apply(g); }
+                        frame(g, dt);
+                    }
                     if (quit) { runOnUiThread(DriveHardActivity.this::finish); return; }
                     postInvalidateOnAnimation();
                     long wait = 33_333_333L - (System.nanoTime() - now);
@@ -318,7 +333,8 @@ public final class DriveHardActivity extends Activity {
                 travelling = true;
                 postInvalidate();
             } finally {
-                if (g != null) g.dispose();
+                Game last = game;
+                if (last != null) last.dispose();
                 game = null;
             }
         }
@@ -326,7 +342,7 @@ public final class DriveHardActivity extends Activity {
         /** One frame of whichever screen is up, and the sounds that go with it. */
         private void frame(Game g, float dt) {
             switch (screen) {
-                case MENU: menuFrame(g, dt); break;
+                case MENU: menuFrame(dt); return;
                 case MAP: mapFrame(g); break;
                 case PAUSE: pauseFrame(g); break;
                 default: gameFrame(g, dt); break;
@@ -337,8 +353,10 @@ public final class DriveHardActivity extends Activity {
                     now == Screen.GAME && g.missions.modal() ? g.missions.choice : -1);
         }
 
-        private void menuFrame(Game g, float dt) {
+        /** The main menu: no island needed (the menu draws its own scene). */
+        private void menuFrame(float dt) {
             MainMenu m = mainMenu;
+            if (m == null) return;
             float[] op;
             while ((op = mapOps.poll()) != null) {
                 if ((int) op[0] == 2) m.tap(op[1], op[2]);
@@ -346,28 +364,81 @@ public final class DriveHardActivity extends Activity {
             }
             switch (m.poll()) {
                 case MainMenu.CRUISE:
-                    g.missions.abandon();
-                    leaveMenu(g);
+                    requestStart(m.newIsland, -1);
                     return;
                 case MainMenu.MISSION:
-                    g.missions.abandon();
-                    leaveMenu(g);
-                    g.missions.brief(m.mission);
+                    requestStart(m.newIsland, m.mission);
                     return;
                 case MainMenu.QUIT:
                     quit = true;
                     return;
                 default: break;
             }
-            g.attract(dt);
-            g.render();
-            sceneToFrame(g);
             m.draw(fb, W, H, dt);
-            publish();
+            menuAudio.screen(GameAudio.SCREEN_MENU, m.highlighted());
+            if (gpu && glRenderer != null) {
+                glRenderer.presentImage(screenW, screenH, Math.round(viewLeft), Math.round(viewTop),
+                        Math.round(W * viewScale), Math.round(H * viewScale), fb, W, H);
+                return;
+            }
+            synchronized (frame) { frame.setPixels(fb, 0, W, 0, 0, W, H); }
+        }
+
+        /** Hands the start over to the game thread, which makes the island behind the loading screen. */
+        private void requestStart(boolean fresh, int mission) {
+            long seed = !fresh && settings.lastSeed != 0L && game == null ? settings.lastSeed
+                    : WorldSpec.randomSeed(WorldSpec.Size.values()[settings.mapSize]);
+            if (fresh || game == null) {
+                WorldSpec.Size sz = WorldSpec.of(seed).size;
+                loadScreen.reset("Starting up");
+                loadScreen.heading("MAKING A " + sz.label + " ISLAND", sz.km() + " KM ACROSS");
+                travelling = true;
+                nextSeed = seed;
+            }
+            startRequest = new int[]{fresh || game == null ? 1 : 0, mission};
+            postInvalidate();
+        }
+
+        private volatile int[] startRequest;
+        private volatile long nextSeed;
+        private GameAudio menuAudio;
+
+        /** Makes the island if one is wanted (game thread), then leaves the menu for it. */
+        private void start(boolean fresh, int mission) {
+            Game g = game;
+            if (fresh || g == null) {
+                if (g != null) {
+                    game = null;
+                    g.detachRenderer();                // the GL thread frees its renderer itself
+                    g.dispose();
+                }
+                long seed = nextSeed;
+                g = new Game(seed, loadScreen::set, true, menuAudio);
+                if (!gpu) g.setResolution(W, H);
+                g.settings = settings;
+                settings.apply(g);
+                settings.lastSeed = seed;
+                settings.save();
+                game = g;
+                describeIsland();
+            }
+            g.missions.abandon();
+            if (mission < 0) g.applyCruise(settings);
+            leaveMenu(g);
+            if (mission >= 0) g.missions.brief(mission);
+            travelling = false;
+        }
+
+        /** Tells the menu about the island there is to carry on with. */
+        private void describeIsland() {
+            Game g = game;
+            long seed = g != null ? g.seed : settings.lastSeed;
+            if (seed == 0L) { mainMenu.setIsland(null, -1); return; }
+            WorldSpec.Size sz = WorldSpec.of(seed).size;
+            mainMenu.setIsland(sz.label + " " + sz.km() + " KM" + (g == null ? " (LAST TIME)" : ""), sz.ordinal());
         }
 
         private void leaveMenu(Game g) {
-            g.endAttract();
             g.audio.music(false);
             clearInput();
             hintTime = 8f;
@@ -377,7 +448,8 @@ public final class DriveHardActivity extends Activity {
         private void openMenu(Game g, boolean story) {
             g.missions.abandon();
             mapOps.clear();
-            if (story) mainMenu.openStory(); else mainMenu.open();
+            describeIsland();
+            if (story) mainMenu.openStory(g.missions.current); else mainMenu.open();
             screen = Screen.MENU;
         }
 
@@ -542,9 +614,18 @@ public final class DriveHardActivity extends Activity {
                 return;
             }
             try {
-                if (glRenderer == null) glRenderer = new GlRenderer(new AndroidGl(), W, H);
-                layout(screenW, screenH);
                 Game g = game;
+                // a new island: the renderer of the last one goes (on this thread, which owns the GL context)
+                if (g != null && glGame != g && glRenderer != null) { glRenderer.dispose(); glRenderer = null; }
+                if (glRenderer == null) { glRenderer = new GlRenderer(new AndroidGl(), W, H); glGame = g; }
+                layout(screenW, screenH);
+                if (!travelling && mainMenu != null && (g == null || screen == Screen.MENU)) {
+                    long nowM = System.nanoTime();
+                    float dtM = lastGlFrame == 0 ? 1 / 30f : Math.min(0.05f, (nowM - lastGlFrame) / 1_000_000_000f);
+                    lastGlFrame = nowM;
+                    if (!paused) menuFrame(dtM);
+                    return;
+                }
                 if (g == null || travelling) {
                     glRenderer.presentImage(screenW, screenH, Math.round(viewLeft), Math.round(viewTop),
                             Math.round(W * viewScale), Math.round(H * viewScale), loadScreen.render(), W, H);
@@ -614,7 +695,7 @@ public final class DriveHardActivity extends Activity {
             if (frame == null || loadScreen == null) { postInvalidateDelayed(33); return; }
             layout(getWidth(), getHeight());
             RectF dst = new RectF(viewLeft, viewTop, viewLeft + W * viewScale, viewTop + H * viewScale);
-            if (game == null || travelling) {
+            if (travelling || mainMenu == null) {
                 loadBitmap.setPixels(loadScreen.render(), 0, W, 0, 0, W, H);
                 canvas.drawBitmap(loadBitmap, null, dst, pixels);
                 if (!error.isEmpty()) {
@@ -775,9 +856,9 @@ public final class DriveHardActivity extends Activity {
         // ------------------------------------------------------------------ touch
 
         @Override public boolean onTouchEvent(MotionEvent e) {
-            if (game == null || travelling) return true;
+            if (travelling || mainMenu == null) return true;
             Game gm = game;
-            if (screen != Screen.GAME || (gm != null && gm.missions.modal())) return menuTouch(e);
+            if (gm == null || screen != Screen.GAME || gm.missions.modal()) return menuTouch(e);
             int action = e.getActionMasked();
             int index = e.getActionIndex();
             int id = e.getPointerId(index);

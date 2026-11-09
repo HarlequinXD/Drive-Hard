@@ -5,6 +5,7 @@ import com.harlequinxd.drivehard.core.map.MapData;
 import com.harlequinxd.drivehard.core.ui.LoadScreen;
 import com.harlequinxd.drivehard.core.ui.MapView;
 import com.harlequinxd.drivehard.core.ui.MainMenu;
+import com.harlequinxd.drivehard.core.WorldSpec;
 import com.harlequinxd.drivehard.core.GameAudio;
 import com.harlequinxd.drivehard.core.Settings;
 
@@ -50,9 +51,7 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
     private volatile String error = "";
     private volatile Game game;
     private volatile boolean running = true, travelling, imageReady;
-    /** The player asked for a fresh island: the current game ends and a new seed is generated. */
-    private volatile boolean newIsland;
-    private volatile Screen screen = Screen.GAME;
+    private volatile Screen screen = Screen.MENU;
     private int menuIndex;
     private boolean fullscreen;
     private JFrame window;
@@ -142,7 +141,6 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
         // the game data folder beside the game: the island and the chunks already visited
         com.harlequinxd.drivehard.core.data.WorldCache.root = com.harlequinxd.drivehard.core.data.WorldCache.desktopRoot();
         com.harlequinxd.drivehard.core.data.WorldCache.build = com.harlequinxd.drivehard.core.data.WorldCache.desktopBuild();
-        for (String a : args) if (a.equals("--new-island")) saveSeed(Game.randomSeed());
         SwingUtilities.invokeLater(() -> {
             DesktopMain view = new DesktopMain();
             JFrame frame = new JFrame("Drive Hard");
@@ -159,31 +157,6 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
             view.requestFocusInWindow();
             new Thread(view, "drive-hard-loop").start();
         });
-    }
-
-    /** The island played last time (kept in the game data folder), or a new one on the first run. */
-    private static long savedSeed() {
-        java.io.File root = com.harlequinxd.drivehard.core.data.WorldCache.root;
-        java.io.File f = root == null ? null : new java.io.File(root, "island-seed.txt");
-        if (f != null && f.isFile()) {
-            try {
-                return Long.parseLong(new String(java.nio.file.Files.readAllBytes(f.toPath()), "UTF-8").trim());
-            } catch (Exception ignored) {
-            }
-        }
-        long seed = Game.randomSeed();
-        saveSeed(seed);
-        return seed;
-    }
-
-    private static void saveSeed(long seed) {
-        java.io.File root = com.harlequinxd.drivehard.core.data.WorldCache.root;
-        if (root == null) return;
-        try {
-            root.mkdirs();
-            java.nio.file.Files.write(new java.io.File(root, "island-seed.txt").toPath(), Long.toString(seed).getBytes("UTF-8"));
-        } catch (Exception ignored) {
-        }
     }
 
     private void focusLost() {
@@ -245,33 +218,23 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
 
     // ------------------------------------------------------------------ main loop
 
+    /** The sound director the menus play through (each island's game shares it). */
+    private GameAudio menuAudio;
+
     @Override public void run() {
         try {
-            long seed = savedSeed();
-            while (running) {
-                loadScreen.reset("Starting up");
-                newIsland = false;
-                Game g = new Game(seed, loadScreen::set);
-                g.setResolution(W, H);
-                if (settings == null) settings = Settings.load(new java.io.File(com.harlequinxd.drivehard.core.data.WorldCache.root, "settings.txt"));
-                g.settings = settings;
-                settings.apply(g);
-                useGpu(g);
-                audio = new DesktopAudio(g.audio.mixer);
-                audio.start();
-                mainMenu = new MainMenu(g, settings, false);
-                mainMenu.open();
-                game = g;
-                screen = Screen.MENU;
-                play(g);
-                audio.stop();
-                if (newIsland) {
-                    game = null;
-                    g.dispose();
-                    seed = Game.randomSeed();
-                    saveSeed(seed);
-                }
-            }
+            settings = Settings.load(new java.io.File(com.harlequinxd.drivehard.core.data.WorldCache.root, "settings.txt"));
+            if (settings.lastSeed == 0L) settings.lastSeed = legacySeed();
+            menuAudio = new GameAudio(null);
+            settings.apply(menuAudio);
+            audio = new DesktopAudio(menuAudio.mixer);
+            audio.start();
+            mainMenu = new MainMenu(menuAudio, settings, false);
+            describeIsland();
+            mainMenu.open();
+            screen = Screen.MENU;
+            loop();
+            audio.stop();
         } catch (Throwable e) {
             e.printStackTrace();
             error = "Error: " + e;
@@ -282,8 +245,61 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
         }
     }
 
-    /** Runs one island until the game is closed or a new island is asked for. */
-    private void play(Game g) {
+    /** Tells the menu about the island there is to carry on with (the one made last, even last time). */
+    private void describeIsland() {
+        long seed = game != null ? game.seed : settings.lastSeed;
+        if (seed == 0L) { mainMenu.setIsland(null, -1); return; }
+        WorldSpec.Size sz = WorldSpec.of(seed).size;
+        mainMenu.setIsland(sz.label + " " + sz.km() + " KM" + (game == null ? " (LAST TIME)" : ""), sz.ordinal());
+    }
+
+    /**
+     * Leaves the menu for the game: makes the island first if asked for a new one (or if there is
+     * none yet), behind the loading screen, then puts the cruise options into effect.
+     */
+    private void start(boolean newIsland, int mission) {
+        Game g = game;
+        if (newIsland || g == null) {
+            long seed = !newIsland && settings.lastSeed != 0L ? settings.lastSeed
+                    : WorldSpec.randomSeed(WorldSpec.Size.values()[settings.mapSize]);
+            WorldSpec.Size sz = WorldSpec.of(seed).size;
+            loadScreen.reset("Starting up");
+            loadScreen.heading("MAKING A " + sz.label + " ISLAND", sz.km() + " KM ACROSS");
+            travelling = true;
+            repaint();
+            if (g != null) { game = null; g.dispose(); }
+            g = new Game(seed, loadScreen::set, false, menuAudio);
+            g.setResolution(W, H);
+            g.settings = settings;
+            settings.apply(g);
+            useGpu(g);
+            settings.lastSeed = seed;
+            settings.save();
+            game = g;
+            travelling = false;
+            describeIsland();
+        }
+        g.missions.abandon();
+        if (mission < 0) g.applyCruise(settings);
+        leaveMenu(g);
+        if (mission >= 0) g.missions.brief(mission);
+    }
+
+    /** The island played before maps had sizes (kept in the game data folder), or 0. */
+    private static long legacySeed() {
+        java.io.File root = com.harlequinxd.drivehard.core.data.WorldCache.root;
+        java.io.File f = root == null ? null : new java.io.File(root, "island-seed.txt");
+        if (f != null && f.isFile()) {
+            try {
+                return Long.parseLong(new String(java.nio.file.Files.readAllBytes(f.toPath()), "UTF-8").trim());
+            } catch (Exception ignored) {
+            }
+        }
+        return 0L;
+    }
+
+    /** Runs the menus and whichever island is up until the game is closed. */
+    private void loop() {
         long previous = System.nanoTime(), stat = previous;
         int frames = 0;
         while (running) {
@@ -298,22 +314,26 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
             int pressed = buttons & ~padPrev;
             padPrev = buttons;
             if (tapped(KeyEvent.VK_F11)) SwingUtilities.invokeLater(this::toggleFullscreen);
-            switch (screen) {
-                case MENU: menuFrame(g, dt, connected, pressed); break;
-                case MAP: mapFrame(g, dt, connected, pressed); break;
-                case PAUSE: pauseFrame(g, connected, pressed); break;
-                default: gameFrame(g, dt, connected, pressed); break;
+            Game g = game;
+            if (screen == Screen.MENU || g == null) {
+                menuFrame(dt, connected, pressed);
+                menuAudio.screen(GameAudio.SCREEN_MENU, mainMenu.highlighted());
+            } else {
+                switch (screen) {
+                    case MAP: mapFrame(g, dt, connected, pressed); break;
+                    case PAUSE: pauseFrame(g, connected, pressed); break;
+                    default: gameFrame(g, dt, connected, pressed); break;
+                }
+                Screen now = screen;
+                menuAudio.screen(now == Screen.MENU ? GameAudio.SCREEN_MENU : now == Screen.MAP ? GameAudio.SCREEN_MAP
+                        : now == Screen.PAUSE ? GameAudio.SCREEN_PAUSE : g.missions.modal() ? GameAudio.SCREEN_MENU : GameAudio.SCREEN_GAME,
+                        now == Screen.PAUSE ? menuIndex : now == Screen.GAME && g.missions.modal() ? g.missions.choice : -1);
             }
-            Screen now = screen;
-            g.audio.screen(now == Screen.MENU ? GameAudio.SCREEN_MENU : now == Screen.MAP ? GameAudio.SCREEN_MAP
-                    : now == Screen.PAUSE ? GameAudio.SCREEN_PAUSE : g.missions.modal() ? GameAudio.SCREEN_MENU : GameAudio.SCREEN_GAME,
-                    now == Screen.PAUSE ? menuIndex : now == Screen.GAME && g.missions.modal() ? g.missions.choice : -1);
             repaint();
             frames++;
             if (start - stat > 1_000_000_000L) { fps = frames * 1_000_000_000f / (start - stat); frames = 0; stat = start; }
             long wait = 16_666_667L - (System.nanoTime() - start);
             if (wait > 0) java.util.concurrent.locks.LockSupport.parkNanos(wait);
-            if (newIsland) break;
         }
     }
 
@@ -322,7 +342,7 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
     private float stickRepeat;
     private boolean stickHeld;
 
-    private void menuFrame(Game g, float dt, boolean connected, int pressed) {
+    private void menuFrame(float dt, boolean connected, int pressed) {
         capture(false);
         MainMenu m = mainMenu;
         // the stick steps through the items like the D-pad, with a repeat when held
@@ -347,13 +367,10 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
         while ((c = clicks.poll()) != null) m.tap(c[0], c[1]);
         switch (m.poll()) {
             case MainMenu.CRUISE:
-                g.missions.abandon();
-                leaveMenu(g);
+                start(m.newIsland, -1);
                 return;
             case MainMenu.MISSION:
-                g.missions.abandon();
-                leaveMenu(g);
-                g.missions.brief(m.mission);
+                start(m.newIsland, m.mission);
                 return;
             case MainMenu.QUIT:
                 running = false;
@@ -362,17 +379,13 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
                 return;
             default: break;
         }
-        g.attract(dt);
-        renderFrame(g);
         synchronized (image) {
-            System.arraycopy(frameOf(g), 0, pixels, 0, pixels.length);
             m.draw(pixels, W, H, dt);
             imageReady = true;
         }
     }
 
     private void leaveMenu(Game g) {
-        g.endAttract();
         g.audio.music(false);
         screen = Screen.GAME;
         keys.clear();
@@ -382,7 +395,8 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
     private void openMenu(Game g, boolean story) {
         capture(false);
         g.missions.abandon();
-        if (story) mainMenu.openStory(); else mainMenu.open();
+        describeIsland();
+        if (story) mainMenu.openStory(g.missions.current); else mainMenu.open();
         screen = Screen.MENU;
         clicks.clear();
     }
@@ -519,7 +533,7 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
         if (choose == 0) { screen = Screen.GAME; return; }
         if (choose == 1) { openMap(g); return; }
         if (choose == 2) SwingUtilities.invokeLater(this::toggleFullscreen);
-        if (choose == 3) { newIsland = true; return; }
+        if (choose == 3) { start(true, -1); return; }
         if (choose == 4) { openMenu(g, false); return; }
         if (choose == 5) { running = false; SwingUtilities.invokeLater(() -> window.dispose()); System.exit(0); }
         renderFrame(g);
@@ -621,7 +635,7 @@ public final class DesktopMain extends JPanel implements KeyListener, Runnable {
         int width = getWidth(), height = getHeight();
         int dw = drawWidth(), dh = (int) ((long) dw * H / W);
         int x = (width - dw) / 2, y = (height - dh) / 2;
-        if (game == null || travelling) {
+        if (travelling || !imageReady) {
             int[] dst = ((DataBufferInt) loadImage.getRaster().getDataBuffer()).getData();
             System.arraycopy(loadScreen.render(), 0, dst, 0, dst.length);
             g.drawImage(loadImage, x, y, dw, dh, null);

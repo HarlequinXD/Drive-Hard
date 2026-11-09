@@ -674,8 +674,13 @@ public final class Countryside implements java.io.Serializable {
                         houseRow(bx0, bz0, bx1, bz0 + rowD, 0, rnd, true);
                         break;
                     case "high_street":
-                        if (bj == cj) { shopRow(bx0, bz0, bx1, bz0 + rowD, 0, rnd); houseRow(bx0, bz1 - rowD, bx1, bz1, 1, rnd, true); }
-                        else { houseRow(bx0, bz0, bx1, bz0 + rowD, 0, rnd, true); shopRow(bx0, bz1 - rowD, bx1, bz1, 1, rnd); }
+                        if (bj == cj) {
+                            if (nOK) shopRow(bx0, bz0, bx1, bz0 + rowD, 0, rnd);
+                            if (sOK) houseRow(bx0, bz1 - rowD, bx1, bz1, 1, rnd, true);
+                        } else {
+                            if (nOK) houseRow(bx0, bz0, bx1, bz0 + rowD, 0, rnd, true);
+                            if (sOK) shopRow(bx0, bz1 - rowD, bx1, bz1, 1, rnd);
+                        }
                         break;
                     case "village_centre":
                         shopRow(bx0, bz0, bx1 - 14f, bz0 + rowD, 0, rnd);
@@ -868,7 +873,7 @@ public final class Countryside implements java.io.Serializable {
      */
     private boolean lotClear(float x0, float z0, float x1, float z1, boolean shaped) {
         float lo = Float.MAX_VALUE, hi = -Float.MAX_VALUE;
-        if (!roads.rectClear(x0 + 0.5f, z0 + 0.5f, x1 - 0.5f, z1 - 0.5f, 0f)) return false;
+        if (!roads.rectClear(x0 + 0.3f, z0 + 0.3f, x1 - 0.3f, z1 - 0.3f, 0.2f)) return false;
         // the four corners and the middle; the natural ground is enough to judge the slope
         for (int k = 0; k < 5; k++) {
             float fi = k == 4 ? 0.5f : (k & 1), fj = k == 4 ? 0.5f : (k >> 1);
@@ -878,7 +883,9 @@ public final class Countryside implements java.io.Serializable {
         }
         float limit = Math.min(2.5f, (shaped ? 0.12f : 0.09f) * (float) Math.hypot(x1 - x0, z1 - z0));
         // on a slope already, a street's bank could tip it over: judge those on the shaped ground
-        if (!shaped && hi - lo < limit && hi - lo > limit * 0.5f) return lotClear(x0, z0, x1, z1, true);
+        if (!shaped && hi - lo < limit && (hi - lo > limit * 0.5f
+                || Math.abs(terrain.exact((x0 + x1) * 0.5f, (z0 + z1) * 0.5f) - terrain.natural((x0 + x1) * 0.5f, (z0 + z1) * 0.5f)) > 1f))
+            return lotClear(x0, z0, x1, z1, true);
         return hi - lo < limit;
     }
 

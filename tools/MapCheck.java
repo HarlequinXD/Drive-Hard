@@ -18,14 +18,22 @@ import java.util.HashMap;
 public class MapCheck {
     public static void main(String[] a) throws Exception {
         File out = new File(a.length > 0 ? a[0] : "build/map-check");
-        long seed = a.length > 1 ? Long.parseLong(a[1]) : Game.DEFAULT_SEED;
+        long seed = Game.DEFAULT_SEED;
+        if (a.length > 1) {
+            String v = a[1].toUpperCase();
+            boolean named = false;
+            for (com.harlequinxd.drivehard.core.WorldSpec.Size sz : com.harlequinxd.drivehard.core.WorldSpec.Size.values())
+                if (sz.name().equals(v)) { seed = com.harlequinxd.drivehard.core.WorldSpec.sized(Game.DEFAULT_SEED, sz); named = true; }
+            if (!named) seed = Long.parseLong(a[1]);
+        }
         out.mkdirs();
         long t0 = System.nanoTime();
         Game g = new Game(seed, null, true);
         long t1 = System.nanoTime();
         MapAudit audit = new MapAudit(g.city).run();
         long t2 = System.nanoTime();
-        System.out.printf("island built in %.1f s, checked in %.1f s%n", (t1 - t0) / 1e9, (t2 - t1) / 1e9);
+        System.out.printf("%s island (%d km, %d cities, %d towns) built in %.1f s, checked in %.1f s%n", g.city.spec.size,
+                g.city.spec.size.km(), g.city.metros.size(), g.city.roads.towns.size(), (t1 - t0) / 1e9, (t2 - t1) / 1e9);
         System.out.print(audit.summary());
         StringBuilder all = new StringBuilder(audit.summary()).append('\n');
         HashMap<String, Integer> shown = new HashMap<>();

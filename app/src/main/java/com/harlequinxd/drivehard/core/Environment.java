@@ -43,6 +43,10 @@ public final class Environment {
 
     /** Game time in hours since the start (day 1, 07:00). */
     public double hours = 7.0;
+    /** The clock stands still (the time of day picked for a cruise stays). */
+    public boolean clockStopped;
+    /** The weather stays as set (no spells come and go). */
+    public boolean weatherLocked;
     public Weather weather = Weather.FAIR, next = Weather.FAIR;
     private float blend = 1f, spellLeft = 1.5f;
     private final Random rnd;
@@ -103,9 +107,10 @@ public final class Environment {
 
     public void update(float dt) {
         float dh = dt / SECONDS_PER_HOUR;
-        hours += dh;
+        if (!clockStopped) hours += dh;
         // weather spells
-        if (blend < 1f) {
+        if (weatherLocked) { blend = 1f; next = weather; spellLeft = 1f; }
+        else if (blend < 1f) {
             blend = Math.min(1f, blend + dh / 0.25f);
             if (blend >= 1f) weather = next;
         } else {

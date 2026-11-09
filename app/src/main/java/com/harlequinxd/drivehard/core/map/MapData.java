@@ -50,7 +50,7 @@ public final class MapData {
         Terrain t = city.terrain;
         x0 = t.islandX0;
         z0 = t.islandZ0;
-        extent = Terrain.ISLAND_SIZE;
+        extent = t.islandSize;
         relief(city);
         RoadNetwork n = city.roads;
         for (RoadEdge e : n.edges) {
@@ -79,7 +79,7 @@ public final class MapData {
             cellRoads[k] = new int[l.size()];
             for (int i = 0; i < l.size(); i++) cellRoads[k][i] = l.get(i);
         }
-        labels.add(new Label(City.NAME, city.spawnX, city.spawnZ, 0, true));
+        for (City.Metro m : city.metros) labels.add(new Label(m.name, m.spawnX, m.spawnZ, 0, m.coastal));
         for (City.Suburb sb : city.suburbs) labels.add(new Label(sb.name, sb.sx, sb.sz, 2, false));
         for (Town tw : n.towns) {
             int rank = tw.size == Town.Size.TOWN ? 1 : (tw.size == Town.Size.VILLAGE ? 2 : 3);
@@ -141,16 +141,23 @@ public final class MapData {
                 relief[j * SIZE + i] = 0xFF000000 | c;
             }
         // the built-up city: a fine mask (downtown / suburb) for close zooms, blended into the relief
-        ux0 = city.cityX0 - 200f;
-        uz0 = city.cityZ0 - 200f;
-        un = (int) Math.ceil(Math.max(city.cityX1 - city.cityX0, city.cityZ1 - city.cityZ0) / URBAN_RES) + 16;
-        urban = new byte[un * un];
-        for (int j = 0; j < un; j++)
-            for (int i = 0; i < un; i++) {
-                float x = ux0 + (i + 0.5f) * URBAN_RES, z = uz0 + (j + 0.5f) * URBAN_RES;
-                if (!city.urban(x, z)) continue;
-                urban[j * un + i] = (byte) (city.suburbAt(x, z) != null ? 2 : 1);
-            }
+        int nm = city.metros.size();
+        urban = new byte[nm][];
+        ux0 = new float[nm]; uz0 = new float[nm]; un = new int[nm];
+        for (City.Metro m : city.metros) {
+            int k = m.index;
+            ux0[k] = m.cityX0 - 200f;
+            uz0[k] = m.cityZ0 - 200f;
+            int n = (int) Math.ceil(Math.max(m.cityX1 - m.cityX0, m.cityZ1 - m.cityZ0) / URBAN_RES) + 16;
+            un[k] = n;
+            byte[] u = urban[k] = new byte[n * n];
+            for (int j = 0; j < n; j++)
+                for (int i = 0; i < n; i++) {
+                    float x = ux0[k] + (i + 0.5f) * URBAN_RES, z = uz0[k] + (j + 0.5f) * URBAN_RES;
+                    if (!m.urban(x, z)) continue;
+                    u[j * n + i] = (byte) (m.suburbAt(x, z) != null ? 2 : 1);
+                }
+        }
         for (int j = 0; j < SIZE; j++)
             for (int i = 0; i < SIZE; i++) {
                 float x = x0 + (i + 0.5f) * px, z = z0 + (j + 0.5f) * px;
@@ -165,14 +172,17 @@ public final class MapData {
 
     /** Built-up mask: 0 open land, 1 downtown, 2 suburb (URBAN_RES metres per cell). */
     public static final float URBAN_RES = 25f;
-    public byte[] urban;
-    public float ux0, uz0;
-    public int un;
+    private byte[][] urban;
+    private float[] ux0, uz0;
+    private int[] un;
 
     public int urbanAt(float x, float z) {
-        int i = (int) Math.floor((x - ux0) / URBAN_RES), j = (int) Math.floor((z - uz0) / URBAN_RES);
-        if (i < 0 || j < 0 || i >= un || j >= un) return 0;
-        return urban[j * un + i];
+        for (int k = 0; k < urban.length; k++) {
+            int i = (int) Math.floor((x - ux0[k]) / URBAN_RES), j = (int) Math.floor((z - uz0[k]) / URBAN_RES);
+            if (i < 0 || j < 0 || i >= un[k] || j >= un[k]) continue;
+            return urban[k][j * un[k] + i];
+        }
+        return 0;
     }
 
     private static int mix(int a, int b, float t) {

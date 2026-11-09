@@ -26,9 +26,10 @@ import java.util.Random;
 public final class Terrain implements java.io.Serializable {
     public static final float SAND_LEVEL = 2.2f;
     /** Side of the square the island is generated in (metres). */
-    public static final float ISLAND_SIZE = 128000f;
-    private static final int N = 512;
-    private static final float CELL = ISLAND_SIZE / N;
+    public final float islandSize;
+    /** Coast distance field resolution: one sample every CELL metres. */
+    private static final float CELL = 250f;
+    private final int N;
 
     private final int seed;
     private final float cx0, cz0, cx1, cz1;   // city rectangle
@@ -38,27 +39,41 @@ public final class Terrain implements java.io.Serializable {
     /** Set once the road network is built; null while it is being generated. */
     public RoadNetwork roads;
     /** Signed distance to the coast per grid cell: positive in the sea, negative inland (metres). */
-    private final float[] sdf = new float[N * N];
+    private final float[] sdf;
+    /** Every city's grid rectangle {x0, z0, x1, z1}; the first is the main city on the east coast. */
+    private float[][] cities = new float[0][];
     /** Island centre and main axis (for placing things around the coast). */
     public final float centreX, centreZ;
 
     public Terrain(int seed, float cityX0, float cityZ0, float cityX1, float cityZ1) {
+        this(seed, 128000f, cityX0, cityZ0, cityX1, cityZ1);
+    }
+
+    /**
+     * @param islandSize side of the square the island is made in; the island's shape is scaled
+     *                   to it (a 32 km island is a quarter the length of a 128 km one)
+     */
+    public Terrain(int seed, float islandSize, float cityX0, float cityZ0, float cityX1, float cityZ1) {
         this.seed = seed;
+        this.islandSize = islandSize;
+        this.N = Math.round(islandSize / CELL);
+        this.sdf = new float[N * N];
+        cities = new float[][]{{cityX0, cityZ0, cityX1, cityZ1}};
         this.cx0 = cityX0;
         this.cz0 = cityZ0;
         this.cx1 = cityX1;
         this.cz1 = cityZ1;
         this.czc = (cityZ0 + cityZ1) * 0.5f;
-        Shape shape = new Shape(seed);
+        Shape shape = new Shape(seed, islandSize / 128000f);
         // place the island so its east coast runs past the city
         float t0 = shape.eastCoast();
         float ox = cityX1 + 60f - t0, oz = czc;
         centreX = ox;
         centreZ = oz;
-        islandX0 = ox - ISLAND_SIZE * 0.5f;
-        islandX1 = ox + ISLAND_SIZE * 0.5f;
-        islandZ0 = oz - ISLAND_SIZE * 0.5f;
-        islandZ1 = oz + ISLAND_SIZE * 0.5f;
+        islandX0 = ox - islandSize * 0.5f;
+        islandX1 = ox + islandSize * 0.5f;
+        islandZ0 = oz - islandSize * 0.5f;
+        islandZ1 = oz + islandSize * 0.5f;
         buildSdf(shape, ox, oz);
     }
 
@@ -71,11 +86,15 @@ public final class Terrain implements java.io.Serializable {
         final int n;
         final float[] bx, bz, br, bs;            // bays: centre, radius, strength
 
-        Shape(int seed) {
+        /** Scale of the island against the original 128 km one. */
+        final float k;
+
+        Shape(int seed, float scale) {
             s = seed;
+            this.k = scale;
             Random r = new Random(seed * 2654435761L + 17);
             float theta = (float) (Math.PI / 2 + (r.nextFloat() - 0.5f) * 0.7f);    // long axis roughly north-south
-            float L = 94000f + r.nextFloat() * 16000f, W = 44000f + r.nextFloat() * 16000f;
+            float L = (94000f + r.nextFloat() * 16000f) * scale, W = (44000f + r.nextFloat() * 16000f) * scale;
             float bend = (r.nextFloat() - 0.5f) * 0.9f, twist = (r.nextFloat() - 0.5f) * 0.6f;
             int lobes = 6 + r.nextInt(3), pen = 3 + r.nextInt(2);
             n = lobes + pen;
@@ -102,12 +121,12 @@ public final class Terrain implements java.io.Serializable {
                 float ex = (float) Math.cos(a) * la[base] * 0.9f, ez = (float) Math.sin(a) * lb[base] * 0.9f;
                 float px = lx[base] + ca * ex - sa * ez, pz = lz[base] + sa * ex + ca * ez;
                 float dx = px - lx[base], dz = pz - lz[base], dl = (float) Math.sqrt(dx * dx + dz * dz) + 1e-3f;
-                float len = 6000f + r.nextFloat() * 9000f;
+                float len = (6000f + r.nextFloat() * 9000f) * scale;
                 int i = lobes + k;
                 lx[i] = px + dx / dl * len * 0.45f;
                 lz[i] = pz + dz / dl * len * 0.45f;
                 la[i] = len * 0.55f;
-                lb[i] = 1600f + r.nextFloat() * 2200f;
+                lb[i] = (1600f + r.nextFloat() * 2200f) * Math.max(0.5f, scale);
                 lang[i] = (float) Math.atan2(dz, dx);
             }
             int nb = 2 + r.nextInt(3);
@@ -117,7 +136,7 @@ public final class Terrain implements java.io.Serializable {
                 float a = r.nextFloat() * 6.2832f;
                 bx[k] = lx[base] + (float) Math.cos(a) * lb[base];
                 bz[k] = lz[base] + (float) Math.sin(a) * lb[base];
-                br[k] = 4000f + r.nextFloat() * 6000f;
+                br[k] = (4000f + r.nextFloat() * 6000f) * scale;
                 bs[k] = 0.6f + r.nextFloat() * 0.6f;
             }
         }
@@ -143,16 +162,18 @@ public final class Terrain implements java.io.Serializable {
         }
 
         private float warp(float x, float z, int k) {
-            return (vn(x / 26000f, z / 26000f, s + 800 + k) - 0.5f) * 14000f
-                    + (vn(x / 8000f, z / 8000f, s + 801 + k) - 0.5f) * 4400f
+            // the broad bays and headlands scale with the island; the small coves don't
+            float K = this.k;
+            return (vn(x / (26000f * K), z / (26000f * K), s + 800 + k) - 0.5f) * 14000f * K
+                    + (vn(x / (8000f * K), z / (8000f * K), s + 801 + k) - 0.5f) * 4400f * K
                     + (vn(x / 2600f, z / 2600f, s + 802 + k) - 0.5f) * 1400f
                     + (vn(x / 900f, z / 900f, s + 810 + k) - 0.5f) * 420f;
         }
 
         /** Distance east of the centre to the first coast along the centre line. */
         float eastCoast() {
-            for (float x = 0; x < 64000f; x += 50f) if (field(x, 0f) <= 0f) return x;
-            return 30000f;
+            for (float x = 0; x < 64000f * k; x += 50f) if (field(x, 0f) <= 0f) return x;
+            return 30000f * k;
         }
     }
 
@@ -186,7 +207,7 @@ public final class Terrain implements java.io.Serializable {
     }
 
     /** Cells of value {@code v} connected to {@code start} (4-neighbour flood fill). */
-    private static boolean[] flood(boolean[] m, int start, boolean v) {
+    private boolean[] flood(boolean[] m, int start, boolean v) {
         boolean[] out = new boolean[m.length];
         if (m[start] != v) return out;
         ArrayDeque<Integer> q = new ArrayDeque<>();
@@ -201,7 +222,7 @@ public final class Terrain implements java.io.Serializable {
     }
 
     /** Distance (metres) from each true cell to the nearest false cell; 0 for false cells. */
-    private static float[] chamfer(boolean[] in) {
+    private float[] chamfer(boolean[] in) {
         float big = 1e9f, a = CELL, b = CELL * 1.4142f;
         float[] d = new float[N * N];
         for (int k = 0; k < N * N; k++) d[k] = in[k] ? big : 0f;
@@ -254,13 +275,34 @@ public final class Terrain implements java.io.Serializable {
 
     /** Distance from the seed-shaped urban footprint (0 inside). */
     public float cityDistance(float x, float z) {
+        float best = Float.MAX_VALUE;
+        for (int i = 0; i < cities.length; i++) {
+            best = Math.min(best, cityDistance(i, x, z));
+            if (best == 0f) return 0f;
+        }
+        return best;
+    }
+
+    /** Adds another city's grid rectangle (before the roads are built). */
+    public void addCity(float x0, float z0, float x1, float z1) {
+        float[][] c = java.util.Arrays.copyOf(cities, cities.length + 1);
+        c[cities.length] = new float[]{x0, z0, x1, z1};
+        cities = c;
+    }
+
+    /** Distance from city i's seed-shaped urban footprint (0 inside). */
+    public float cityDistance(int ci, float x, float z) {
+        float[] c = cities[ci];
+        float cx0 = c[0], cz0 = c[1], cx1 = c[2], cz1 = c[3];
         float rx = Math.max(1f, (cx1 - cx0) * 0.5f);
         float rz = Math.max(1f, (cz1 - cz0) * 0.5f);
         float nx = (x - (cx0 + cx1) * 0.5f) / rx;
         float nz = (z - (cz0 + cz1) * 0.5f) / rz;
+        // a quick bound: far outside the rectangle the outline can't be near
+        if (Math.abs(nx) > 2.5f || Math.abs(nz) > 2.5f) return ((float) Math.sqrt(nx * nx + nz * nz) - 0.86f) * Math.min(rx, rz);
         float angle = (float) Math.atan2(nz, nx);
-        float edge = 0.86f + 0.09f * (float) Math.sin(angle * 3f + seed * 0.00017f)
-                + 0.05f * (float) Math.sin(angle * 7f + seed * 0.00031f);
+        float edge = 0.86f + 0.09f * (float) Math.sin(angle * 3f + seed * 0.00017f + ci * 1.7f)
+                + 0.05f * (float) Math.sin(angle * 7f + seed * 0.00031f + ci * 2.3f);
         edge = Math.min(1f, Math.max(0.72f, edge));
         float outside = (float) Math.sqrt(nx * nx + nz * nz) - edge;
         return Math.max(0f, outside * Math.min(rx, rz));

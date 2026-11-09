@@ -37,14 +37,14 @@ public class SimTest {
         // cross a street: curb down, road, curb up
         int j0 = 3;
         // pick a crossing line clear of street furniture (poles, trees, vending machines)
-        float qx = (c.rx1[2] + c.rx0[3]) * 0.5f;
-        for (int dx = -1; dx <= 1; dx++) for (int dz = -1; dz <= 1; dz++) c.chunks.ensureAround(qx + dx * 64f, c.rz1[j0] + dz * 64f);
+        float qx = (c.main.rx1[2] + c.main.rx0[3]) * 0.5f;
+        for (int dx = -1; dx <= 1; dx++) for (int dz = -1; dz <= 1; dz++) c.chunks.ensureAround(qx + dx * 64f, c.main.rz1[j0] + dz * 64f);
         search:
         for (float off = 0f; off < 20f; off += 0.5f)
             for (int sgn = -1; sgn <= 1; sgn += 2) {
                 float x = qx + off * sgn;
                 boolean clear = true;
-                for (float z = c.rz0[j0] - 5f; z <= c.rz1[j0] + 1.5f && clear; z += 0.5f)
+                for (float z = c.main.rz0[j0] - 5f; z <= c.main.rz1[j0] + 1.5f && clear; z += 0.5f)
                     for (com.harlequinxd.drivehard.core.game.Box b : c.near(x, z))
                         if (x > b.minX - 0.6f && x < b.maxX + 0.6f && z > b.minZ - 0.6f && z < b.maxZ + 0.6f) { clear = false; break; }
                 if (clear) { qx = x; break search; }
@@ -52,16 +52,16 @@ public class SimTest {
         // street furniture can stand in the way: try a few crossing lines
         boolean crossed = false;
         for (int attempt = 0; attempt < 6 && !crossed; attempt++) {
-            Player q = new Player(qx + attempt * 2.7f, c.rz1[j0] + 1.0f);
+            Player q = new Player(qx + attempt * 2.7f, c.main.rz1[j0] + 1.0f);
             c.chunks.ensureAround(q.x, q.z);
             q.y = c.surface(q.x, q.z);
             for (int i = 0; i < 700; i++) { c.chunks.ensureAround(q.x, q.z); q.update(dt, 0, -0.5f, false, c); }
-            crossed = q.z < c.rz0[j0] && Math.abs(q.y - c.surface(q.x, q.z)) < 0.05f;
+            crossed = q.z < c.main.rz0[j0] && Math.abs(q.y - c.surface(q.x, q.z)) < 0.05f;
         }
         check("crossed the street onto the next sidewalk", crossed);
 
         // walk east from the promenade into the sea: she swims out and stops about 200 m offshore
-        Player w = new Player(c.cityX1, c.spawnZ);
+        Player w = new Player(c.main.cityX1, c.spawnZ);
         c.chunks.ensureAround(w.x, w.z);
         w.y = c.surface(w.x, w.z);
         for (int i = 0; i < 60 * 400; i++) { c.chunks.ensureAround(w.x, w.z); w.update(dt, 1f, 0f, false, c); }
@@ -72,10 +72,10 @@ public class SimTest {
 
         // hills exist and terrain is continuous
         float maxH = 0;
-        for (float x = c.cityX0 - 400; x < c.cityX0; x += 10) maxH = Math.max(maxH, c.terrain.height(x, (c.cityZ0 + c.cityZ1) / 2));
+        for (float x = c.main.cityX0 - 400; x < c.main.cityX0; x += 10) maxH = Math.max(maxH, c.terrain.height(x, (c.main.cityZ0 + c.main.cityZ1) / 2));
         System.out.printf("highest hill west of city: %.1f m%n", maxH);
         check("hills west of the city", maxH > 15f);
-        check("ocean east of the beach", c.terrain.height(c.cityX1 + 200, (c.cityZ0 + c.cityZ1) / 2) < -1f);
+        check("ocean east of the beach", c.terrain.height(c.main.cityX1 + 200, (c.main.cityZ0 + c.main.cityZ1) / 2) < -1f);
 
         // traffic signals: N-S and E-W never both green, cycle through all states
         boolean conflict = false; int seen = 0;
@@ -88,9 +88,9 @@ public class SimTest {
         check("signals cycle green/yellow/red", seen == 7);
 
         // streaming: chunks generated deterministically
-        int sampleI = c.nbx / 4, sampleJ = c.nbz / 2;
-        float sampleX = (c.rx1[sampleI] + c.rx0[sampleI + 1]) * 0.5f;
-        float sampleZ = (c.rz1[sampleJ] + c.rz0[sampleJ + 1]) * 0.5f;
+        int sampleI = c.main.nbx / 4, sampleJ = c.main.nbz / 2;
+        float sampleX = (c.main.rx1[sampleI] + c.main.rx0[sampleI + 1]) * 0.5f;
+        float sampleZ = (c.main.rz1[sampleJ] + c.main.rz0[sampleJ + 1]) * 0.5f;
         int sampleCx = ChunkManager.chunkOf(sampleX), sampleCz = ChunkManager.chunkOf(sampleZ);
         Chunk generated = c.generate(sampleCx, sampleCz);
         int polys1 = generated.polyCount, polys2 = c.generate(sampleCx, sampleCz).polyCount;
@@ -102,7 +102,7 @@ public class SimTest {
         // ---- traffic: cars keep moving, turn, and never run a red light
         com.harlequinxd.drivehard.core.sim.Traffic tr = new com.harlequinxd.drivehard.core.sim.Traffic(c, r -> r.nextInt(100));
         tr.spawnMin = 5f; tr.spawnMax = 400f; tr.despawn = 2000f; tr.target = 40;
-        float cx = (c.cityX0 + c.cityX1) / 2, cz = (c.cityZ0 + c.cityZ1) / 2;
+        float cx = (c.main.cityX0 + c.main.cityX1) / 2, cz = (c.main.cityZ0 + c.main.cityZ1) / 2;
         int redRuns = 0, turns = 0; double speedSum = 0; long samples = 0;
         java.util.Map<Object, Boolean> wasTurning = new java.util.HashMap<>();
         java.util.Map<Object, float[]> prevPos = new java.util.HashMap<>();
@@ -148,7 +148,7 @@ public class SimTest {
                 net.lengthKm(com.harlequinxd.drivehard.core.road.RoadClass.HIGHWAY), net.lengthKm(com.harlequinxd.drivehard.core.road.RoadClass.COUNTRY),
                 net.villages.size(), c.countryside.farmCount, net.buildTime);
         check("island is 128 km across", Math.abs(c.terrain.islandX1 - c.terrain.islandX0 - 128000f) < 1f);
-        check("the island reaches 25 km inland", c.terrain.natural(c.cityX0 - 25000f, (c.cityZ0 + c.cityZ1) / 2) > 1f);
+        check("the island reaches 25 km inland", c.terrain.natural(c.main.cityX0 - 25000f, (c.main.cityZ0 + c.main.cityZ1) / 2) > 1f);
         float freewayKm = net.lengthKm(com.harlequinxd.drivehard.core.road.RoadClass.FREEWAY);
         long freewayCount = net.edges.stream()
                 .filter(edge -> edge.cls == com.harlequinxd.drivehard.core.road.RoadClass.FREEWAY).count();
@@ -174,10 +174,10 @@ public class SimTest {
         for (var sb : c.suburbs) named &= sb.name != null && !sb.name.isEmpty();
         check("every suburb has a name", named);
         var cityMap = new com.harlequinxd.drivehard.core.map.MapData(c);
-        int mapCentre = mapPixel(cityMap, (c.cityX0 + c.cityX1) * 0.5f, (c.cityZ0 + c.cityZ1) * 0.5f);
-        int mapCorner = mapPixel(cityMap, c.cityX0 + 100f, c.cityZ0 + 100f);
+        int mapCentre = mapPixel(cityMap, (c.main.cityX0 + c.main.cityX1) * 0.5f, (c.main.cityZ0 + c.main.cityZ1) * 0.5f);
+        int mapCorner = mapPixel(cityMap, c.main.cityX0 + 100f, c.main.cityZ0 + 100f);
         check("island map shows the built-up city and not its empty corners",
-                cityMap.urbanAt(c.spawnX, c.spawnZ) == 1 && cityMap.urbanAt(c.cityX0 + 100f, c.cityZ0 + 100f) == 0
+                cityMap.urbanAt(c.spawnX, c.spawnZ) == 1 && cityMap.urbanAt(c.main.cityX0 + 100f, c.main.cityZ0 + 100f) == 0
                         && cityMap.relief[mapPixel(cityMap, c.spawnX, c.spawnZ)] != cityMap.relief[mapCorner]);
         check("countryside has villages and farms", net.villages.size() > 60 && c.countryside.farmCount > 800);
         {
@@ -214,7 +214,7 @@ public class SimTest {
         {
             boolean[] reach = new boolean[net.nodes.size()];
             java.util.ArrayDeque<Integer> bfs = new java.util.ArrayDeque<>();
-            int cityCentre = net.cityNode[c.nbx / 2][c.nbz / 2];
+            int cityCentre = net.cityNode[0][c.main.nbx / 2][c.main.nbz / 2];
             bfs.add(cityCentre); reach[cityCentre] = true;
             while (!bfs.isEmpty()) {
                 int id = bfs.poll();
@@ -499,15 +499,15 @@ public class SimTest {
         if (dir == 0) return 0;
         float half = com.harlequinxd.drivehard.core.model.Cars.spec(car.style).L / 2;
         float front = s + dir * half, pfront = ps + dir * half;
-        int n = ns ? c.nbz : c.nbx;
+        int n = ns ? c.main.nbz : c.main.nbx;
         for (int k = 0; k <= n; k++) {
-            float edge = dir > 0 ? (ns ? c.rz0[k] : c.rx0[k]) : (ns ? c.rz1[k] : c.rx1[k]);
+            float edge = dir > 0 ? (ns ? c.main.rz0[k] : c.main.rx0[k]) : (ns ? c.main.rz1[k] : c.main.rx1[k]);
             if ((pfront - edge) * dir < 0 && (front - edge) * dir >= 0) {
                 // which road is the car on?
                 float lat = ns ? car.x : car.z;
                 int road = -1;
-                for (int i = 0; i <= (ns ? c.nbx : c.nbz); i++) {
-                    float a = ns ? c.rx0[i] : c.rz0[i], b = ns ? c.rx1[i] : c.rz1[i];
+                for (int i = 0; i <= (ns ? c.main.nbx : c.main.nbz); i++) {
+                    float a = ns ? c.main.rx0[i] : c.main.rz0[i], b = ns ? c.main.rx1[i] : c.main.rz1[i];
                     if (lat >= a && lat <= b) road = i;
                 }
                 if (road < 0) return 0;
@@ -581,11 +581,11 @@ public class SimTest {
 
     static boolean cityFacadesUseOpenings(City city, TextureLibrary textures) {
         boolean windows = false, doors = false;
-        int stride = Math.max(1, Math.max(city.nbx, city.nbz) / 20);
-        for (int i = 0; i < city.nbx && !(windows && doors); i += stride)
-            for (int j = 0; j < city.nbz && !(windows && doors); j += stride) {
-                float x = (city.rx1[i] + city.rx0[i + 1]) * 0.5f;
-                float z = (city.rz1[j] + city.rz0[j + 1]) * 0.5f;
+        int stride = Math.max(1, Math.max(city.main.nbx, city.main.nbz) / 20);
+        for (int i = 0; i < city.main.nbx && !(windows && doors); i += stride)
+            for (int j = 0; j < city.main.nbz && !(windows && doors); j += stride) {
+                float x = (city.main.rx1[i] + city.main.rx0[i + 1]) * 0.5f;
+                float z = (city.main.rz1[j] + city.main.rz0[j + 1]) * 0.5f;
                 Chunk chunk = city.generate(ChunkManager.chunkOf(x), ChunkManager.chunkOf(z));
                 for (var batch : chunk.batches)
                     for (int k = 0; k < batch.count; k++) {

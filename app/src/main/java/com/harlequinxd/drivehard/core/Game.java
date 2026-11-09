@@ -155,10 +155,17 @@ public final class Game {
     /**
      * @param lowMemory phones: fewer texture variants, fewer chunks kept loaded, a shorter view distance
      */
-    public Game(long seed, Progress progress, boolean lowMemory) {
+    public Game(long seed, Progress progress, boolean lowMemory) { this(seed, progress, lowMemory, null); }
+
+    /**
+     * @param sharedAudio the sound director the menus already play through (null: a new one)
+     */
+    public Game(long seed, Progress progress, boolean lowMemory, GameAudio sharedAudio) {
         this.lowMemory = lowMemory;
+        this.seed = seed;
         env = new Environment(seed);
-        audio = new GameAudio(this);
+        audio = sharedAudio != null ? sharedAudio : new GameAudio(this);
+        audio.attach(this);
         missions = new Missions(this);
         // the character and prop sprites bake on another core while the island is generated
         final SpriteSheet[] baked = new SpriteSheet[5];
@@ -267,6 +274,23 @@ public final class Game {
     private int addTexture(Texture t) {
         textures[nextTex] = t;
         return nextTex++;
+    }
+
+    /** The seed this island was made from (its size is in it, see {@link WorldSpec}). */
+    public final long seed;
+
+    /** Lets go of the renderer without disposing it (it is shared, and freed elsewhere). */
+    public void detachRenderer() { renderer = null; }
+
+    /**
+     * Puts the cruise options into effect: the time of day (and whether the clock runs), the
+     * weather (or the usual changing spells) and how much traffic there is.
+     */
+    public void applyCruise(Settings s) {
+        env.force(Settings.TIME_HOURS[s.timeOfDay], s.weather == 0 ? Environment.Weather.FAIR : Settings.WEATHERS[s.weather]);
+        env.clockStopped = !s.clockRuns;
+        env.weatherLocked = s.weather != 0;
+        traffic.target = Settings.TRAFFIC[s.traffic];
     }
 
     public void dispose() {
@@ -681,8 +705,9 @@ public final class Game {
         String region = rg == null ? "" : rg.name;
         if (city.nearUrban(x, z, 150f)) {
             City.Suburb sb = city.suburbAt(x, z);
-            place = sb != null ? sb.name : City.NAME;
-            if (sb != null) region = City.NAME;
+            String cn = city.nearestMetro(x, z).name;
+            place = sb != null ? sb.name : cn;
+            if (sb != null) region = cn;
         } else {
             com.harlequinxd.drivehard.core.road.Town t = n.townAt(x, z, 80f);
             place = t == null ? "" : t.name;

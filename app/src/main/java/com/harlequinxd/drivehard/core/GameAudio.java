@@ -30,7 +30,7 @@ import java.util.Random;
 public final class GameAudio {
     public final Mixer mixer = new Mixer();
     public final SoundBank bank = new SoundBank();
-    private final Game game;
+    private Game game;
     private final Random rnd = new Random(77);
 
     // loops and engines
@@ -55,7 +55,8 @@ public final class GameAudio {
     private int lastScreen = -1, lastIndex = -1;
     public static final int SCREEN_GAME = 0, SCREEN_PAUSE = 1, SCREEN_MAP = 2, SCREEN_MENU = 3;
 
-    GameAudio(Game game) {
+    /** The sound director; {@code game} may be null until an island is made (the menus play first). */
+    public GameAudio(Game game) {
         this.game = game;
         engine = mixer.engine();
         traffic0 = mixer.engine();
@@ -78,6 +79,9 @@ public final class GameAudio {
         lap = mixer.loop(b.lapLoop);
         surf.reverb = 0.15f; wind.reverb = 0.05f; rush.reverb = 0.05f; birds.reverb = 0.45f;
     }
+
+    /** Plays for this game from now on. */
+    public void attach(Game g) { game = g; }
 
     // ------------------------------------------------------------------ positional helpers
 
